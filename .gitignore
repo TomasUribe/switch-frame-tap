@@ -1,0 +1,7 @@
+build/
+*.nsp
+*.nso
+*.npdm
+*.elf
+*.map
+ref/SysDVR/Client/bin/

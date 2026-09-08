@@ -1,0 +1,4 @@
+# Allow non-root access to the Switch USB gadget (libnx usb_comms descriptor).
+# Install:  sudo cp 70-switch-stream.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="usb", ATTRS{idVendor}=="057e", ATTRS{idProduct}=="3000", MODE="0660", TAG+="uaccess"
