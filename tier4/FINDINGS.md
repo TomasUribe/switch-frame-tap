@@ -13,9 +13,16 @@ armed per-batch via `sdmc:/config/tier4-recon/RUN`, breadcrumb in
 | `psm` `psmGetChargerType` | ✅ works | returned `Unconnected` on battery (86%), `rc=0`. **Charger-gated overclock detection from a sysmodule is viable.** |
 | `apm` `apmInitialize` / `apmGetPerformanceMode` | ❌ **fatals `am`** | `2001-0132 / 0x10801` = Kernel `LimitReached`, program `0100000000000023` = `am`. Deterministic, hit twice. |
 | `nv` `nvInitialize` (or first `nvOpen`) | ❌ **fatals a system process** | breadcrumb stops at `nv`; log ends right after `-> nv`. |
-| `caps:sc` JPEG | ⏳ pending | next batch |
-| `caps:sc` raw / stream | ⏳ pending | |
-| DC MMIO map (`svcQueryMemoryMapping 0x54200000`) | ⏳ pending | needs `-mmio` build |
+| `caps:sc` reachable from sysmodule | ✅ **no fatal** | all cmds return structured `capsrv` (module 206) errors - we can iterate here safely |
+| `caps:sc` cmd 1204 (libnx `capsscCaptureJpegScreenShot`) | ❌ `2206-0820` | this is `CaptureCrashScreenShot` - only valid mid-crash-report. Wrong entry point. |
+| `caps:sc` cmd 2 (`capsscCaptureRawImageWithTimeout`) | ⏳ next batch | switchbrew: stubbed since 5.0.0 (`0x7FECE` / `2206-1023`) |
+| `caps:sc` cmd 1201/1203 raw stream | ⏳ next batch | switchbrew: needs `set:sys GetDebugModeFlag` |
+| `caps:sc` cmd 3/5 shared-buffer (modern repeat-capture) | ⏳ | not wrapped by libnx, undocumented ABI |
+| DC MMIO map (`svcQueryMemoryMapping 0x54200000`) | ⏳ | needs `-mmio` build |
+
+Charger note: second run read `charger=2` (LowPower USB-PD), not `1`
+(EnoughPower). Overclock gate needs the official 39 W adapter straight into the
+console.
 
 ## Interpretation
 

@@ -131,63 +131,54 @@ static void probe_caps_jpeg(void)
     rlog("<- caps_jpeg");
 }
 
-/* hand-rolled caps:sc cmd 2 (CaptureRawImageRgba32IntoArrayWithTimeout) - guess */
+/* caps:sc cmd 2 - CaptureRawImageRgba32IntoArrayWithTimeout (libnx wrapper).
+ * switchbrew says stubbed since [5.0.0] -> 0x7FECE (2206-1023). Confirm. */
 static void probe_caps_raw(void)
 {
-    log_mark("caps_raw (hand-rolled cmd 2, EXPERIMENTAL)");
-    Service s;
-    Result rc = smGetService(&s, "caps:sc");
-    if (R_FAILED(rc)) { rlog("   smGetService(caps:sc) rc=0x%x", rc); rlog("<- caps_raw"); return; }
+    log_mark("caps_raw:init");
+    if (R_FAILED(capsscInitialize())) { rlog("   capsscInitialize failed"); rlog("<- caps_raw"); return; }
 
-    for (int si = 0; si < 2; si++) {
-        const struct {
-            u32 layer_stack; u32 pad;
-            u64 width; u64 height;
-            s64 buffer_count; s64 buffer_index;
-            u64 timeout;
-        } in = { g_stacks[si], 0, 128, 128, 1, 0, 1000000000ULL };   /* 128x128 = 64 KB */
-
+    for (int si = 0; si < 3; si++) {
+        char mk[48]; snprintf(mk, sizeof(mk), "caps_raw:%s", g_stackn[si]); log_mark(mk);
         memset(g_buf, 0, 128 * 128 * 4);
         u64 t0 = armGetSystemTick();
-        Result r = serviceDispatchIn(&s, 2, in,
-            .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
-            .buffers = { { g_buf, 128 * 128 * 4 } });
+        Result r = capsscCaptureRawImageWithTimeout(g_buf, 128 * 128 * 4, g_stacks[si],
+                                                    128, 128, 1, 0, 1000000000LL);
         u64 us = armTicksToNs(armGetSystemTick() - t0) / 1000;
-        rlog("   cmd2 stack=%-12s rc=0x%-8x %lluus nonzero=%u  (0x7FECE=stub)",
+        rlog("   cmd2 stack=%-12s rc=0x%-8x %lluus nonzero=%u   (0x7FECE=stub)",
              g_stackn[si], r, (unsigned long long)us, nonzero(g_buf, 4096));
     }
-    serviceClose(&s);
+    capsscExit();
     rlog("<- caps_raw");
 }
 
-/* hand-rolled caps:sc cmd 1201/1203/1202 (raw screenshot read stream) - guess */
+/* caps:sc cmd 1201/1203/1202 - raw screenshot read stream (libnx wrapper).
+ * switchbrew: "only usable when set:sys GetDebugModeFlag is set". */
 static void probe_caps_stream(void)
 {
-    log_mark("caps_stream (hand-rolled cmd 1201/1203, EXPERIMENTAL)");
-    Service s;
-    if (R_FAILED(smGetService(&s, "caps:sc"))) { rlog("   smGetService failed"); rlog("<- caps_stream"); return; }
+    log_mark("caps_stream:init");
+    if (R_FAILED(capsscInitialize())) { rlog("   capsscInitialize failed"); rlog("<- caps_stream"); return; }
 
-    for (int si = 0; si < 2; si++) {
-        struct { u32 layer_stack; u32 pad; s64 timeout; } in = { g_stacks[si], 0, 1000000000LL };
-        struct { u64 size, width, height; } out = {0};
-        Result rc = serviceDispatchInOut(&s, 1201, in, out);
+    for (int si = 0; si < 3; si++) {
+        char mk[48]; snprintf(mk, sizeof(mk), "caps_stream:%s", g_stackn[si]); log_mark(mk);
+
+        u64 sz = 0, w = 0, h = 0;
+        Result rc = capsscOpenRawScreenShotReadStream(&sz, &w, &h, g_stacks[si], 1000000000LL);
         rlog("   Open  stack=%-12s rc=0x%-8x size=%llu %llux%llu",
-             g_stackn[si], rc, (unsigned long long)out.size,
-             (unsigned long long)out.width, (unsigned long long)out.height);
+             g_stackn[si], rc, (unsigned long long)sz,
+             (unsigned long long)w, (unsigned long long)h);
         if (R_FAILED(rc)) continue;
 
-        u64 chunk = BUF_SZ;
-        struct { u64 offset; } rin = { 0 };
-        u64 rout = 0, t0 = armGetSystemTick();
-        Result r = serviceDispatchInOut(&s, 1203, rin, rout,
-            .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
-            .buffers = { { g_buf, chunk } });
+        memset(g_buf, 0, 4096);
+        u64 got = 0, t0 = armGetSystemTick();
+        Result r = capsscReadRawScreenShotReadStream(&got, g_buf, BUF_SZ, 0);
         u64 us = armTicksToNs(armGetSystemTick() - t0) / 1000;
-        rlog("   Read  rc=0x%-8x bytes=%llu %lluus nonzero=%u",
-             r, (unsigned long long)rout, (unsigned long long)us, nonzero(g_buf, 4096));
-        serviceDispatch(&s, 1202);
+        rlog("   Read  rc=0x%-8x bytes=%llu %lluus nonzero=%u  first=%02x %02x %02x %02x",
+             r, (unsigned long long)got, (unsigned long long)us, nonzero(g_buf, 4096),
+             g_buf[0], g_buf[1], g_buf[2], g_buf[3]);
+        capsscCloseRawScreenShotReadStream();
     }
-    serviceClose(&s);
+    capsscExit();
     rlog("<- caps_stream");
 }
 
