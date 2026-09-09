@@ -6,3 +6,4 @@ build/
 *.map
 *.lst
 ref/SysDVR/Client/bin/
+ref/Atmosphere/
