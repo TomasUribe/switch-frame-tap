@@ -4,4 +4,5 @@ build/
 *.npdm
 *.elf
 *.map
+*.lst
 ref/SysDVR/Client/bin/

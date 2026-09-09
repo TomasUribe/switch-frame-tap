@@ -1,0 +1,28 @@
+# stream-oc - copy to  sdmc:/config/stream-oc/config.ini  and set enable=1
+# Nothing happens until enable=1.
+
+enable = 0
+
+# require_charger:  "enough" = only boost on the official 39 W adapter (recommended)
+#                   "any"    = boost on any charger (incl. weak USB-PD)
+require_charger = enough
+
+# require_game: 1 = only boost while a game/application is running (recommended)
+#              0 = boost whenever the charger condition is met
+require_game = 1
+
+poll_ms = 2000
+
+# Boost clocks (Hz). Defaults below = docked GPU/EMC + full CPU boost.
+# Rates are snapped to the nearest value the console actually allows.
+# Erista (v1) console: keep cpu <= 1785000000, gpu <= 921600000, emc <= 1600000000.
+# Mariko can go higher but runs hotter - raise at your own risk.
+cpu_hz   = 1785000000
+gpu_hz   = 768000000
+emc_hz   = 1600000000
+nvenc_hz = 0            # 0 = leave the encoder clock alone
+
+# Rates restored when the charger is removed (handheld defaults).
+handheld_cpu_hz = 1020000000
+handheld_gpu_hz = 460800000
+handheld_emc_hz = 1331200000
