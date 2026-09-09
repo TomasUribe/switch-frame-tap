@@ -33,6 +33,15 @@ touches NAND.
 | engine survey | `/dev/nvhost-vic`, `-msenc`, `-ctrl` **open**; `-gpu`/`-as-gpu`/`-ctrl-gpu` (0x30003) and `-nvdec`/`-nvjpg` (0x1000) denied — none needed |
 | own nvmap buffer: `CREATE` + `ALLOC(kind=Pitch, our cpu_addr)` + `GET_ID` + CPU read-back | works — this is the VIC destination |
 | games + homebrew unaffected | yes (probe must release the nvdrv session; it does) |
+| **VIC channel usable** | `/dev/nvhost-vic` open, `GET_SYNCPOINT`→12, ctrl `SYNCPT_READ(12)`→~82, `SET_SUBMIT_TIMEOUT` — all clean |
+
+### Do NOT re-try
+- `NVHOST_IOCTL_CHANNEL_MAP_CMD_BUFFER` from this context **crashed nvservices**
+  (white flash + `fatal`-service abort). It pins memory into the channel and is
+  fragile here. The real VIC path is `NVHOST_IOCTL_CHANNEL_SUBMIT` with a reloc
+  list; the kernel pins per-submit. Don't use MAP_CMD_BUFFER.
+- Channel devices are **one fd per session** — a leaked survey fd made the real
+  open fail `nverr=4096`. The survey now closes each fd.
 
 ## Current module behaviour
 
