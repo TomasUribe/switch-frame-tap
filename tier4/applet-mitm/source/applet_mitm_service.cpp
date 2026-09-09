@@ -18,6 +18,31 @@ namespace ams::mitm::applet {
         /* the VIC blit fires exactly once, ever - never per-frame */
         constinit std::atomic<bool> g_blit_attempted{false};
 
+        /* queueBuffer's parcel begins with writeInterfaceToken, not with the
+         * arguments: [u32 strict_mode_policy][u32 len][UTF-16 name, len+1 units,
+         * padded to 4]. Reading the first word gave 0x100 - that is
+         * STRICT_MODE_PENALTY_GATHER, which is why the slot came back as 256.
+         * For "android.gui.IGraphicBufferProducer" (34 units) the slot lands at
+         * payload+80, i.e. parcel offset 96. Parsed rather than hardcoded. */
+        s32 ParseQueueBufferSlot(const u8 *p, size_t sz) {
+            if (p == nullptr || sz < 24) { return -1; }
+            u32 data_off = 0;
+            std::memcpy(std::addressof(data_off), p + 4, sizeof(data_off));
+            if (static_cast<size_t>(data_off) + 8 > sz) { return -1; }
+
+            u32 len = 0;
+            std::memcpy(std::addressof(len), p + data_off + 4, sizeof(len));
+            if (len == 0 || len > 128) { return -1; }
+
+            size_t off = static_cast<size_t>(data_off) + 8 + (static_cast<size_t>(len) + 1) * 2;
+            off = (off + 3) & ~static_cast<size_t>(3);
+            if (off + 4 > sz) { return -1; }
+
+            s32 slot = 0;
+            std::memcpy(std::addressof(slot), p + off, sizeof(slot));
+            return slot;
+        }
+
         const char *TxnName(u32 code) {
             switch (code) {
                 case 1:  return "requestBuffer";
@@ -80,27 +105,10 @@ namespace ams::mitm::applet {
         if (code == 7 && g_vic_armed && total > 300 && g_game_surface.armed) {
             bool ex = false;
             if (g_blit_attempted.compare_exchange_strong(ex, true)) {
-                s32 qslot = 0;
-                const auto *p = static_cast<const u8 *>(parcel_in.GetPointer());
+                const auto *p  = static_cast<const u8 *>(parcel_in.GetPointer());
                 const size_t psz = parcel_in.GetSize();
-                if (p != nullptr && psz >= 24) {
-                    u32 data_off = 0;
-                    std::memcpy(std::addressof(data_off), p + 4, sizeof(data_off));
-                    if (data_off + 4 <= psz) {
-                        std::memcpy(std::addressof(qslot), p + data_off, sizeof(qslot));
-                    }
-                }
+                const s32 qslot  = ParseQueueBufferSlot(p, psz);
                 LogMark("binder:vic_blit_requested");
-                /* slot came back as 256 last run, so this parse is wrong. Dump
-                 * the parcel head once and decode it properly next round; until
-                 * then RequestVicBlit clamps out-of-range to slot 0, which is a
-                 * live framebuffer either way (the game rotates all three). */
-                if (p != nullptr && psz >= 32) {
-                    u32 w[8];
-                    std::memcpy(w, p, sizeof(w));
-                    LogLine("   parcel head: %08x %08x %08x %08x %08x %08x %08x %08x",
-                            w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
-                }
                 LogLine("   queueBuffer txn#%u parcel=%zu slot=%d -> handed to VIC worker", total, psz, qslot);
                 RequestVicBlit(qslot);
             }

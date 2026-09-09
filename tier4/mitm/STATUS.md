@@ -36,12 +36,53 @@ touches NAND.
 | **VIC channel usable** | `/dev/nvhost-vic` open, `GET_SYNCPOINT`→12, ctrl `SYNCPT_READ(12)`→~82, `SET_SUBMIT_TIMEOUT` — all clean |
 
 ### Do NOT re-try
-- `NVHOST_IOCTL_CHANNEL_MAP_CMD_BUFFER` from this context **crashed nvservices**
-  (white flash + `fatal`-service abort). It pins memory into the channel and is
-  fragile here. The real VIC path is `NVHOST_IOCTL_CHANNEL_SUBMIT` with a reloc
-  list; the kernel pins per-submit. Don't use MAP_CMD_BUFFER.
+- ~~`NVHOST_IOCTL_CHANNEL_MAP_CMD_BUFFER` crashed nvservices; use relocs~~
+  **SUPERSEDED.** Both halves were wrong. It crashed because M7c called it
+  without `SET_NVMAP_FD`, and relocs are *not* the answer on Horizon - a submit
+  with relocs for unpinned handles returns InvalidState(8). MAP_CMD_BUFFER is
+  the required step; see the Phase B section above.
 - Channel devices are **one fd per session** — a leaked survey fd made the real
   open fail `nverr=4096`. The survey now closes each fd.
+
+## Phase B first attempt — `InvalidState`, and it named the missing step
+
+```
+cmdbuf words=20  execute=1  incr_syncpt=12 cond=OP_DONE
+SUBMIT req=0xC0700001 sz=112 nr=3  rc=0x0 nverr=8 -> fence(syncpt=12, val=0)
+vb:11_SUBMIT_FAILED
+```
+
+`nverr=8` = **InvalidState** (switchbrew NV_services error table; the `nverr=5`
+we saw earlier is Timeout, which fits too). Rejected cleanly *before* doing
+anything — **no freeze**, game ran on to 8284 txns at 60 fps, clean exit. The
+safety design did its job.
+
+Phase A (`nr=0`) works, Phase B (`nr=3`) does not: the difference is **relocs**.
+Per switchbrew, `NVHOST_IOCTL_CHANNEL_MAP_CMD_BUFFER` *"uses **nvmap_pin**
+internally to pin nvmap handles to an appropriate device physical address"* and
+returns `phys_addr_out`. **Horizon replaced Linux's per-submit pinning with
+explicit pinning** — so a submit whose relocs name unpinned handles is exactly
+`InvalidState`.
+
+### Why MAP_CMD_BUFFER crashed in M7c (and why it should be safe now)
+M7c called it **without `SET_NVMAP_FD`** — that ioctl only arrived in M8. With no
+nvmap client bound to the channel, `nvmap_pin` had nothing valid to resolve
+handles against. We now call `SET_NVMAP_FD` first (`nverr=0`, verified twice).
+*The "do NOT re-try MAP_CMD_BUFFER" note below is therefore superseded.*
+
+### M13 approach: pin, then inline the addresses
+Because MAP_CMD_BUFFER *returns* the address, relocs are unnecessary:
+pin cfg/dst/src, write `phys >> 8` straight into the cmdbuf, and submit with
+**`num_relocs = 0`** — the exact 52-byte shape Phase A proved. Each pin is
+separately breadcrumbed (`vb:8a/8b/8c`) so a crash names the guilty handle, and
+all three are unpinned on the way out.
+
+### queueBuffer slot parse — fixed
+The parcel starts with `writeInterfaceToken`:
+`[u32 strict_mode][u32 len][UTF-16 name, len+1 units, pad to 4]`. The `256` we
+kept reading was `STRICT_MODE_PENALTY_GATHER`. For
+`android.gui.IGraphicBufferProducer` (34 units) the slot is at parcel offset
+**96**; now parsed properly rather than assumed.
 
 ## Phase A — **PASSED** (M11, verified on hardware)
 

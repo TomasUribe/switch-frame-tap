@@ -87,10 +87,28 @@ namespace ams::mitm::applet {
         constexpr u32 NvHostIocChannelGetSyncpoint  = MakeIowr(0x00, 0x02, 8);   /* {u32 module_id; u32 syncpt}   */
         constexpr u32 NvHostIocChannelSetSubmitTo   = MakeIow (0x00, 0x07, 4);   /* {u32 timeout}                 */
         constexpr u32 NvHostIocChannelSetNvmapFd    = MakeIow (0x48, 0x01, 4);   /* {u32 fd}  -> 0x40044801       */
+        /* MAP_CMD_BUFFER pins nvmap handles and RETURNS their device physical
+         * address. Horizon replaced Linux's per-submit pinning with this, which
+         * is why a submit carrying relocs for unpinned handles answers
+         * InvalidState(8). Header is 12 B (num_handles, reserved, is_compr,
+         * pad[3]) + 8 B per handle -> 20 for one. */
+        constexpr u32 NvHostIocChannelMapCmdBuf     = MakeIowr(0x00, 0x09, 20);  /* -> 0xC0140009 */
+        constexpr u32 NvHostIocChannelUnmapCmdBuf   = MakeIowr(0x00, 0x0A, 20);
         constexpr u32 NvHostIocCtrlSyncptRead       = MakeIowr(0x00, 0x14, 8);   /* {u32 id; u32 value}           */
         constexpr u32 NvHostIocCtrlSyncptWait       = MakeIowr(0x00, 0x16, 12);  /* {u32 id; u32 thresh; u32 to}  */
         constexpr u32 NvHostIocCtrlSyncptIncrW      = MakeIow (0x00, 0x15, 4);   /* {u32 id} - switchbrew 0x40040015 */
         constexpr u32 NvHostIocCtrlSyncptIncrWR     = MakeIowr(0x00, 0x15, 4);   /* libnx encodes this one instead   */
+
+        struct MapCmdBufArgs {
+            u32 num_handles;
+            u32 reserved;
+            u8  is_compr;
+            u8  padding[3];
+            u32 handle_id_in;
+            u32 phys_addr_out;
+        };
+        static_assert(sizeof(MapCmdBufArgs) == 20);
+        static_assert(__builtin_offsetof(MapCmdBufArgs, handle_id_in) == 12);
 
         /* breadcrumb + stage, so the heartbeat can name where a hang happened */
         void VicStage(const char *s) {
@@ -126,6 +144,32 @@ namespace ams::mitm::applet {
             const struct { u32 fd; } in = { fd };
             u32 e = 0;
             serviceDispatchInOut(std::addressof(g_nv_srv), 2, in, e);
+        }
+
+        /* Pin one nvmap handle into the channel and get its device physical
+         * address. Each call is breadcrumbed by the caller so that if this ever
+         * takes nvservices down again we know exactly which handle did it. */
+        bool MapCmdBuffer(u32 chan_fd, u32 handle, u32 *out_addr, const char *what) {
+            MapCmdBufArgs a = {};
+            a.num_handles  = 1;
+            a.is_compr     = 0;
+            a.handle_id_in = handle;
+            u32 nverr = 0;
+            const ::Result rc = NvIoctl(chan_fd, NvHostIocChannelMapCmdBuf,
+                                        std::addressof(a), sizeof(a), std::addressof(nverr));
+            LogLine("   MAP_CMD_BUFFER(%s handle=%u) rc=0x%x nverr=%u -> phys=0x%x",
+                    what, handle, rc, nverr, a.phys_addr_out);
+            if (R_FAILED(rc) || nverr != 0) { return false; }
+            *out_addr = a.phys_addr_out;
+            return true;
+        }
+
+        void UnmapCmdBuffer(u32 chan_fd, u32 handle) {
+            MapCmdBufArgs a = {};
+            a.num_handles  = 1;
+            a.handle_id_in = handle;
+            u32 nverr = 0;
+            NvIoctl(chan_fd, NvHostIocChannelUnmapCmdBuf, std::addressof(a), sizeof(a), std::addressof(nverr));
         }
 
         /* CREATE + ALLOC(kind, our cpu pages) + GET_ID for a buffer we own. */
@@ -211,7 +255,7 @@ namespace ams::mitm::applet {
          * Each entry: [INCR(0x10,2)] [method>>2] [value|reloc-placeholder]. */
         constexpr u32 Host1xIncr0x10x2 = (UINT32_C(1) << 28) | (0x10u << 16) | 2u;
 
-        u32 BuildCmdbuf(u32 *w, bool full) {
+        u32 BuildCmdbuf(u32 *w, bool full, u32 cfg_addr, u32 dst_addr, u32 src_addr) {
             u32 n = 0;
             /* SET_APPLICATION_ID = 1 */
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_APPLICATION_ID >> 2; w[n++] = 1;
@@ -219,12 +263,12 @@ namespace ams::mitm::applet {
             /* SET_CONTROL_PARAMS = (sizeof(cfg)/16) << 16 */
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_CONTROL_PARAMS >> 2;
             w[n++] = (static_cast<u32>(sizeof(vic::VicConfigStruct) / 16)) << 16;
-            /* SET_CONFIG_STRUCT_OFFSET = &cfg >> 8   (reloc placeholder at word 8) */
-            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_CONFIG_STRUCT_OFFSET >> 2; w[n++] = 0;
-            /* SET_OUTPUT_SURFACE_LUMA_OFFSET = &dst >> 8  (placeholder at word 11) */
-            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_OUTPUT_SURFACE_LUMA_OFFSET >> 2; w[n++] = 0;
-            /* SET_SURFACE0_SLOT0_LUMA_OFFSET = &src >> 8  (placeholder at word 14) */
-            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_SURFACE0_SLOT0_LUMA_OFFSET >> 2; w[n++] = 0;
+            /* Addresses go in directly, as MAP_CMD_BUFFER already pinned each
+             * buffer and handed back its device physical address. That lets us
+             * submit with num_relocs=0 - the exact shape Phase A proved. */
+            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_CONFIG_STRUCT_OFFSET >> 2;        w[n++] = cfg_addr >> 8;
+            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_OUTPUT_SURFACE_LUMA_OFFSET >> 2;  w[n++] = dst_addr >> 8;
+            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_SURFACE0_SLOT0_LUMA_OFFSET >> 2;  w[n++] = src_addr >> 8;
             /* EXECUTE = 1 << 8 */
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::EXECUTE >> 2; w[n++] = 1u << 8;
             return n;
@@ -283,6 +327,10 @@ namespace ams::mitm::applet {
         const u32 sidx = (slot >= 0 && static_cast<u32>(slot) < g_game_surface.num_slots)
                        ? static_cast<u32>(slot) : 0;
         const u32 src_off = g_game_surface.slot_offset[sidx];
+
+        /* declared before the first goto: a jump may not bypass an initialised
+         * declaration, and close_vic reads these to decide what to unpin. */
+        u32 cfg_addr = 0, dst_addr = 0, src_addr = 0;
 
         VicStage("vb:1_smGetService");
         ::Result rc = smGetService(std::addressof(g_nv_srv), "nvdrv:s");
@@ -355,12 +403,23 @@ namespace ams::mitm::applet {
             LogLine("   SET_SUBMIT_TIMEOUT rc=0x%x nverr=%u", rc, nverr);
         }
 
+        if (g_vic_execute) {
+            VicStage("vb:8a_map_cfg");
+            if (!MapCmdBuffer(vfd, cfg_handle, std::addressof(cfg_addr), "cfg")) { VicStage("vb:8a_FAILED"); goto close_vic; }
+            VicStage("vb:8b_map_dst");
+            if (!MapCmdBuffer(vfd, dst_handle, std::addressof(dst_addr), "dst")) { VicStage("vb:8b_FAILED"); goto close_vic; }
+            VicStage("vb:8c_map_src");
+            if (!MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)")) { VicStage("vb:8c_FAILED"); goto close_vic; }
+            LogLine("   pinned: cfg=0x%x dst=0x%x src=0x%x (+slot off 0x%x)", cfg_addr, dst_addr, src_addr, src_off);
+        }
+
         VicStage("vb:9_fill_config");
         FillBlitConfig(reinterpret_cast<vic::VicConfigStruct *>(g_vic_cfg_buf));
 
         u32 words;
         VicStage("vb:10_build_cmdbuf");
-        words = BuildCmdbuf(reinterpret_cast<u32 *>(g_vic_cmd_buf), g_vic_execute);
+        words = BuildCmdbuf(reinterpret_cast<u32 *>(g_vic_cmd_buf), g_vic_execute,
+                            cfg_addr, dst_addr, src_addr + src_off);
         words = AppendIncrSyncpt(reinterpret_cast<u32 *>(g_vic_cmd_buf), words, syncpt, g_vic_execute);
         LogLine("   cmdbuf words=%u  execute=%d  incr_syncpt=%u cond=%s  src_off=0x%x slot=%u",
                 words, static_cast<int>(g_vic_execute), syncpt,
@@ -385,19 +444,13 @@ namespace ams::mitm::applet {
              *   syncpt_incr[1]   {id, incrs, rsvd[3]}
              *   u32 fence_threshold[1]  (out)
              */
-            const u32 nr = g_vic_execute ? 3u : 0u;
+            const u32 nr = 0u;   /* addresses are pinned+inlined, so no reloc list */
             alignas(8) u8 sb[16 + 12 + 3 * (16 + 4) + 20 + 4] = {};
             u32 off = 0;
             auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
 
             put(1); put(nr); put(1); put(1);
             put(cmd_handle); put(0); put(words);                          /* cmdbufs[0] */
-            if (g_vic_execute) {
-                put(cmd_handle); put(8  * 4); put(cfg_handle); put(0);        /* reloc cfg */
-                put(cmd_handle); put(11 * 4); put(dst_handle); put(0);        /* reloc dst */
-                put(cmd_handle); put(14 * 4); put(src_handle); put(src_off);  /* reloc src */
-                put(8); put(8); put(8);                                        /* reloc_shifts */
-            }
             put(syncpt); put(1); put(0); put(0); put(0);                  /* syncpt_incrs[0] */
             const u32 fence_off = off; put(0);                           /* fence_threshold (out) */
             const u32 sz = off;
@@ -483,6 +536,9 @@ namespace ams::mitm::applet {
         }
 
     close_vic:
+        if (cfg_addr != 0) { UnmapCmdBuffer(vfd, cfg_handle); }
+        if (dst_addr != 0) { UnmapCmdBuffer(vfd, dst_handle); }
+        if (src_addr != 0) { UnmapCmdBuffer(vfd, src_handle); }
         NvClose(vfd);
     close_sess:
         serviceClose(std::addressof(g_nv_srv));
