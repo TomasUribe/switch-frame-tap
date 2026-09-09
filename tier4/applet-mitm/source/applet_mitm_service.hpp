@@ -1,31 +1,64 @@
 /*
- * applet-mitm - Track B / M1 (v2)
+ * applet-mitm - Track B / M2 (ARUID-only)
  *
- * Passive mitm of "appletOE". We intercept NOTHING: an empty command list means
- * every call (including OpenApplicationProxy, which carries the game's process
- * handle) forwards at the raw HIPC level with handles intact. Observation is
- * done in ShouldMitm, which sm calls once per connecting client.
+ *   appletOE.OpenApplicationProxy(0)         -> wrap IApplicationProxy
+ *     IApplicationProxy.GetWindowController(2) -> wrap IWindowController
+ *       IWindowController.GetAppletResourceUserId(1) -> log the u64
  *
- * M1 v1 tried to intercept OpenApplicationProxy and forward with
- * ResultShouldForwardToSession(); that consumes the copy-handle parameter, so
- * the replayed request reached am with no process handle and games failed to
- * launch. M2 will forward it manually instead.
+ * Everything not listed is auto-forwarded by libstratosphere's domain mitm
+ * path. Each interception hand-forwards and wraps via the fs_mitm SetValue
+ * pattern:  out.SetValue(wrapper, DomainObjectId{ serviceGetObjectId(&fwd) }).
  */
 #pragma once
 #include <stratosphere.hpp>
 
-/* No intercepted commands - pure transparent passthrough. */
-#define AMS_APPLET_MITM_INTERFACE_INFO(C, H)
+/* ---- IWindowController wrapper (define at global scope) ------------------ */
+#define AMS_AM_WINDOWCONTROLLER_MITM_INTERFACE_INFO(C, H) \
+    AMS_SF_METHOD_INFO(C, H, 1, Result, GetAppletResourceUserId, (sf::Out<u64> out_aruid), (out_aruid))
 
-AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IAppletMitmInterface, AMS_APPLET_MITM_INTERFACE_INFO, 0x11ABE701)
+AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IWindowControllerMitm, AMS_AM_WINDOWCONTROLLER_MITM_INTERFACE_INFO, 0x2AB1E001)
+
+/* ---- IApplicationProxy wrapper ---------------------------------------- */
+#define AMS_AM_APPPROXY_MITM_INTERFACE_INFO(C, H) \
+    AMS_SF_METHOD_INFO(C, H, 2, Result, GetWindowController, (sf::Out<sf::SharedPointer<ams::mitm::applet::IWindowControllerMitm>> out), (out))
+
+AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IApplicationProxyMitm, AMS_AM_APPPROXY_MITM_INTERFACE_INFO, 0x2AB1E002)
+
+/* ---- appletOE root wrapper ------------------------------------------- */
+#define AMS_APPLETOE_MITM_INTERFACE_INFO(C, H) \
+    AMS_SF_METHOD_INFO(C, H, 0, Result, OpenApplicationProxy, (sf::Out<sf::SharedPointer<ams::mitm::applet::IApplicationProxyMitm>> out, u64 reserved, const sf::ClientProcessId &client_pid, sf::CopyHandle &&process_handle), (out, reserved, client_pid, std::move(process_handle)))
+
+AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IAppletMitmInterface, AMS_APPLETOE_MITM_INTERFACE_INFO, 0x2AB1E003)
 
 namespace ams::mitm::applet {
+
+    class WindowControllerMitm : public sf::MitmServiceImplBase {
+        public:
+            using MitmServiceImplBase::MitmServiceImplBase;
+            static bool ShouldMitm(const sm::MitmProcessInfo &) { return true; }
+        public:
+            Result GetAppletResourceUserId(sf::Out<u64> out_aruid);
+    };
+    static_assert(IsIWindowControllerMitm<WindowControllerMitm>);
+
+    class ApplicationProxyMitm : public sf::MitmServiceImplBase {
+        public:
+            using MitmServiceImplBase::MitmServiceImplBase;
+            static bool ShouldMitm(const sm::MitmProcessInfo &) { return true; }
+        public:
+            Result GetWindowController(sf::Out<sf::SharedPointer<IWindowControllerMitm>> out);
+    };
+    static_assert(IsIApplicationProxyMitm<ApplicationProxyMitm>);
 
     class AppletMitmService : public sf::MitmServiceImplBase {
         public:
             using MitmServiceImplBase::MitmServiceImplBase;
         public:
-            static bool ShouldMitm(const sm::MitmProcessInfo &client_info);
+            static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
+                return ncm::IsApplicationId(client_info.program_id) && !client_info.override_status.IsHbl();
+            }
+        public:
+            Result OpenApplicationProxy(sf::Out<sf::SharedPointer<IApplicationProxyMitm>> out, u64 reserved, const sf::ClientProcessId &client_pid, sf::CopyHandle &&process_handle);
     };
     static_assert(IsIAppletMitmInterface<AppletMitmService>);
 
