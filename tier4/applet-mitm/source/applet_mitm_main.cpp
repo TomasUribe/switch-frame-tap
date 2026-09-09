@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M10: up. VIC probe on its own worker thread; observer by default.");
+        mitm::applet::LogLine("applet-mitm M11: up. Syncpoint increment now programmed into the cmdbuf (+rescue).");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

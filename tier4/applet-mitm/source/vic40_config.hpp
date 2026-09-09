@@ -27,6 +27,20 @@ namespace ams::mitm::applet::vic {
     constexpr u32 UCLASS_METHOD_OFFSET = 0x10;
     constexpr u32 UCLASS_METHOD_DATA   = 0x11;
 
+    /* Declaring an increment in the submit's syncpt_incrs only tells nvhost to
+     * raise the syncpoint's *max*. The increment itself must be programmed into
+     * the command stream, or the syncpoint never reaches the fence - our wait
+     * times out and every other client of that syncpoint (nvnflinger composites
+     * on the VIC!) stalls forever. libdrm does this via
+     * drm_tegra_pushbuf_sync_cond: NONINCR(0x0,1) then cond<<shift | syncpt_id.
+     * VIC 4.0 reports version 0x21 -> cond_shift 8. */
+    constexpr u32 Host1xOpcodeNonIncr(u32 offset, u32 count) {
+        return (UINT32_C(2) << 28) | ((offset & 0xFFF) << 16) | (count & 0xFFFF);
+    }
+    constexpr u32 INCR_SYNCPT_COND_IMMEDIATE = 0;
+    constexpr u32 INCR_SYNCPT_COND_OP_DONE   = 1;
+    constexpr u32 INCR_SYNCPT_COND_SHIFT     = 8;
+
     /* pixel formats (libdrm vic.h + VIC NVB0B6 table).
      * 32/33/34 are consecutive: A8R8G8B8, A8B8G8R8, R8G8B8A8. The game's
      * swapchain buffers are A8B8G8R8 (NvColorFormat 0x0100532120). */

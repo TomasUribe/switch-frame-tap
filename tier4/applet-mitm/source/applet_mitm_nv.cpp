@@ -85,6 +85,8 @@ namespace ams::mitm::applet {
         constexpr u32 NvHostIocChannelSetNvmapFd    = MakeIow (0x48, 0x01, 4);   /* {u32 fd}  -> 0x40044801       */
         constexpr u32 NvHostIocCtrlSyncptRead       = MakeIowr(0x00, 0x14, 8);   /* {u32 id; u32 value}           */
         constexpr u32 NvHostIocCtrlSyncptWait       = MakeIowr(0x00, 0x16, 12);  /* {u32 id; u32 thresh; u32 to}  */
+        constexpr u32 NvHostIocCtrlSyncptIncrW      = MakeIow (0x00, 0x15, 4);   /* {u32 id} - switchbrew 0x40040015 */
+        constexpr u32 NvHostIocCtrlSyncptIncrWR     = MakeIowr(0x00, 0x15, 4);   /* libnx encodes this one instead   */
 
         /* breadcrumb + stage, so the heartbeat can name where a hang happened */
         void VicStage(const char *s) {
@@ -221,7 +223,19 @@ namespace ams::mitm::applet {
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_SURFACE0_SLOT0_LUMA_OFFSET >> 2; w[n++] = 0;
             /* EXECUTE = 1 << 8 */
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::EXECUTE >> 2; w[n++] = 1u << 8;
-            return n;   /* 18 */
+            return n;
+        }
+
+        /* Program the syncpoint increment the submit already promised. Omitting
+         * this is what froze the console: nvhost raised syncpoint 12's max to
+         * the fence, nothing ever incremented it, and nvnflinger - which
+         * composites every frame on that same VIC syncpoint - waited forever. */
+        u32 AppendIncrSyncpt(u32 *w, u32 n, u32 syncpt, bool after_engine_op) {
+            const u32 cond = after_engine_op ? vic::INCR_SYNCPT_COND_OP_DONE
+                                             : vic::INCR_SYNCPT_COND_IMMEDIATE;
+            w[n++] = vic::Host1xOpcodeNonIncr(vic::UCLASS_INCR_SYNCPT, 1);
+            w[n++] = (cond << vic::INCR_SYNCPT_COND_SHIFT) | syncpt;
+            return n;
         }
 
     }
@@ -343,7 +357,10 @@ namespace ams::mitm::applet {
         u32 words;
         VicStage("vb:10_build_cmdbuf");
         words = BuildCmdbuf(reinterpret_cast<u32 *>(g_vic_cmd_buf), g_vic_execute);
-        LogLine("   cmdbuf words=%u  execute=%d  src_off=0x%x slot=%u", words, (int)g_vic_execute, src_off, sidx);
+        words = AppendIncrSyncpt(reinterpret_cast<u32 *>(g_vic_cmd_buf), words, syncpt, g_vic_execute);
+        LogLine("   cmdbuf words=%u  execute=%d  incr_syncpt=%u cond=%s  src_off=0x%x slot=%u",
+                words, static_cast<int>(g_vic_execute), syncpt,
+                g_vic_execute ? "OP_DONE" : "IMMEDIATE", src_off, sidx);
 
         /* pre-blit dst state */
         {
@@ -404,6 +421,38 @@ namespace ams::mitm::applet {
                 u32 e2 = 0;
                 NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
                 LogLine("   SYNCPT_READ(id=%u) -> value=%u (want >= %u)", syncpt, r.value, fence_val);
+
+                /* SAFETY NET. Syncpoint 12 is the VIC's, and nvnflinger
+                 * composites on it. If our job somehow still leaves it short of
+                 * the max nvhost raised for us, every other waiter on that
+                 * syncpoint stalls forever - which is exactly how the previous
+                 * run froze the console. Force it up to the fence by hand so a
+                 * bad command stream costs us the probe, not the system. */
+                if (r.value < fence_val) {
+                    VicStage("vb:12_RESCUE_INCR");
+                    const u32 missing = fence_val - r.value;
+                    LogLine("   !! syncpt %u short by %u - forcing increments to unblock other clients",
+                            syncpt, missing);
+                    /* switchbrew documents INCR as _IOW 0x40040015; libnx encodes
+                     * _IOWR. Try the documented one, fall back on the other. */
+                    u32 req = NvHostIocCtrlSyncptIncrW;
+                    for (u32 k = 0; k < missing && k < 64; k++) {
+                        struct { u32 id; } ai = { syncpt };
+                        u32 ae = 0;
+                        NvIoctl(cfd, req, std::addressof(ai), sizeof(ai), std::addressof(ae));
+                        if (k == 0 && ae != 0) {
+                            LogLine("   INCR(_IOW) nverr=%u - retrying as _IOWR", ae);
+                            req = NvHostIocCtrlSyncptIncrWR;
+                            ae  = 0;
+                            NvIoctl(cfd, req, std::addressof(ai), sizeof(ai), std::addressof(ae));
+                            LogLine("   INCR(_IOWR) nverr=%u", ae);
+                        }
+                    }
+                    struct { u32 id; u32 value; } r2 = { syncpt, 0 };
+                    u32 e3 = 0;
+                    NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r2), sizeof(r2), std::addressof(e3));
+                    LogLine("   after rescue: syncpt %u = %u (fence %u)", syncpt, r2.value, fence_val);
+                }
                 NvClose(cfd);
             }
         }

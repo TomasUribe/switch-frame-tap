@@ -43,6 +43,41 @@ touches NAND.
 - Channel devices are **one fd per session** — a leaked survey fd made the real
   open fail `nverr=4096`. The survey now closes each fd.
 
+## Phase A run — CHANNEL_SUBMIT ABI **verified**, and the freeze root-caused
+
+The whole probe ran end to end on the worker thread, and the game kept
+rendering through it. Everything up to the submit is now proven on hardware:
+
+| step | result |
+|---|---|
+| `smGetService("nvdrv:s")`, tmem, `Initialize` | rc=0 |
+| `Open(/dev/nvmap)` | fd, nverr=0 |
+| `FROM_ID(1276)` | handle=1276 |
+| our 3 nvmap buffers (cfg/cmd/dst) | handles 3948 / 3952 / 3956 |
+| `Open(/dev/nvhost-vic)` + `GET_SYNCPOINT` | syncpt **12** |
+| **`SET_NVMAP_FD`** | rc=0 **nverr=0** |
+| **`NVHOST_IOCTL_CHANNEL_SUBMIT`** `req=0xC0340001 sz=52 nr=0` | **rc=0 nverr=0**, fence(syncpt=12, **val=586**) |
+| `SYNCPT_WAIT(12, 586)` | nverr=5 (timeout) |
+| `SYNCPT_READ(12)` | **585** — one short of the fence |
+
+**The submit ABI is correct.** The bug: `syncpt_incrs` in the submit only tells
+nvhost to raise the syncpoint's *max*; the increment itself must be **programmed
+into the command stream**. Our cmdbuf never did, so:
+
+- our own wait timed out (585 < 586), **and**
+- syncpoint 12 is the **VIC's**, which **nvnflinger composites on** — so every
+  later waiter stalled forever. That is what froze the console at the title
+  screen, both times. One bug, both symptoms.
+
+Fix (libdrm `drm_tegra_pushbuf_sync_cond`): append
+`NONINCR(UCLASS_INCR_SYNCPT=0x0, 1)` + `cond << 8 | syncpt_id`.
+VIC 4.0 reports version `0x21` → `cond_shift = 8`; `IMMEDIATE=0`, `OP_DONE=1`.
+Phase A uses IMMEDIATE (no engine op), Phase B uses OP_DONE (after `EXECUTE`).
+
+**Safety net added:** after the wait, if the syncpoint is still short of the
+fence, force it up with `NVHOST_IOCTL_CTRL_SYNCPT_INCR`. A bad command stream
+now costs the probe, not the console.
+
 ## The M8/M8b blackout — SOLVED (M9 observer run, verified)
 
 The module was never broken. **Two symptoms, one cause:**
