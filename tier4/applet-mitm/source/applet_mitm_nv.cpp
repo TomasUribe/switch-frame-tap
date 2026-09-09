@@ -127,8 +127,42 @@ namespace ams::mitm::applet {
             LogLine("   PARAM(Kind) rc=0x%x nverr=%u -> 0x%x", rc, nverr, args.value);
         }
 
+        LogMark("nv:7_engine_survey");
+        {
+            /* Which engines can we reach? The VIC is the one that matters: it
+             * reads a block-linear surface and writes a linear one, doing the
+             * de-swizzle AND format conversion in hardware. That is how
+             * nvnflinger consumes these very buffers. msenc is NVENC, for the
+             * encode stage later. */
+            static const char *const nodes[] = {
+                "/dev/nvhost-vic",
+                "/dev/nvhost-msenc",
+                "/dev/nvhost-gpu",
+                "/dev/nvhost-as-gpu",
+                "/dev/nvhost-ctrl",
+                "/dev/nvhost-ctrl-gpu",
+                "/dev/nvhost-nvdec",
+                "/dev/nvhost-nvjpg",
+            };
+            for (const char *path : nodes) {
+                struct { u32 fd; u32 error; } out = {};
+                const ::Result r = serviceDispatchOut(std::addressof(g_nv_srv), 0, out,
+                    .buffer_attrs = { SfBufferAttr_In | SfBufferAttr_HipcMapAlias },
+                    .buffers      = { { path, std::strlen(path) } },
+                );
+                LogLine("   open %-22s rc=0x%-8x fd=%-10u nverr=%u", path, r, out.fd, out.error);
+            }
+        }
+
+        /* Release everything. A probe must not hold an nvdrv session or a
+         * handle on the game's buffer - doing so is what wedged homebrew. */
+        LogMark("nv:8_cleanup");
+        serviceClose(std::addressof(g_nv_srv));
+        tmemClose(std::addressof(g_nv_tmem));
+
         LogMark("nv:DONE_OPENED");
-        LogLine("*** nvmap object %u is reachable from our process (handle=%u)", nvmap_id, handle);
+        LogLine("*** nvmap object %u reachable (handle=%u, 25 MB = the full swapchain); session released",
+                nvmap_id, handle);
     }
 
 }

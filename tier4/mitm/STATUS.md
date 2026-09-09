@@ -110,7 +110,38 @@ offset static_asserts (`layout` @0x10, `offset` @0x1C, `kind` @0x20,
 `layout=3(BlockLinear)`, `kind=0xfe(Generic_16BX2)`, `block_h_log2=4`,
 `scan=0(Progressive)`). See `applet_mitm_gbuf.{hpp,cpp}`. **M3 is done.**
 
-## M4 (built, awaiting result): open the game's nvmap object
+## M4b RESULT: we can open the game's framebuffer memory ✅
+
+```
+nv:1_smGetService      rc=0x0
+nv:2_tmemCreateFromMemory rc=0x0  handle=0xa0002
+nv:3_Initialize        rc=0x0
+nv:4_open_nvmap        rc=0x0  fd=23855104  nverr=0
+nv:5_FROM_ID(id=1268)  rc=0x0  nverr=0  -> handle=1268
+nv:6_PARAM(Size)       rc=0x0  nverr=0  -> 26542080 B (25 MB)
+```
+
+**26,542,080 = exactly 3 x 8,847,360** — the whole triple-buffered swapchain.
+nvmap ids ARE cross-process, and Phase 0's `nvInitialize()` fatal was entirely
+libnx's `appletGetAppletType()` service selection. `PARAM(Kind)` returns
+nverr=11; kind is not queryable on an imported handle and we already have it
+from the GraphicBuffer descriptor, so it does not matter.
+
+### Regression found and fixed
+Holding the nvdrv session + the imported nvmap handle open forever wedged
+homebrew apps. A probe must release them: M5 adds `serviceClose` + `tmemClose`
+after the survey. When we build the real capture loop we will hold them
+deliberately, scoped to a running game.
+
+## M5 (built, awaiting result): which engines can we reach?
+
+With a working nvdrv session, `Open` each `/dev/nvhost-*`. The one that matters
+is **`/dev/nvhost-vic`** — the VIC reads a block-linear surface and writes a
+linear one, doing the de-swizzle *and* format conversion in hardware, which is
+exactly how nvnflinger consumes these buffers. `/dev/nvhost-msenc` is NVENC for
+the encode stage.
+
+## Superseded: M4 first attempt
 
 `nvmap_id` is a **cross-process** id — it has to be, because nvnflinger runs in
 a different process and receives this same parcel in order to composite the
