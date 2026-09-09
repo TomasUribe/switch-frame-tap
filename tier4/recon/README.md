@@ -1,49 +1,72 @@
-# tier4-recon — Phase 0 diagnostics
+# tier4-recon — Phase 0 diagnostics (v2)
 
-A **read-only** Atmosphère sysmodule that probes the paths Tier 4 depends on and
-writes findings to `sdmc:/tier4-recon.log`. It maps no writable MMIO and forces
-no system state. Worst case is a reboot.
+A **read-only, opt-in** Atmosphère sysmodule that probes the paths Tier 4 needs
+and writes findings to `sdmc:/tier4-recon.log`.
 
-## What it checks
+## v1 → v2
 
-| Probe | Question it answers |
-|---|---|
-| `probe_sys` | exact firmware, console model, tick rate |
-| `probe_psm` | `psmGetChargerType` — can we detect the official 39 W charger? |
-| `probe_caps` | `caps:sc` cmd2 (expect stub `0x7FECE`), **JPEG capture** alive? fps? does `ViLayerStack_Default` include the HOME menu? raw-stream (cmds 1201/1203) usable? at 720p and 1080p |
-| `probe_mmio` | does `svcQueryIoMapping(0x54200000)` work on this firmware? if so, dump of the live Display Controller window registers (base addr / stride / format) |
-| `probe_nv` | which `/dev/nv*` nodes our `nvdrv` session can open — critically `/dev/nvdisp-disp0`, `/dev/nvhost-vic`, `/dev/nvhost-msenc` |
-| `probe_apm` | current performance mode |
+v1 fatalled `am` with **Kernel `LimitReached` (0x10801)** — it reserved a 9.3 MB
+static buffer (whole 1080p frame) and ran every probe at boot. v2:
 
-It runs the static probes once, then repeats the `caps:sc` probes every 15 s for
-~7 minutes. **While it loops, move between a game, the HOME menu, and System
-Settings** — the log is timestamped so we can see what each capture path returns
-in each foreground state.
+- one **256 KB** buffer; captures are requested tiny (we only want the return
+  code + first bytes) — total process footprint ~0.8 MB.
+- **armed / self-disarming**: does nothing unless `sdmc:/config/tier4-recon/RUN`
+  exists, and **deletes that file before running** — a crash can never loop.
+- **per-probe opt-in** via keywords in that file.
+- 20 s settle so `am` / HOME are fully up first.
+- DC-register mapping moved to a separate opt-in build (`tier4-recon-mmio.nsp`).
 
 ## Build
 
 ```bash
-export DEVKITPRO=/opt/devkitpro          # wherever yours lives
-sudo dkp-pacman -S switch-dev            # if not already installed
-cd tier4/recon && make
+cd tier4/recon
+docker run --rm -v "$PWD":/proj -w /proj devkitpro/devkita64:latest make
+# optional MMIO variant:
+docker run --rm -v "$PWD":/proj -w /proj devkitpro/devkita64:latest \
+    make TARGET=tier4-recon-mmio CONFIG_JSON=recon-mmio.json
 ```
-Produces `tier4-recon.nsp`.
 
 ## Install
 
 ```
-sdmc:/atmosphere/contents/0100000000000C00/exefs.nsp        <- tier4-recon.nsp
+sdmc:/atmosphere/contents/0100000000000C00/exefs.nsp        <- tier4-recon.nsp (renamed)
 sdmc:/atmosphere/contents/0100000000000C00/flags/boot2.flag <- empty file
 ```
-Reboot. Wait ~8 minutes (or play/navigate around for that long).
 
-> If the console fails to boot: delete the `0100000000000C00` folder (hold Vol+
-> for the Atmosphère no-sysmodule boot, or pull the SD). The most likely culprit
-> is the `map` capability for `0x54200000` being rejected — in that case remove
-> the two `"type": "map"` blocks from `recon.json`, rebuild, and we lose only the
-> DC-register dump.
+## Run a batch
 
-## Send back
+1. On the SD card create `config/tier4-recon/RUN` containing keywords, e.g.:
+   ```
+   sys psm apm nv caps_jpeg
+   ```
+2. Reboot. The module runs those probes once (~30 s after boot) and idles.
+   The RUN file is **gone** afterwards.
+3. Pull `sdmc:/tier4-recon.log`.
+4. To run again (or in a different foreground state — game / HOME / Settings),
+   recreate `RUN` and reboot.
 
-`sdmc:/tier4-recon.log`. Paste it or attach it. That plus your firmware +
-Atmosphère versions tells us which Phase 1 path is real.
+### Keywords
+
+| keyword | probe | risk |
+|---|---|---|
+| `sys` | firmware, model, ticks | safe |
+| `psm` | charger type, battery | safe |
+| `apm` | performance mode | safe |
+| `nv` | open `/dev/nvhost-*`, `/dev/nvmap` | safe-ish |
+| `caps_jpeg` | `capsscCaptureJpegScreenShot` (Recording / Default / Screenshot stacks) | medium |
+| `all_safe` | = `sys psm apm nv caps_jpeg` | medium |
+| `loop` | repeat the caps probes ~20x (15 s apart) — good for game vs HOME comparison | — |
+| `nv_disp` | also try `/dev/nvdisp-*` | **risky** |
+| `caps_raw` | hand-rolled `caps:sc` cmd 2 | **risky** |
+| `caps_stream` | hand-rolled `caps:sc` cmd 1201/1203 | **risky** |
+| `mmio_map` | `svcQueryMemoryMapping(DC)` — needs the `-mmio` build | **risky** |
+| `mmio_read` | also dereference DC registers — needs the `-mmio` build | **risky** |
+
+**Suggested first batch:** `all_safe`. If that logs cleanly and the console is
+stable, try the risky ones one at a time, each its own reboot.
+
+## If it crashes again
+
+Boot holding **Volume Up** (skips `contents` sysmodules), or delete
+`atmosphere/contents/0100000000000C00/`. The log's last line names the probe that
+was running. Send it over.

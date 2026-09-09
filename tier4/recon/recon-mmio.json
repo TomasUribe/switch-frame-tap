@@ -1,5 +1,5 @@
 {
-	"name": "tier4-recon",
+	"name": "tier4-recon-mmio",
 	"title_id": "0x0100000000000C00",
 	"title_id_range_min": "0x0100000000000C00",
 	"title_id_range_max": "0x0100000000000C00",
@@ -14,8 +14,12 @@
 	"filesystem_access": {
 		"permissions": "0xffffffffffffffff"
 	},
-	"service_access": [ "*" ],
-	"service_host": [ "*" ],
+	"service_access": [
+		"*"
+	],
+	"service_host": [
+		"*"
+	],
 	"kernel_capabilities": [
 		{
 			"type": "kernel_flags",
@@ -24,6 +28,25 @@
 				"lowest_thread_priority": 24,
 				"lowest_cpu_id": 3,
 				"highest_cpu_id": 3
+			}
+		},
+		{
+			"comment": "opt-in: map Tegra display controllers as read-only IO for the mmio_map/mmio_read probes",
+			"type": "map",
+			"value": {
+				"address": "0x54200000",
+				"size": "0x40000",
+				"is_ro": true,
+				"is_io": true
+			}
+		},
+		{
+			"type": "map",
+			"value": {
+				"address": "0x54240000",
+				"size": "0x40000",
+				"is_ro": true,
+				"is_io": true
 			}
 		},
 		{
@@ -149,7 +172,10 @@
 		},
 		{
 			"type": "debug_flags",
-			"value": { "allow_debug": false, "force_debug": true }
+			"value": {
+				"allow_debug": false,
+				"force_debug": true
+			}
 		}
 	]
 }
