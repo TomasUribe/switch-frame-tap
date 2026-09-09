@@ -1,275 +1,96 @@
-# Track B status — read this first
+# applet-mitm — status & resume point
 
-Console: Mariko, **FW 22.5.0**, Atmosphère 1.11.2. Module TID `0100000000000C20`.
-Build: `bash tier4/applet-mitm/build.sh` (patches libstratosphere, builds in the
-`devkitpro/devkita64` container, copies the `.nsp` back).
-Test loop: replace `atmosphere/contents/0100000000000C20/exefs.nsp`, keep
-`flags/boot2.flag`, reboot, launch a game, read `sdmc:/applet-mitm.log` and
-`sdmc:/applet-mitm.last`.
+Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
+`0100000000000C20`.
 
-## Proven working (do not re-litigate)
+Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
-1. **M1** — a standalone libstratosphere mitm sysmodule loads and registers.
-2. **`vi:u` is mitm-able.** `appletOE` is NOT (one-session-only service;
-   even a fully transparent mitm breaks game launch). Don't go back to it.
-3. **Non-domain mitm sub-object wrapping works** — but only because of our
-   patch. See below. This is the core enabler and it is verified on hardware
-   (games run with a wrapped `IApplicationDisplayService`).
-4. **Manual forwarding works** on a wrapped sub-object
-   (`OpenDisplay` → `display_id=17`).
-5. **Auto-forwarding works** for undeclared commands on a wrapped sub-object
-   (step 2: empty interface, games ran fine).
+## Build & test loop
 
-## The libstratosphere patch (`tier4/applet-mitm/patch_libstrat.py`)
+```bash
+cd tier4/applet-mitm && bash build.sh          # applies patch_libstrat.py, builds in Docker
+```
+Then: copy `applet-mitm.nsp` → `atmosphere/contents/0100000000000C20/exefs.nsp`,
+keep `flags/boot2.flag`, reboot, launch a game, read
+`sdmc:/applet-mitm.log` and `sdmc:/applet-mitm.last` (the last-step breadcrumb).
 
-Upstream only wires a forward service to sub-objects returned from a mitm
-command on **domain** sessions. A game's `vi:u` session is **non-domain**, so
-`SetOutObjectImpl` used plain `RegisterSession` → the sub-session is not a mitm
-session → the first undeclared command hits
-`ForwardRequest()`'s `AMS_ABORT_UNLESS(this->IsMitmSession())` → `std::abort()`
-= the `0xffe` fatal.
+Recovery: boot holding **Volume Up**, or delete the folder from a PC. Nothing
+touches NAND.
 
-The patch adds a thread-local `ams::sf::impl::g_tier4_pending_mitm_forward`.
-A handler sets it right before `out.SetValue(...)`; the patched
-`SetOutObjectImpl` consumes it and calls `RegisterMitmSession` (with forward
-service) instead. Same thread, same dispatch call stack. Idempotent; applied by
-`build.sh` on every build. **Editing that header forces a full ~15 min
-libstratosphere rebuild** — expect it, and run the build in the background.
+## Verified on hardware (do not re-litigate)
 
-## Hard-won ABI rules (these cost us several console cycles)
+| | |
+|---|---|
+| mitm framework, standalone libstratosphere module | loads, registers |
+| `appletOE` | **not mitm-able** (one-session-only). Don't go back. |
+| `vi:u` | mitm-able; transparent mitm is invisible to games |
+| **libstratosphere patch** for non-domain sub-object forwarding | required, works — see WRITEUP §4 |
+| wrap `GetDisplayService` → `IApplicationDisplayService` → `GetRelayService` → `IHOSBinderDriver` | all working, game runs normally |
+| binder `TransactParcelAuto` (cmd 3) intercept | sees every frame, **60.0 fps** measured |
+| `NvGraphicBuffer` parse from `setPreallocatedBuffer` (code 14) input parcel | nvmap 1268, 3× 1920×1080 A8B8G8R8 BlockLinear, kind 0xFE, block_h_log2 4, offsets 0/0x870000/0x10E0000, pitch 7680, 8,847,360 B/slot |
+| hand-rolled `nvdrv:s` (force `__nx_nv_service_type = NvServiceType_System`) | `Initialize` + `Open(/dev/nvmap)` ok |
+| `NVMAP_IOC_FROM_ID(1268)` | handle ok, `PARAM(Size)` = 26,542,080 = 3× slot = full swapchain |
+| engine survey | `/dev/nvhost-vic`, `-msenc`, `-ctrl` **open**; `-gpu`/`-as-gpu`/`-ctrl-gpu` (0x30003) and `-nvdec`/`-nvjpg` (0x1000) denied — none needed |
+| own nvmap buffer: `CREATE` + `ALLOC(kind=Pitch, our cpu_addr)` + `GET_ID` + CPU read-back | works — this is the VIC destination |
+| games + homebrew unaffected | yes (probe must release the nvdrv session; it does) |
 
-- `AMS_SF_DEFINE_MITM_INTERFACE` must be at **global scope**, not inside a
-  namespace block — it expands its own `namespace`. Nesting it produces a wall
-  of template errors.
-- libstratosphere sorts raw args by **alignment ascending**
-  (`RawDataOffsetCalculator`). For `OpenLayer` that happens to match libnx's
-  wire struct, so ordering was never the bug.
-- **`sf::ClientProcessId` is `ArgumentType::InData`** — it consumes a `u64` of
-  raw data (the SDK's pid placeholder, cf. `fsp-srv SetCurrentProcess` =
-  "PID-descriptor **and an input u64**"). A command that has `send_pid` in the
-  HIPC header but **no** raw placeholder (like `vi OpenLayer`) therefore
-  **cannot be expressed** in libstratosphere. Declaring `ClientProcessId` makes
-  `InDataSize` 8 too big; omitting it leaves the dispatch rejecting the message.
-  **This is why `OpenLayer` is not declared and should stay undeclared.**
-- Declaring a command whose signature doesn't match causes a **dispatch-level
-  error return** (game fails, no crash), not an abort. An abort means something
-  else — read `.last`.
-- Only declare commands you actually intercept; everything else auto-forwards.
-- `TransactParcel` is **cmd 0 (MapAlias)** pre-3.0.0 and **cmd 3 (AutoSelect)**
-  on ≥ 3.0.0. We're on 22.5.0 → cmd 3.
+## Current module behaviour
 
-## M3 RESULT: we are on the frame pipeline ✅
+`applet_mitm_service.cpp` wraps the chain and logs binder transactions
+(rate-limited: first 3 per code + heartbeat every 600). On the first three
+`setPreallocatedBuffer` calls it parses the `NvGraphicBuffer`
+(`applet_mitm_gbuf.*`) and, once, runs the nvdrv probe (`applet_mitm_nv.*`):
+import the game's nvmap, survey engines, alloc our own buffer, release
+everything.
 
-Verified on hardware with Mario Kart 8 Deluxe (`0100152000022000`), game
-running normally:
+Everything after the probe is still **just logging + forward** — no frame is
+actually captured yet.
+
+## Next: drive the VIC (implementation, no open unknowns)
+
+The VIC reads block-linear and writes linear, converting format in hardware —
+exactly how nvnflinger consumes these buffers. Steps:
+
+1. `/dev/nvhost-ctrl`: allocate a syncpoint (`NVHOST_IOCTL_CTRL_SYNCPT_ALLOC` /
+   read via `..._SYNCPT_READ`).
+2. `/dev/nvhost-vic`: `NVHOST_IOCTL_CHANNEL_SET_NVMAP_FD`, then bind the channel
+   and map the source (imported nvmap 1268) and destination (our nvmap) into
+   the channel's address space.
+3. Build the VIC configuration struct — the big one. Describes:
+   - src surface: 1920×1080, A8B8G8R8, BlockLinear, kind 0xFE,
+     `block_height_log2 = 4`, pitch 7680, plane offset = the slot's
+     `offset` (0 / 0x870000 / 0x10E0000 depending on which slot `queueBuffer`
+     just handed over)
+   - dst surface: linear, our buffer, our pitch
+   - (optionally) scale/crop — VIC can downscale for free if 720p output wanted
+   **References: Ryujinx `src/Ryujinx.Graphics.Vic/` and yuzu
+   `src/video_core/host1x/vic.cpp` both implement this struct.** L4T kernel:
+   `drivers/video/tegra/host/vic/`.
+4. Submit a command buffer on the channel (`NVHOST_IOCTL_CHANNEL_SUBMIT`) that
+   loads the config and kicks the VIC, with a syncpoint increment. Wait it.
+5. Trigger from the `queueBuffer` (code 7) intercept. Its parcel carries the
+   **slot index** and a **fence** — parse both; wait the fence so the frame is
+   complete, pick the plane offset from the slot, blit.
+
+## Then: NVENC + transport
+
+- NVENC via `/dev/nvhost-msenc`: same channel-submit pattern. T210 == Jetson
+  TX1, so L4T's multimedia sources (`nvmpi`, `nvv4l2`) are the reference. Feed
+  it the linear buffer from the VIC.
+- Transport: SysDVR's USB/TCP protocol, or the low-latency FFmpeg+SDL2 receiver
+  already in `switch-stream/receiver/`.
+
+## Files
 
 ```
--> GetRelayService:wrapped
-*** binder txn #1  session=20  code=10(connect)   in=108
-*** binder txn #3  session=20  code=14(?)         in=476   x3   <- setPreallocatedBuffer
-*** binder txn #6  session=20  code=3(dequeueBuffer)
-*** binder txn #7  session=20  code=1(requestBuffer)
-*** binder txn #600  at 43.237s  queueBuffer x296
-*** binder txn #1200 at 48.237s  queueBuffer x596
+applet-mitm/
+  build.sh              rsync into ref/Atmosphere, apply patch, docker build, copy .nsp back
+  patch_libstrat.py     the non-domain mitm sub-object forwarding patch (idempotent)
+  applet-mitm.json      NPDM: service_host vi:u, service_access nvdrv:s + fsp-srv/lm/fatal:u
+  source/
+    applet_mitm_main.cpp     ServerManager, RegisterMitmServer("vi:u"), nv weak-global overrides
+    applet_mitm_service.*    the wrapper chain + binder intercept
+    applet_mitm_gbuf.*       NvGraphicBuffer / NvSurface layout + parser (offset static_asserts)
+    applet_mitm_nv.*         hand-rolled nvdrv: import, engine survey, own-buffer alloc
+    applet_mitm_log.*        SD logger + LogMark breadcrumb
 ```
-
-600 transactions in exactly 5.000 s; queueBuffer 296 -> 596 = **300 frames in
-5 s = 60.0 fps**. We observe every frame the game presents.
-
-The three `code=14` (`SET_PREALLOCATED_BUFFER`, Nintendo's extension) calls at
-startup are MK8 registering its triple-buffered swapchain. Each carries a
-flattened `NvGraphicBuffer` in its **input** parcel.
-
-## M3b RESULT: full frame descriptor decoded ✅
-
-The three `setPreallocatedBuffer` parcels decode (after the u64 `color_format`
-fix in M3c) to:
-
-```
-nvmap_id  = 1268                 <- ONE nvmap object holds the whole swapchain
-buffers   = 3, at offsets 0x000000, 0x870000, 0x10E0000  (0, 1x, 2x total_size)
-each      = 1920 x 1080, A8B8G8R8 (0x0100532120), format=1 (RGBA_8888)
-layout    = 3 (BlockLinear)
-kind      = 0xFE (Generic_16BX2)
-block_height_log2 = 4            (block height 16)
-size      = 8,847,360 B each     = 1920 x 1152 x 4 (height 1080 aligned to 1152)
-total_size= 8,847,360   stride = 1920 px   usage = 0xB00
-```
-
-**The game's swapchain is native 1920x1080** — vs SysDVR's 720p30 via `grc:d`.
-
-Gotcha that cost one run: libnx's `NvColorFormat` is a **64-bit** enum
-(`A8B8G8R8 = 0x0100532120`). Declaring it `u32` shifts every following
-`NvSurface` field by 4, which made `pitch`/`offset`/`kind`/`block_height_log2`
-read as garbage while `width`/`height`/`size` still looked right. Fixed, with
-offset static_asserts (`layout` @0x10, `offset` @0x1C, `kind` @0x20,
-`size` @0x38).
-
-**M3c CONFIRMED on hardware** — every field decodes cleanly
-(`pitch=7680 B` = 1920x4, offsets exactly 0 / 1x / 2x size,
-`layout=3(BlockLinear)`, `kind=0xfe(Generic_16BX2)`, `block_h_log2=4`,
-`scan=0(Progressive)`). See `applet_mitm_gbuf.{hpp,cpp}`. **M3 is done.**
-
-## M4b RESULT: we can open the game's framebuffer memory ✅
-
-```
-nv:1_smGetService      rc=0x0
-nv:2_tmemCreateFromMemory rc=0x0  handle=0xa0002
-nv:3_Initialize        rc=0x0
-nv:4_open_nvmap        rc=0x0  fd=23855104  nverr=0
-nv:5_FROM_ID(id=1268)  rc=0x0  nverr=0  -> handle=1268
-nv:6_PARAM(Size)       rc=0x0  nverr=0  -> 26542080 B (25 MB)
-```
-
-**26,542,080 = exactly 3 x 8,847,360** — the whole triple-buffered swapchain.
-nvmap ids ARE cross-process, and Phase 0's `nvInitialize()` fatal was entirely
-libnx's `appletGetAppletType()` service selection. `PARAM(Kind)` returns
-nverr=11; kind is not queryable on an imported handle and we already have it
-from the GraphicBuffer descriptor, so it does not matter.
-
-### Regression found and fixed
-Holding the nvdrv session + the imported nvmap handle open forever wedged
-homebrew apps. A probe must release them: M5 adds `serviceClose` + `tmemClose`
-after the survey. When we build the real capture loop we will hold them
-deliberately, scoped to a running game.
-
-## ACCESS LAYER COMPLETE (M5 + M6 verified on hardware)
-
-Everything needed to build a native-resolution capture pipeline is reachable,
-with games and homebrew unaffected:
-
-| capability | how | status |
-|---|---|---|
-| see every presented frame | binder `queueBuffer` via our mitm | ✅ 60 fps |
-| per-frame memory layout | `NvGraphicBuffer` from `setPreallocatedBuffer` | ✅ |
-| open the game's framebuffers | nvmap `FROM_ID(1268)` -> 25 MB | ✅ |
-| block-linear -> linear, in HW | `/dev/nvhost-vic` | ✅ fd ok |
-| H.264 encode, in HW | `/dev/nvhost-msenc` (NVENC) | ✅ fd ok |
-| fencing / completion | `/dev/nvhost-ctrl` (host1x syncpoints) | ✅ fd ok |
-| CPU-readable destination | nvmap `CREATE`+`ALLOC(kind=Pitch, our cpu_addr)`+`GET_ID`, verified by read-back | ✅ |
-
-Denied: `/dev/nvhost-gpu`, `-as-gpu`, `-ctrl-gpu` (0x30003) and `-nvdec`,
-`-nvjpg` (0x1000). **None are needed** — VIC converts, NVENC encodes, host1x
-fences. The pipeline is GPU-free.
-
-Key asymmetry to remember: an **imported** nvmap handle has no CPU mapping
-(Switch nvmap has no MMAP ioctl), but an object **we create** is backed by our
-own pages and is directly readable. Hence: VIC blits game buffer -> our buffer.
-
-### Next: drive the VIC (this is implementation, not discovery)
-
-1. `/dev/nvhost-ctrl`: allocate a syncpoint.
-2. `/dev/nvhost-vic`: `SET_NVMAP_FD`, then map the source (imported handle) and
-   destination (our handle) into the channel via `MAP_CMD_BUFFER`.
-3. Build a VIC config struct describing src (1920x1080, A8B8G8R8, BlockLinear,
-   kind 0xFE, `block_height_log2=4`, pitch 7680, plus the slot's `offset`
-   0 / 0x870000 / 0x10E0000) and dst (linear, our buffer).
-   Good references: **Ryujinx and yuzu both implement the VIC config struct**
-   for video decode; L4T `drivers/video/tegra/host/vic/` is the kernel side.
-4. Submit a command buffer on the channel (`NVHOST_IOCTL_CHANNEL_SUBMIT`) with
-   the syncpoint increment, then wait it.
-5. Trigger per frame from the `queueBuffer` intercept (its parcel carries the
-   slot index and a fence — wait that first so the frame is complete).
-6. Feed the linear result to NVENC (same channel-submit pattern; T210 = Jetson
-   TX1, so L4T's multimedia sources are the reference), then out over SysDVR's
-   USB/TCP or `switch-stream/receiver/`.
-
-## Superseded: M5 engine survey design
-
-With a working nvdrv session, `Open` each `/dev/nvhost-*`. The one that matters
-is **`/dev/nvhost-vic`** — the VIC reads a block-linear surface and writes a
-linear one, doing the de-swizzle *and* format conversion in hardware, which is
-exactly how nvnflinger consumes these buffers. `/dev/nvhost-msenc` is NVENC for
-the encode stage.
-
-## Superseded: M4 first attempt
-
-`nvmap_id` is a **cross-process** id — it has to be, because nvnflinger runs in
-a different process and receives this same parcel in order to composite the
-buffer. So `NVMAP_IOC_FROM_ID` on our own nvdrv session should reach the same
-memory. That is exactly how nvnflinger consumes it.
-
-Phase 0 saw a plain sysmodule fatal inside libnx's `nvInitialize()`. Cause:
-`_nvInitialize()` calls `appletGetAppletType()` to choose a service, which is
-meaningless in our context. Fix: override the weak global
-`__nx_nv_service_type = NvServiceType_System` (forces `"nvdrv:s"`, never touches
-applet) and `__nx_nv_transfermem_size = 0x40000` (libnx's 3 MB default would not
-fit our allocator; our ioctls are tiny). **Also had to add `nvdrv:s` to
-`service_access` in applet-mitm.json** — it was not there.
-
-One-shot probe, breadcrumbed at each step: `nvInitialize` -> `nvMapInit` ->
-`nvMapLoadRemote(id)` -> log handle/size. Expected size if it works:
-3 x 8,847,360 = 26,542,080 B (~25 MB) for the whole swapchain.
-
-### After M4 — reading the pixels (the real remaining work)
-
-Getting an nvmap *handle* is not the same as getting a CPU pointer. On the
-Switch, nvmap has no MMAP ioctl: the creating process allocates the backing
-memory itself and nvmap just tracks it. A foreign object's pages are not
-CPU-mapped into us. So expect to need one of:
-
-- **VIC (Video Image Compositor)** via `/dev/nvhost-vic` — purpose-built to read
-  a block-linear surface and write a linear one. This is what nvnflinger uses,
-  and it does the de-swizzle **and** format conversion for free. Best option.
-- **GPU blit** via `/dev/nvhost-gpu` + a channel (deko3d/NVN-style) — more setup.
-- CPU de-swizzle, which still requires the pages mapped somehow.
-
-Phase 0 recon's `probe_nv` can tell us which `/dev/nvhost-*` nodes we can open
-now that we have a working nvdrv session — worth re-running that list from
-inside this module.
-
-Block-linear parameters we already have: GOB is 64x8 bytes,
-`block_height_log2 = 4` (16 GOBs tall), `kind = 0xFE` (Generic_16BX2),
-`pitch = 7680`, surface 1920x1080 stored as 1920x1152.
-Layout pinned with static_asserts: `sizeof(NvGraphicBuffer) == 0x150`,
-`nvmap_id` @0x10, `magic`(0xDAFFCAFF) @0x18, `planes` @0x40,
-`sizeof(NvSurface) == 0x58`. We scan the parcel for the magic and dump
-nvmap_id, stride, format, and per-plane width/height/pitch/offset/size/kind/
-block_height_log2.
-
-## Previous section: M3 design
-
-Dropped `OpenLayer` (its only purpose was `aruid` + `layer_id`, and it's the one
-thing that broke games). Went straight for the frame pipeline instead:
-
-```
-vi:u.GetDisplayService(0)      -> wrap IApplicationDisplayService
-  .OpenDisplay(1010)           -> manual forward, logs display_id (liveness)
-  .GetRelayService(100)        -> wrap IHOSBinderDriver
-    .TransactParcelAuto(3)     -> LOG every IGraphicBufferProducer transaction
-```
-
-Every frame the game presents crosses the binder as `dequeueBuffer`(3) /
-`queueBuffer`(7); `requestBuffer`(1) replies carry the GraphicBuffer descriptor
-(nvmap handle, stride, format) — the actual pixel data path. `TransactParcelAuto`
-has **no pid descriptor**, which sidesteps the `OpenLayer` blocker entirely.
-
-Logging is rate-limited (first 3 of each code + a heartbeat every 600) because
-`queueBuffer` runs at up to 60 Hz and one open/append/close per line would
-hammer the SD card.
-
-### Reading the M3 result
-
-| Log | Meaning | Next |
-|---|---|---|
-| `*** binder txn … code=7(queueBuffer)` repeating | **We are on the frame pipeline.** Milestone. | Manual-forward `TransactParcelAuto` so we can read the *reply* parcel, then parse `requestBuffer` replies for the GraphicBuffer (nvmap handle/stride/format) |
-| `GetRelayService:wrapped` but no txns | binder obtained but cmd 3 signature wrong | try declaring cmd 0 as well (MapAlias buffers) |
-| `GetRelayService:forward_FAILED rc=…` | the `serviceDispatch(…,100,…)` forward was rejected | check cmd number / out-object handling |
-| game fails, `.last` = `GetRelayService:enter` | wrapping the binder breaks the game | fall back to log-only via auto-forward |
-
-## After M3 — the remaining road
-
-1. Parse `requestBuffer` reply parcels → GraphicBuffer → nvmap handle, stride,
-   format, and the buffer's dimensions.
-2. Import that nvmap handle read-only in our process, wait the fence from
-   `queueBuffer`, and copy/detile the frame (Tegra block-linear, 16Bx2 sectors).
-3. Encode. Bring-up: software or MJPEG. Target: Tegra NVENC (T210 = Jetson TX1,
-   so L4T's multimedia sources are the reference).
-4. Transport: reuse SysDVR's USB/TCP or `switch-stream/receiver/` in this repo.
-
-## Recovery, always
-
-Boot holding **Volume Up** (skips `contents` sysmodules), or pull the SD and
-delete `atmosphere/contents/0100000000000C20/`. A fatal writes a fresh file to
-`atmosphere/fatal_errors/`. The console is never at real risk — see the earlier
-risk analysis; user has a NAND backup.

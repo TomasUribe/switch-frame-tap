@@ -1,3 +1,5 @@
+> **HISTORICAL** — Phase 0 recon findings (what a plain sysmodule can/cannot reach). Still accurate; the mitm work in [mitm/WRITEUP.md](mitm/WRITEUP.md) builds on it.
+
 # Phase 0 findings — live
 
 Console: **Mariko**, firmware **22.5.0**, Atmosphère **1.11.2-master-5388824be**.

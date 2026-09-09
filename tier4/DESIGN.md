@@ -1,3 +1,5 @@
+> **HISTORICAL** — research-phase working notes. Superseded by [mitm/WRITEUP.md](mitm/WRITEUP.md) + [mitm/STATUS.md](mitm/STATUS.md). Kept for the trail.
+
 # Tier 4 — native-resolution, all-layers, high-framerate Switch capture
 
 Working doc. Fork base: **SysDVR** (cloned at `ref/SysDVR/`). Reference wikitext at
