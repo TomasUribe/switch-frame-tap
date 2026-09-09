@@ -3,44 +3,59 @@
 #include <switch.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <string.h>
 
-#define LOG_PATH "sdmc:/tier4-recon.log"
+#define LOG_PATH  "sdmc:/tier4-recon.log"
+#define LAST_PATH "sdmc:/tier4-recon.last"
 
-static FILE *g_f;
-static char  g_buf[1024];
+static char g_buf[1024];
 
 void log_init(void)
 {
-    g_f = fopen(LOG_PATH, "ab");
-    rlog(" ");
+    /* fresh file each boot so the log is always current and self-contained */
+    FILE *f = fopen(LOG_PATH, "wb");
+    if (f) fclose(f);
+    f = fopen(LAST_PATH, "wb");
+    if (f) { fputs("log_init\n", f); fclose(f); }
+
     rlog("============================================================");
+    rlog("tier4 recon log (fresh this boot)");
 }
 
-void log_exit(void)
-{
-    if (g_f) { fflush(g_f); fclose(g_f); g_f = NULL; }
-}
+void log_exit(void) { }
 
 void rlog(const char *fmt, ...)
 {
-    u64 t = armGetSystemTick();
-    u64 ms = armTicksToNs(t) / 1000000ULL;
+    u64 ms = armTicksToNs(armGetSystemTick()) / 1000000ULL;
 
     int n = snprintf(g_buf, sizeof(g_buf), "[%6llu.%03llu] ",
                      (unsigned long long)(ms / 1000), (unsigned long long)(ms % 1000));
 
     va_list ap;
     va_start(ap, fmt);
-    n += vsnprintf(g_buf + n, sizeof(g_buf) - n - 2, fmt, ap);
+    int m = vsnprintf(g_buf + n, sizeof(g_buf) - n - 2, fmt, ap);
     va_end(ap);
-    if (n < 0) return;
+    if (m > 0) n += m;
     if ((unsigned)n > sizeof(g_buf) - 2) n = sizeof(g_buf) - 2;
     g_buf[n++] = '\n';
     g_buf[n] = 0;
 
     svcOutputDebugString(g_buf, n);
-    if (g_f) { fwrite(g_buf, 1, n, g_f); fflush(g_f); }
+
+    /* Open-append-close on every line. The FAT directory entry is committed on
+     * fclose, so a hard fatal immediately after a line still leaves it on the
+     * card. Slow, but this is a diagnostic that writes only tens of lines. */
+    FILE *f = fopen(LOG_PATH, "ab");
+    if (f) { fwrite(g_buf, 1, n, f); fclose(f); }
+}
+
+/* Write a single-line breadcrumb to sdmc:/tier4-recon.last (truncated each
+ * time) naming the probe about to run. Survives even if the main log's tail
+ * is lost to FAT damage on a hard fatal. */
+void log_mark(const char *what)
+{
+    FILE *f = fopen(LAST_PATH, "wb");
+    if (f) { fputs(what, f); fputc('\n', f); fclose(f); }
+    rlog("-> %s", what);
 }
 
 void log_hex(const char *label, const void *p, unsigned len)

@@ -28,7 +28,7 @@ static unsigned nonzero(const void *p, unsigned n)
 
 static void probe_sys(void)
 {
-    rlog("-> sys");
+    log_mark("sys");
     SetSysFirmwareVersion fw;
     if (R_SUCCEEDED(setsysGetFirmwareVersion(&fw)))
         rlog("   fw %u.%u.%u \"%s\" (%s)", fw.major, fw.minor, fw.micro,
@@ -46,7 +46,7 @@ static void probe_sys(void)
 
 static void probe_psm(void)
 {
-    rlog("-> psm");
+    log_mark("psm");
     PsmChargerType ct = 0; u32 pct = 0;
     Result r1 = psmGetChargerType(&ct);
     Result r2 = psmGetBatteryChargePercentage(&pct);
@@ -59,7 +59,7 @@ static void probe_psm(void)
 
 static void probe_apm(void)
 {
-    rlog("-> apm");
+    log_mark("apm");
     if (R_SUCCEEDED(apmInitialize())) {
         ApmPerformanceMode pm = ApmPerformanceMode_Invalid;
         Result rc = apmGetPerformanceMode(&pm);
@@ -75,7 +75,7 @@ static void probe_apm(void)
 
 static void probe_nv(u32 flags)
 {
-    rlog("-> nv");
+    log_mark("nv");
     if (R_FAILED(nvInitialize())) { rlog("   nvInitialize failed"); rlog("<- nv"); return; }
 
     static const char *safe[] = {
@@ -110,7 +110,7 @@ static const char *g_stackn[] = { "Recording", "Default(all)", "Screenshot" };
 
 static void probe_caps_jpeg(void)
 {
-    rlog("-> caps_jpeg (libnx wrapper)");
+    log_mark("caps_jpeg (libnx wrapper)");
     if (R_FAILED(capsscInitialize())) { rlog("   capsscInitialize failed"); rlog("<- caps_jpeg"); return; }
 
     for (int si = 0; si < 3; si++) {
@@ -129,7 +129,7 @@ static void probe_caps_jpeg(void)
 /* hand-rolled caps:sc cmd 2 (CaptureRawImageRgba32IntoArrayWithTimeout) - guess */
 static void probe_caps_raw(void)
 {
-    rlog("-> caps_raw (hand-rolled cmd 2, EXPERIMENTAL)");
+    log_mark("caps_raw (hand-rolled cmd 2, EXPERIMENTAL)");
     Service s;
     Result rc = smGetService(&s, "caps:sc");
     if (R_FAILED(rc)) { rlog("   smGetService(caps:sc) rc=0x%x", rc); rlog("<- caps_raw"); return; }
@@ -158,7 +158,7 @@ static void probe_caps_raw(void)
 /* hand-rolled caps:sc cmd 1201/1203/1202 (raw screenshot read stream) - guess */
 static void probe_caps_stream(void)
 {
-    rlog("-> caps_stream (hand-rolled cmd 1201/1203, EXPERIMENTAL)");
+    log_mark("caps_stream (hand-rolled cmd 1201/1203, EXPERIMENTAL)");
     Service s;
     if (R_FAILED(smGetService(&s, "caps:sc"))) { rlog("   smGetService failed"); rlog("<- caps_stream"); return; }
 
@@ -207,7 +207,7 @@ static void dc_probe(const char *name, u64 phys, u32 flags)
 
 static void probe_mmio(u32 flags)
 {
-    rlog("-> mmio");
+    log_mark("mmio");
     dc_probe("DC0", 0x54200000ULL, flags);
     dc_probe("DC1", 0x54240000ULL, flags);
     rlog("<- mmio");
