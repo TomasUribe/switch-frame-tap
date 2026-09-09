@@ -133,7 +133,48 @@ homebrew apps. A probe must release them: M5 adds `serviceClose` + `tmemClose`
 after the survey. When we build the real capture loop we will hold them
 deliberately, scoped to a running game.
 
-## M5 (built, awaiting result): which engines can we reach?
+## ACCESS LAYER COMPLETE (M5 + M6 verified on hardware)
+
+Everything needed to build a native-resolution capture pipeline is reachable,
+with games and homebrew unaffected:
+
+| capability | how | status |
+|---|---|---|
+| see every presented frame | binder `queueBuffer` via our mitm | ✅ 60 fps |
+| per-frame memory layout | `NvGraphicBuffer` from `setPreallocatedBuffer` | ✅ |
+| open the game's framebuffers | nvmap `FROM_ID(1268)` -> 25 MB | ✅ |
+| block-linear -> linear, in HW | `/dev/nvhost-vic` | ✅ fd ok |
+| H.264 encode, in HW | `/dev/nvhost-msenc` (NVENC) | ✅ fd ok |
+| fencing / completion | `/dev/nvhost-ctrl` (host1x syncpoints) | ✅ fd ok |
+| CPU-readable destination | nvmap `CREATE`+`ALLOC(kind=Pitch, our cpu_addr)`+`GET_ID`, verified by read-back | ✅ |
+
+Denied: `/dev/nvhost-gpu`, `-as-gpu`, `-ctrl-gpu` (0x30003) and `-nvdec`,
+`-nvjpg` (0x1000). **None are needed** — VIC converts, NVENC encodes, host1x
+fences. The pipeline is GPU-free.
+
+Key asymmetry to remember: an **imported** nvmap handle has no CPU mapping
+(Switch nvmap has no MMAP ioctl), but an object **we create** is backed by our
+own pages and is directly readable. Hence: VIC blits game buffer -> our buffer.
+
+### Next: drive the VIC (this is implementation, not discovery)
+
+1. `/dev/nvhost-ctrl`: allocate a syncpoint.
+2. `/dev/nvhost-vic`: `SET_NVMAP_FD`, then map the source (imported handle) and
+   destination (our handle) into the channel via `MAP_CMD_BUFFER`.
+3. Build a VIC config struct describing src (1920x1080, A8B8G8R8, BlockLinear,
+   kind 0xFE, `block_height_log2=4`, pitch 7680, plus the slot's `offset`
+   0 / 0x870000 / 0x10E0000) and dst (linear, our buffer).
+   Good references: **Ryujinx and yuzu both implement the VIC config struct**
+   for video decode; L4T `drivers/video/tegra/host/vic/` is the kernel side.
+4. Submit a command buffer on the channel (`NVHOST_IOCTL_CHANNEL_SUBMIT`) with
+   the syncpoint increment, then wait it.
+5. Trigger per frame from the `queueBuffer` intercept (its parcel carries the
+   slot index and a fence — wait that first so the frame is complete).
+6. Feed the linear result to NVENC (same channel-submit pattern; T210 = Jetson
+   TX1, so L4T's multimedia sources are the reference), then out over SysDVR's
+   USB/TCP or `switch-stream/receiver/`.
+
+## Superseded: M5 engine survey design
 
 With a working nvdrv session, `Open` each `/dev/nvhost-*`. The one that matters
 is **`/dev/nvhost-vic`** — the VIC reads a block-linear surface and writes a
