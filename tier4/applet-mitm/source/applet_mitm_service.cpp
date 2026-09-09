@@ -15,6 +15,8 @@ namespace ams::mitm::applet {
          * only a periodic heartbeat. */
         constinit std::atomic<u32> g_txn_total{0};
         constinit std::atomic<u32> g_txn_per_code[16] = {};
+        /* the VIC blit fires exactly once, ever - never per-frame */
+        constinit std::atomic<bool> g_blit_attempted{false};
 
         const char *TxnName(u32 code) {
             switch (code) {
@@ -75,19 +77,22 @@ namespace ams::mitm::applet {
          * few hundred frames (real content on screen), run the one-shot VIC
          * blit against that slot. */
         if (code == 7 && total > 300 && g_game_surface.armed) {
-            s32 qslot = 0;
-            const auto *p = static_cast<const u8 *>(parcel_in.GetPointer());
-            const size_t psz = parcel_in.GetSize();
-            if (p != nullptr && psz >= 24) {
-                u32 data_off = 0;
-                std::memcpy(std::addressof(data_off), p + 4, sizeof(data_off));
-                if (data_off + 4 <= psz) {
-                    std::memcpy(std::addressof(qslot), p + data_off, sizeof(qslot));
+            bool ex = false;
+            if (g_blit_attempted.compare_exchange_strong(ex, true)) {
+                s32 qslot = 0;
+                const auto *p = static_cast<const u8 *>(parcel_in.GetPointer());
+                const size_t psz = parcel_in.GetSize();
+                if (p != nullptr && psz >= 24) {
+                    u32 data_off = 0;
+                    std::memcpy(std::addressof(data_off), p + 4, sizeof(data_off));
+                    if (data_off + 4 <= psz) {
+                        std::memcpy(std::addressof(qslot), p + data_off, sizeof(qslot));
+                    }
                 }
+                LogMark("binder:vic_blit_trigger");
+                LogLine("   queueBuffer txn#%u parcel=%zu slot=%d", total, psz, qslot);
+                TryVicBlit(qslot);
             }
-            LogMark("binder:vic_blit_trigger");
-            LogLine("   queueBuffer txn#%u parcel=%zu slot=%d", total, psz, qslot);
-            TryVicBlit(qslot);
         }
 
         R_RETURN(sm::mitm::ResultShouldForwardToSession());

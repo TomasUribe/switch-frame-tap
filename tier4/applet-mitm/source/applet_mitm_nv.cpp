@@ -49,17 +49,24 @@ namespace ams::mitm::applet {
         alignas(0x1000) constinit u8 g_own_buf[0x10000]     = {};
 
         /* VIC blit buffers (all page-aligned, all nvmap-CREATE'd against our
-         * own pages so the CPU can touch config/cmdbuf and read back dst). */
-        alignas(0x1000) constinit u8 g_vic_cfg_buf[0x4000]  = {};   /* VicConfigStruct (1552 B) */
-        alignas(0x1000) constinit u8 g_vic_cmd_buf[0x1000]  = {};   /* host1x pushbuf           */
-        alignas(0x1000) constinit u8 g_vic_dst_buf[0x40000] = {};   /* linear output           */
+         * own pages so the CPU can touch config/cmdbuf and read back dst).
+         * Kept small: an earlier build's ~280 KB of extra .bss coincided with
+         * the module going dark after registration. */
+        alignas(0x1000) constinit u8 g_vic_cfg_buf[0x4000] = {};   /* VicConfigStruct (1552 B) */
+        alignas(0x1000) constinit u8 g_vic_cmd_buf[0x1000] = {};   /* host1x pushbuf           */
+        alignas(0x1000) constinit u8 g_vic_dst_buf[0x8000] = {};   /* linear output           */
 
-        /* First test: a scale-free 320x180 crop of the frame's top-left. */
-        constexpr u32 DstW        = 320;
-        constexpr u32 DstH        = 180;
-        constexpr u32 DstStridePx = 320;                 /* 64B aligned: 1280 B */
+        /* Phase A: prove the CHANNEL_SUBMIT ABI + syncpoint path with a no-op
+         * cmdbuf (SET_APPLICATION_ID only, no relocs, no EXECUTE) - this cannot
+         * fault the VIC engine. Flip to true once Phase A comes back clean. */
+        constexpr bool kVicDoExecute = false;
+
+        /* Phase B geometry: a scale-free 64x64 crop of the frame's top-left. */
+        constexpr u32 DstW        = 64;
+        constexpr u32 DstH        = 64;
+        constexpr u32 DstStridePx = 64;                  /* 256 B pitch */
         constexpr u32 DstPitch    = DstStridePx * 4;
-        constexpr u32 DstSize     = DstPitch * DstH;     /* 230400 */
+        constexpr u32 DstSize     = DstPitch * DstH;     /* 16384 */
         static_assert(DstSize <= sizeof(g_vic_dst_buf));
 
         constinit ::Service        g_nv_srv  = {};
@@ -199,10 +206,11 @@ namespace ams::mitm::applet {
          * Each entry: [INCR(0x10,2)] [method>>2] [value|reloc-placeholder]. */
         constexpr u32 Host1xIncr0x10x2 = (UINT32_C(1) << 28) | (0x10u << 16) | 2u;
 
-        u32 BuildCmdbuf(u32 *w) {
+        u32 BuildCmdbuf(u32 *w, bool full) {
             u32 n = 0;
             /* SET_APPLICATION_ID = 1 */
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_APPLICATION_ID >> 2; w[n++] = 1;
+            if (!full) { return n; }   /* Phase A: no-op cmdbuf, just exercise SUBMIT */
             /* SET_CONTROL_PARAMS = (sizeof(cfg)/16) << 16 */
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_CONTROL_PARAMS >> 2;
             w[n++] = (static_cast<u32>(sizeof(vic::VicConfigStruct) / 16)) << 16;
@@ -297,6 +305,7 @@ namespace ams::mitm::applet {
         rc = NvmapOwn(nvmap_fd, g_vic_dst_buf, sizeof(g_vic_dst_buf), 0, std::addressof(dst_handle), std::addressof(dst_id));
         if (R_FAILED(rc)) { LogMark("vb:6_dst_FAILED"); goto close_sess; }
         AMS_UNUSED(cfg_id, cmd_id, dst_id);
+        AMS_UNUSED(cfg_handle, dst_handle, src_handle, src_off);   /* Phase A: relocs disabled */
 
         u32 vfd, syncpt;
         LogMark("vb:7_open_vic");
@@ -328,8 +337,8 @@ namespace ams::mitm::applet {
 
         u32 words;
         LogMark("vb:10_build_cmdbuf");
-        words = BuildCmdbuf(reinterpret_cast<u32 *>(g_vic_cmd_buf));
-        LogLine("   cmdbuf words=%u  src_off=0x%x slot=%u", words, src_off, sidx);
+        words = BuildCmdbuf(reinterpret_cast<u32 *>(g_vic_cmd_buf), kVicDoExecute);
+        LogLine("   cmdbuf words=%u  execute=%d  src_off=0x%x slot=%u", words, (int)kVicDoExecute, src_off, sidx);
 
         /* pre-blit dst state */
         {
@@ -341,40 +350,38 @@ namespace ams::mitm::applet {
         u32 fence_val;
         LogMark("vb:11_SUBMIT");
         {
-            struct Cmdbuf   { u32 mem, offset, words; };
-            struct Reloc    { u32 cmdbuf_mem, cmdbuf_offset, target, target_offset; };
-            struct RelShift { u32 shift; };
-            struct SyncIncr { u32 syncpt_id, syncpt_incrs, rsvd0, rsvd1, rsvd2; };
-            struct SubmitArgs {
-                u32 num_cmdbufs, num_relocs, num_syncpt_incrs, num_fences;
-                Cmdbuf   cmdbufs[1];
-                Reloc    relocs[3];
-                RelShift reloc_shifts[3];
-                SyncIncr syncpt_incrs[1];
-                u32      fence_thresholds[1];
-            } args = {};
-            static_assert(sizeof(SubmitArgs) == 112);
+            /* Flat, exactly-sized submit arg (the ioctl request code encodes
+             * the total size, so it must match the payload byte-for-byte):
+             *   u32 num_cmdbufs, num_relocs, num_syncpt_incrs, num_fences
+             *   cmdbuf[1]        {mem, offset, words}
+             *   reloc[nr]        {cmdbuf_mem, cmdbuf_offset, target, target_offset}
+             *   reloc_shift[nr]  {shift}
+             *   syncpt_incr[1]   {id, incrs, rsvd[3]}
+             *   u32 fence_threshold[1]  (out)
+             */
+            const u32 nr = kVicDoExecute ? 3u : 0u;
+            alignas(8) u8 sb[16 + 12 + 3 * (16 + 4) + 20 + 4] = {};
+            u32 off = 0;
+            auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
 
-            args.num_cmdbufs      = 1;
-            args.num_relocs       = 3;
-            args.num_syncpt_incrs = 1;
-            args.num_fences       = 1;
-            args.cmdbufs[0]       = { cmd_handle, 0, words };
-            /* placeholder word byte-offsets in the cmdbuf: 8*4, 11*4, 14*4 */
-            args.relocs[0]        = { cmd_handle, 8  * 4, cfg_handle, 0 };
-            args.relocs[1]        = { cmd_handle, 11 * 4, dst_handle, 0 };
-            args.relocs[2]        = { cmd_handle, 14 * 4, src_handle, src_off };
-            args.reloc_shifts[0]  = { 8 };
-            args.reloc_shifts[1]  = { 8 };
-            args.reloc_shifts[2]  = { 8 };
-            args.syncpt_incrs[0]  = { syncpt, 1, 0, 0, 0 };
+            put(1); put(nr); put(1); put(1);
+            put(cmd_handle); put(0); put(words);                          /* cmdbufs[0] */
+            if (kVicDoExecute) {
+                put(cmd_handle); put(8  * 4); put(cfg_handle); put(0);        /* reloc cfg */
+                put(cmd_handle); put(11 * 4); put(dst_handle); put(0);        /* reloc dst */
+                put(cmd_handle); put(14 * 4); put(src_handle); put(src_off);  /* reloc src */
+                put(8); put(8); put(8);                                        /* reloc_shifts */
+            }
+            put(syncpt); put(1); put(0); put(0); put(0);                  /* syncpt_incrs[0] */
+            const u32 fence_off = off; put(0);                           /* fence_threshold (out) */
+            const u32 sz = off;
 
-            const u32 req = (UINT32_C(3) << 30) | (static_cast<u32>(sizeof(args)) << 16) | (0x00u << 8) | 0x01u;
+            const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
             nverr = 0;
-            rc = NvIoctl(vfd, req, std::addressof(args), sizeof(args), std::addressof(nverr));
-            fence_val = args.fence_thresholds[0];
-            LogLine("   SUBMIT req=0x%08x rc=0x%x nverr=%u -> fence(syncpt=%u,val=%u)",
-                    req, rc, nverr, syncpt, fence_val);
+            rc = NvIoctl(vfd, req, sb, sz, std::addressof(nverr));
+            std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
+            LogLine("   SUBMIT req=0x%08x sz=%u nr=%u rc=0x%x nverr=%u -> fence(syncpt=%u,val=%u)",
+                    req, sz, nr, rc, nverr, syncpt, fence_val);
             if (R_FAILED(rc) || nverr != 0) { LogMark("vb:11_SUBMIT_FAILED"); goto close_vic; }
         }
 
@@ -383,7 +390,7 @@ namespace ams::mitm::applet {
             u32 cfd, ce;
             rc = NvOpen("/dev/nvhost-ctrl", std::addressof(cfd), std::addressof(ce));
             if (R_SUCCEEDED(rc) && ce == 0) {
-                struct { u32 id; u32 thresh; u32 timeout; } a = { syncpt, fence_val, 300 };
+                struct { u32 id; u32 thresh; u32 timeout; } a = { syncpt, fence_val, 100 };
                 nverr = 0;
                 rc = NvIoctl(cfd, NvHostIocCtrlSyncptWait, std::addressof(a), sizeof(a), std::addressof(nverr));
                 LogLine("   SYNCPT_WAIT(id=%u thr=%u) rc=0x%x nverr=%u", syncpt, fence_val, rc, nverr);
