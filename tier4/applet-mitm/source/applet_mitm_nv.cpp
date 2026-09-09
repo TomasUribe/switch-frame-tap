@@ -41,6 +41,7 @@ namespace ams::mitm::applet {
     constinit bool g_vic_armed   = false;
     constinit bool g_vic_execute = false;
     constinit std::atomic<const char *> g_vic_stage{"idle"};
+    constinit u64 g_game_aruid = 0;
 
     namespace {
 
@@ -626,14 +627,43 @@ namespace ams::mitm::applet {
         }
 
         u32 nvmap_fd, nverr;
+
+        /* --- aruid discovery on a THROWAWAY fd ----------------------------
+         * M21 found the owner (aruid 142) and adopted it successfully, yet the
+         * pin still returned 0 - because we adopted it *after* opening
+         * /dev/nvmap. libnx sets the aruid during Initialize, before opening
+         * any device node, so an fd evidently captures the client identity at
+         * open time. Discover on a scratch fd, close it, adopt, and only then
+         * open the fd we actually use. */
+        {
+            VicStage("vb:4a_discover_aruid");
+            u32 tfd = 0, terr = 0;
+            if (R_SUCCEEDED(NvOpen("/dev/nvmap", std::addressof(tfd), std::addressof(terr))) && terr == 0) {
+                struct { u32 id; u32 handle; } a = { g_game_surface.nvmap_id, 0 };
+                u32 e = 0;
+                if (R_SUCCEEDED(NvIoctl(tfd, NvmapIocFromId, std::addressof(a), sizeof(a), std::addressof(e))) && e == 0) {
+                    for (u64 v = 1; v <= 256 && g_game_aruid == 0; v++) {
+                        if (NvIsOwnedByAruid(tfd, v, a.handle)) { g_game_aruid = v; }
+                    }
+                }
+                NvClose(tfd);
+            }
+            LogLine("   discovered game aruid = %llu (on a throwaway fd, now closed)",
+                    static_cast<unsigned long long>(g_game_aruid));
+
+            if (g_game_aruid != 0) {
+                u32 aerr = 0;
+                const ::Result ar = NvSetAruidWithoutCheck(g_game_aruid, std::addressof(aerr));
+                LogLine("   SetAruidWithoutCheck(%llu) BEFORE any real Open: rc=0x%x err=%u",
+                        static_cast<unsigned long long>(g_game_aruid), ar, aerr);
+            }
+        }
+
         VicStage("vb:4_open_nvmap");
         rc = NvOpen("/dev/nvmap", std::addressof(nvmap_fd), std::addressof(nverr));
         LogLine("   /dev/nvmap rc=0x%x fd=%u nverr=%u", rc, nvmap_fd, nverr);
         if (R_FAILED(rc) || nverr != 0) { VicStage("vb:4_FAILED"); goto close_sess; }
 
-        u32 src_handle;
-        /* Cheap proof of which mask we actually got: bit 0 (Gpu) is clear for
-         * nvdrv:s and set for nvdrv:t, so this open flips with the service. */
         {
             u32 gfd = 0, gerr = 0;
             const ::Result gr = NvOpen("/dev/nvhost-gpu", std::addressof(gfd), std::addressof(gerr));
@@ -643,43 +673,16 @@ namespace ams::mitm::applet {
             if (R_SUCCEEDED(gr) && gerr == 0) { NvClose(gfd); }
         }
 
+        u32 src_handle;
         VicStage("vb:5_FROM_ID");
         {
             struct { u32 id; u32 handle; } a = { g_game_surface.nvmap_id, 0 };
             rc = NvIoctl(nvmap_fd, NvmapIocFromId, std::addressof(a), sizeof(a), std::addressof(nverr));
-            LogLine("   FROM_ID(%u) rc=0x%x nverr=%u -> handle=%u", g_game_surface.nvmap_id, rc, nverr, a.handle);
+            LogLine("   FROM_ID(%u) under aruid %llu rc=0x%x nverr=%u -> handle=%u",
+                    g_game_surface.nvmap_id, static_cast<unsigned long long>(g_game_aruid),
+                    rc, nverr, a.handle);
             if (R_FAILED(rc) || nverr != 0) { VicStage("vb:5_FAILED"); goto close_sess; }
             src_handle = a.handle;
-        }
-
-        /* --- find the game's aruid, adopt it, and re-import ---------------
-         * am hands out AppletResourceUserIds sequentially from boot, so the
-         * running application's is a small number. IS_OWNED_BY_ARUID is a pure
-         * query, so sweeping a range costs nothing and risks nothing. */
-        {
-            VicStage("vb:5b_aruid_hunt");
-            u64 found = 0;
-            for (u64 a = 1; a <= 256 && found == 0; a++) {
-                if (NvIsOwnedByAruid(nvmap_fd, a, src_handle)) { found = a; }
-            }
-            if (found == 0) {
-                LogLine("   aruid sweep 1..256: no owner found for handle %u", src_handle);
-            } else {
-                LogLine("   *** game buffer is owned by aruid %llu ***",
-                        static_cast<unsigned long long>(found));
-                u32 aerr = 0;
-                const ::Result ar = NvSetAruidWithoutCheck(found, std::addressof(aerr));
-                LogLine("   SetAruidWithoutCheck(%llu) rc=0x%x err=%u",
-                        static_cast<unsigned long long>(found), ar, aerr);
-
-                /* re-import under our new identity */
-                struct { u32 id; u32 handle; } a2 = { g_game_surface.nvmap_id, 0 };
-                u32 e2 = 0;
-                const ::Result r2 = NvIoctl(nvmap_fd, NvmapIocFromId, std::addressof(a2), sizeof(a2), std::addressof(e2));
-                LogLine("   re-FROM_ID(%u) rc=0x%x nverr=%u -> handle=%u",
-                        g_game_surface.nvmap_id, r2, e2, a2.handle);
-                if (R_SUCCEEDED(r2) && e2 == 0 && a2.handle != 0) { src_handle = a2.handle; }
-            }
         }
 
         u32 cfg_handle, cfg_id, cmd_handle, cmd_id, dst_handle, dst_id, self_handle, self_id;
