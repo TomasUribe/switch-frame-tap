@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M20: up. Self-blit VERIFIED; trying nvdrv:t for the ImportMemory permissions.");
+        mitm::applet::LogLine("applet-mitm M21: up. Hunt the game aruid, adopt it with SetAruidWithoutCheck.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

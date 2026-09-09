@@ -119,6 +119,46 @@ freeze; 8423 txns at 60 fps.
 
 **One thing is left in the whole project: reaching the game's pixels.**
 
+## M20 run — full permissions obtained, and the pin *still* refuses
+
+`nvdrv:t` opened and the mask demonstrably changed, two independent ways:
+
+```
+using nvdrv:t rc=0x0
+perm probe: /dev/nvhost-gpu rc=0x0 nverr=0 -> OPEN (bit0 set: full mask)
+```
+| | cfg | dst | self |
+|---|---|---|---|
+| `nvdrv:s` | `0xE31C0000` | `0xE31E0000` | `0xE3200000` | ← restricted `0xE0000000+` window |
+| `nvdrv:t` | `0x01960000` | `0x01980000` | `0x019A0000` | ← bit 15 FullVaRange |
+
+Self-blit still byte-exact at the new addresses. But the game's handle returns
+`phys=0` for all three variants **with `0xFFFFFFFF` permissions**.
+
+So it is not a permission bit. `FROM_ID` hands us a reference; the pages live in
+the game's address space and nvservices will not map them into our channel.
+
+## M21 — the last untried mechanism: **aruid ownership**
+
+nvmap objects are bound to an **AppletResourceUserId**. libnx's `nvInitialize`
+does this for every normal client:
+```c
+u64 aruid = appletGetAppletResourceUserId();
+if (aruid) _nvSetClientPID(aruid);
+```
+**Our session has never set one** — we are aruid 0, while the game's buffers
+belong to the game's aruid. That asymmetry is the remaining explanation for a
+silent `phys=0`.
+
+- `SetAruidWithoutCheck` (cmd 7) takes a plain `u64` — **no PID descriptor**, so
+  unlike `vi`'s `OpenLayer` it *is* expressible for us. It needs
+  `NvDrvPermission` bit 10, which only `nvdrv:t` grants — which we now have.
+- `NVMAP_IOC_IS_OWNED_BY_ARUID` (`0x40100113`) is a pure query, so sweeping
+  candidate aruids costs nothing and risks nothing. `am` assigns them
+  sequentially from boot, so the running application's is small; M21 sweeps
+  1..256, adopts any hit, re-imports the handle under the new identity, and
+  re-pins.
+
 ## Why the game's handle pins to 0 — it is a *permission*, not a bug
 
 `FROM_ID` succeeds, `MAP_CMD_BUFFER` returns `nverr=0` with `phys=0`, and the

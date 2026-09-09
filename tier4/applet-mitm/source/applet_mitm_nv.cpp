@@ -122,6 +122,10 @@ namespace ams::mitm::applet {
         constexpr u32 NvmapIocFromId = MakeIowr(0x01, 0x03, 8);
         constexpr u32 NvmapIocAlloc  = MakeIowr(0x01, 0x04, 32);
         constexpr u32 NvmapIocGetId  = MakeIowr(0x01, 0x0E, 8);
+        /* {u64 aruid; u32 handle; u8 pad[4]} - asks whether an nvmap object is
+         * bound to a given AppletResourceUserId. A pure query, so it doubles as
+         * a safe way to DISCOVER the game's aruid. */
+        constexpr u32 NvmapIocIsOwnedByAruid = MakeIow(0x01, 0x13, 16);   /* 0x40100113 */
 
         constexpr u32 NvHostIocChannelGetSyncpoint  = MakeIowr(0x00, 0x02, 8);   /* {u32 module_id; u32 syncpt}   */
         constexpr u32 NvHostIocChannelSetSubmitTo   = MakeIow (0x00, 0x07, 4);   /* {u32 timeout}                 */
@@ -178,6 +182,30 @@ namespace ams::mitm::applet {
             *out_fd  = out.fd;
             *out_err = out.error;
             return rc;
+        }
+
+        /* nvdrv cmd 7. Plain u64 in, u32 err out - no PID descriptor, so unlike
+         * vi's OpenLayer this one is actually expressible for us. Needs
+         * NvDrvPermission bit 10, which only nvdrv:t grants.
+         *
+         * libnx's nvInitialize does the equivalent for every normal client:
+         *     u64 aruid = appletGetAppletResourceUserId();
+         *     if (aruid) _nvSetClientPID(aruid);
+         * Our session has never set one, so it is aruid 0 while the game's
+         * buffers belong to the game's aruid. That asymmetry is the last
+         * candidate explanation for the silent phys=0. */
+        ::Result NvSetAruidWithoutCheck(u64 aruid, u32 *out_err) {
+            u32 err = 0;
+            const ::Result rc = serviceDispatchInOut(std::addressof(g_nv_srv), 7, aruid, err);
+            *out_err = err;
+            return rc;
+        }
+
+        bool NvIsOwnedByAruid(u32 fd, u64 aruid, u32 handle) {
+            struct { u64 aruid; u32 handle; u32 pad; } a = { aruid, handle, 0 };
+            u32 nverr = 0;
+            const ::Result rc = NvIoctl(fd, NvmapIocIsOwnedByAruid, std::addressof(a), sizeof(a), std::addressof(nverr));
+            return R_SUCCEEDED(rc) && nverr == 0;
         }
 
         void NvClose(u32 fd) {
@@ -622,6 +650,36 @@ namespace ams::mitm::applet {
             LogLine("   FROM_ID(%u) rc=0x%x nverr=%u -> handle=%u", g_game_surface.nvmap_id, rc, nverr, a.handle);
             if (R_FAILED(rc) || nverr != 0) { VicStage("vb:5_FAILED"); goto close_sess; }
             src_handle = a.handle;
+        }
+
+        /* --- find the game's aruid, adopt it, and re-import ---------------
+         * am hands out AppletResourceUserIds sequentially from boot, so the
+         * running application's is a small number. IS_OWNED_BY_ARUID is a pure
+         * query, so sweeping a range costs nothing and risks nothing. */
+        {
+            VicStage("vb:5b_aruid_hunt");
+            u64 found = 0;
+            for (u64 a = 1; a <= 256 && found == 0; a++) {
+                if (NvIsOwnedByAruid(nvmap_fd, a, src_handle)) { found = a; }
+            }
+            if (found == 0) {
+                LogLine("   aruid sweep 1..256: no owner found for handle %u", src_handle);
+            } else {
+                LogLine("   *** game buffer is owned by aruid %llu ***",
+                        static_cast<unsigned long long>(found));
+                u32 aerr = 0;
+                const ::Result ar = NvSetAruidWithoutCheck(found, std::addressof(aerr));
+                LogLine("   SetAruidWithoutCheck(%llu) rc=0x%x err=%u",
+                        static_cast<unsigned long long>(found), ar, aerr);
+
+                /* re-import under our new identity */
+                struct { u32 id; u32 handle; } a2 = { g_game_surface.nvmap_id, 0 };
+                u32 e2 = 0;
+                const ::Result r2 = NvIoctl(nvmap_fd, NvmapIocFromId, std::addressof(a2), sizeof(a2), std::addressof(e2));
+                LogLine("   re-FROM_ID(%u) rc=0x%x nverr=%u -> handle=%u",
+                        g_game_surface.nvmap_id, r2, e2, a2.handle);
+                if (R_SUCCEEDED(r2) && e2 == 0 && a2.handle != 0) { src_handle = a2.handle; }
+            }
         }
 
         u32 cfg_handle, cfg_id, cmd_handle, cmd_id, dst_handle, dst_id, self_handle, self_id;
