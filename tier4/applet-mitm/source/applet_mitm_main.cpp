@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M23: up. Game buffer ruled out structurally; surveying the display path.");
+        mitm::applet::LogLine("applet-mitm M24: up. Indirect-layer recon - the real post-composition mechanism.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

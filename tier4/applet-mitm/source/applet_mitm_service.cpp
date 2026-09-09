@@ -141,6 +141,44 @@ namespace ams::mitm::applet {
         out.SetValue(sf::CreateSharedObjectEmplaced<IBinderMitm, BinderMitm>(std::shared_ptr<::Service>(shared_srv), m_client_info), target_object_id);
 
         LogMark("GetRelayService:wrapped");
+
+        /* ---- indirect-layer recon (one-shot, read-only) --------------------
+         * Reading the game's swapchain is structurally impossible for us, and
+         * the display-controller nodes only PROGRAM the display - there is no
+         * readback ioctl anywhere in nvdrv. But vi has the mechanism Nintendo
+         * actually uses for "one process reads another's layer": indirect
+         * layers. GetIndirectLayerImageMap (2450) writes into a type-0x46
+         * buffer, i.e. memory WE supply - which is precisely what our process
+         * isolation requires.
+         *
+         * Two cheap forward calls decide whether that route is open from here:
+         *   2460 GetIndirectLayerImageRequiredMemoryInfo - no PID descriptor,
+         *        just two s64 in / two s64 out. A sane size for 1280x720 means
+         *        the indirect-layer machinery answers us at all.
+         *   102  GetManagerDisplayService - gates CreateIndirectLayer (2050),
+         *        which is how a consumer handle gets made without AM. */
+        {
+            static std::atomic<bool> probed{false};
+            bool ex = false;
+            if (probed.compare_exchange_strong(ex, true)) {
+                LogMark("indirect:probe");
+                struct { s64 w; s64 h; } in  = { 1280, 720 };
+                struct { s64 size; s64 align; } out = {};
+                const Result r1 = serviceDispatchInOut(m_forward_service.get(), 2460, in, out);
+                LogLine("   2460 RequiredMemoryInfo(1280x720) rc=0x%x -> size=%lld align=%lld",
+                        r1.GetValue(), static_cast<long long>(out.size), static_cast<long long>(out.align));
+
+                ::Service mgr = {};
+                const Result r2 = serviceDispatch(m_forward_service.get(), 102,
+                    .out_num_objects = 1, .out_objects = std::addressof(mgr));
+                LogLine("   102 GetManagerDisplayService rc=0x%x -> %s",
+                        r2.GetValue(), R_SUCCEEDED(r2) ? "GOT IT (CreateIndirectLayer reachable)"
+                                                       : "denied on a vi:u session");
+                if (R_SUCCEEDED(r2)) { serviceClose(std::addressof(mgr)); }
+                LogMark("indirect:probe_done");
+            }
+        }
+
         R_SUCCEED();
     }
 
