@@ -164,6 +164,14 @@ namespace ams::mitm::applet {
                     .buffers      = { { path, std::strlen(path) } },
                 );
                 LogLine("   open %-22s rc=0x%-8x fd=%-10u nverr=%u", path, r, out.fd, out.error);
+                /* Channel nodes are exclusive per session - a leaked fd here
+                 * makes the real open in nv:10 fail with nverr=4096. Close
+                 * every survey fd immediately (nvdrv Close = cmd 2). */
+                if (R_SUCCEEDED(r) && out.error == 0) {
+                    const struct { u32 fd; } ci = { out.fd };
+                    u32 ce = 0;
+                    serviceDispatchInOut(std::addressof(g_nv_srv), 2, ci, ce);
+                }
             }
         }
 
