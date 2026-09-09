@@ -1,24 +1,90 @@
 #include "applet_mitm_service.hpp"
 #include "applet_mitm_log.hpp"
+#include <atomic>
 
 namespace ams::mitm::applet {
 
-    /* ---- IApplicationDisplayService intercepts ------------------------ */
+    namespace {
 
-    /* Manual forward: no pid, no buffers, so serviceDispatchInOut is exact.
-     * Tests whether manual forwarding works on the patched sub-session,
-     * independent of the raw-replay path. */
+        /* queueBuffer runs at up to 60 Hz; one open/append/close per line would
+         * hammer the SD card. Log the first few of each transaction code, then
+         * only a periodic heartbeat. */
+        constinit std::atomic<u32> g_txn_total{0};
+        constinit std::atomic<u32> g_txn_per_code[16] = {};
+
+        const char *TxnName(u32 code) {
+            switch (code) {
+                case 1:  return "requestBuffer";
+                case 2:  return "setBufferCount";
+                case 3:  return "dequeueBuffer";
+                case 4:  return "detachBuffer";
+                case 5:  return "detachNextBuffer";
+                case 6:  return "attachBuffer";
+                case 7:  return "queueBuffer";
+                case 8:  return "cancelBuffer";
+                case 9:  return "query";
+                case 10: return "connect";
+                case 11: return "disconnect";
+                case 12: return "setPreallocatedBuffer";
+                default: return "?";
+            }
+        }
+
+    }
+
+    /* ---- IHOSBinderDriver: the frame pipeline -------------------------- */
+
+    Result BinderMitm::TransactParcelAuto(s32 session_id, u32 code, u32 flags, const sf::InAutoSelectBuffer &parcel_in, const sf::OutAutoSelectBuffer &parcel_out) {
+        const u32 total = g_txn_total.fetch_add(1) + 1;
+        const u32 per   = (code < 16) ? (g_txn_per_code[code].fetch_add(1) + 1) : 0;
+
+        /* first 3 of each code, then a heartbeat every 600 transactions */
+        if (per <= 3 || (total % 600) == 0) {
+            LogLine("*** binder txn #%u  program=%016llx  session=%d  code=%u(%s) x%u  flags=0x%x  in=%zu out=%zu",
+                    total,
+                    static_cast<unsigned long long>(m_client_info.program_id.value),
+                    session_id, code, TxnName(code), per, flags,
+                    parcel_in.GetSize(), parcel_out.GetSize());
+        }
+        if (total == 1) { LogMark("binder:first_txn"); }
+
+        R_RETURN(sm::mitm::ResultShouldForwardToSession());
+    }
+
+    /* ---- IApplicationDisplayService ----------------------------------- */
+
+    Result ViDisplaySvcMitm::GetRelayService(sf::Out<sf::SharedPointer<IBinderMitm>> out) {
+        LogMark("GetRelayService:enter");
+
+        ::Service binder_svc = {};
+        const Result rc = serviceDispatch(m_forward_service.get(), 100,
+            .out_num_objects = 1,
+            .out_objects     = std::addressof(binder_svc),
+        );
+        if (R_FAILED(rc)) {
+            LogMark("GetRelayService:forward_FAILED");
+            LogLine("   rc=0x%x", rc.GetValue());
+            R_RETURN(rc);
+        }
+
+        auto shared_srv = std::make_shared<::Service>(binder_svc);
+        const sf::cmif::DomainObjectId target_object_id{ serviceGetObjectId(std::addressof(binder_svc)) };
+
+        ::ams::sf::impl::g_tier4_pending_mitm_forward = shared_srv;
+        out.SetValue(sf::CreateSharedObjectEmplaced<IBinderMitm, BinderMitm>(std::shared_ptr<::Service>(shared_srv), m_client_info), target_object_id);
+
+        LogMark("GetRelayService:wrapped");
+        R_SUCCEED();
+    }
+
     Result ViDisplaySvcMitm::OpenDisplay(const DisplayName &display_name, sf::Out<u64> out_display_id) {
         LogMark("OpenDisplay:enter");
-        LogLine("   program=%016llx display=\"%.32s\"",
-                static_cast<unsigned long long>(m_client_info.program_id.value), display_name.data);
-
         u64 display_id = 0;
         const Result rc = serviceDispatchInOut(m_forward_service.get(), 1010, display_name, display_id);
         if (R_SUCCEEDED(rc)) {
             out_display_id.SetValue(display_id);
-            LogMark("OpenDisplay:forwarded_ok");
-            LogLine("   display_id=%llu", static_cast<unsigned long long>(display_id));
+            LogLine("   OpenDisplay \"%.32s\" -> display_id=%llu",
+                    display_name.data, static_cast<unsigned long long>(display_id));
         } else {
             LogMark("OpenDisplay:forward_FAILED");
             LogLine("   rc=0x%x", rc.GetValue());
@@ -26,30 +92,7 @@ namespace ams::mitm::applet {
         R_RETURN(rc);
     }
 
-    /* Must use raw replay: this command carries a kernel-attested PID
-     * descriptor, and vi validates the aruid against it. A manual forward would
-     * re-attribute the pid to our process and be rejected. */
-    Result ViDisplaySvcMitm::OpenLayer(const DisplayName &display_name, u64 layer_id, u64 aruid, const sf::OutBuffer &native_window, sf::Out<u64> out_native_window_size) {
-        LogMark("OpenLayer:enter");
-        LogLine("*** OpenLayer  program=%016llx  display=\"%.32s\"  layer_id=%016llx  aruid=%016llx",
-                static_cast<unsigned long long>(m_client_info.program_id.value),
-                display_name.data,
-                static_cast<unsigned long long>(layer_id),
-                static_cast<unsigned long long>(aruid));
-        AMS_UNUSED(native_window, out_native_window_size);
-        R_RETURN(sm::mitm::ResultShouldForwardToSession());
-    }
-
-    Result ViDisplaySvcMitm::CreateStrayLayer(u32 layer_flags, u64 display_id, sf::Out<u64> out_layer_id, const sf::OutBuffer &native_window, sf::Out<u64> out_native_window_size) {
-        LogMark("CreateStrayLayer:enter");
-        LogLine("*** CreateStrayLayer  program=%016llx  flags=0x%x  display_id=%llu",
-                static_cast<unsigned long long>(m_client_info.program_id.value),
-                layer_flags, static_cast<unsigned long long>(display_id));
-        AMS_UNUSED(out_layer_id, native_window, out_native_window_size);
-        R_RETURN(sm::mitm::ResultShouldForwardToSession());
-    }
-
-    /* ---- vi:u root::GetDisplayService (forward + wrap) ---------------- */
+    /* ---- vi:u root ---------------------------------------------------- */
 
     Result ViRootMitm::GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode) {
         LogMark("GetDisplayService:enter");
@@ -73,7 +116,6 @@ namespace ams::mitm::applet {
          * service so undeclared commands auto-forward on this NON-domain
          * session. */
         ::ams::sf::impl::g_tier4_pending_mitm_forward = shared_srv;
-
         out.SetValue(sf::CreateSharedObjectEmplaced<IViDisplaySvcMitm, ViDisplaySvcMitm>(std::shared_ptr<::Service>(shared_srv), m_client_info), target_object_id);
 
         LogMark("GetDisplayService:done");
