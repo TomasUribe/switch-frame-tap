@@ -277,6 +277,70 @@ static void probe_caps_attach(void)
     rlog("<- caps_attach");
 }
 
+/* ------------------------------------------------------------- vi ------- */
+/* vi manager/system session: how am and overlays reach the compositor.
+ * viInitialize may fatal like nvdrv did - breadcrumb catches it. */
+static void probe_vi(void)
+{
+    static const struct { ViServiceType t; const char *n; } tries[] = {
+        { ViServiceType_Manager, "Manager" },
+        { ViServiceType_System,  "System"  },
+        { ViServiceType_Default, "Default" },
+    };
+
+    int got = -1;
+    for (int i = 0; i < 3 && got < 0; i++) {
+        char mk[32]; snprintf(mk, sizeof(mk), "vi:init:%s", tries[i].n); log_mark(mk);
+        Result rc = viInitialize(tries[i].t);
+        rlog("   viInitialize(%s) rc=0x%x", tries[i].n, rc);
+        if (R_SUCCEEDED(rc)) got = i;
+    }
+    if (got < 0) { rlog("<- vi (no session)"); return; }
+
+    log_mark("vi:open_display");
+    ViDisplay disp;
+    Result rc = viOpenDefaultDisplay(&disp);
+    rlog("   viOpenDefaultDisplay rc=0x%x", rc);
+    if (R_SUCCEEDED(rc)) {
+        s32 w = 0, h = 0, lw = 0, lh = 0;
+        Result r1 = viGetDisplayResolution(&disp, &w, &h);
+        Result r2 = viGetDisplayLogicalResolution(&disp, &lw, &lh);
+        rlog("   resolution %dx%d (rc=0x%x)  logical %dx%d (rc=0x%x)", w, h, r1, lw, lh, r2);
+
+        log_mark("vi:vsync");
+        Event ev;
+        Result r3 = viGetDisplayVsyncEvent(&disp, &ev);
+        rlog("   viGetDisplayVsyncEvent rc=0x%x", r3);
+        if (R_SUCCEEDED(r3)) {
+            u64 prev = armGetSystemTick();
+            for (int k = 0; k < 5; k++) {
+                Result w2 = eventWait(&ev, 200000000ULL);   /* 200 ms */
+                u64 now = armGetSystemTick();
+                rlog("   vsync %d: wait rc=0x%x  dt=%llu us", k, w2,
+                     (unsigned long long)(armTicksToNs(now - prev) / 1000));
+                prev = now;
+            }
+            eventClose(&ev);
+        }
+        viCloseDisplay(&disp);
+    }
+
+    log_mark("vi:indirect");
+    u64 isz = 0, ial = 0;
+    Result r4 = viGetIndirectLayerImageRequiredMemoryInfo(1280, 720, &isz, &ial);
+    rlog("   IndirectLayerImageRequiredMemoryInfo(1280x720) rc=0x%x size=%llu align=%llu",
+         r4, (unsigned long long)isz, (unsigned long long)ial);
+
+    memset(g_buf, 0, 4096);
+    u64 osz = 0, ostr = 0;
+    Result r5 = viGetIndirectLayerImageMap(g_buf, BUF_SZ, 256, 256, 0, &osz, &ostr);
+    rlog("   viGetIndirectLayerImageMap(handle=0, 256x256) rc=0x%x outsz=%llu stride=%llu nonzero=%u",
+         r5, (unsigned long long)osz, (unsigned long long)ostr, nonzero(g_buf, 4096));
+
+    viExit();
+    rlog("<- vi");
+}
+
 /* ------------------------------------------------------------- mmio ----- */
 /* Only meaningful in the -mmio build (recon-mmio.json declares the map caps). */
 
@@ -322,6 +386,10 @@ void run_probes(u32 f, int pass)
     if (f & P_CAPS_ATTACH) probe_caps_attach();
 
     if (pass == 0) {
+        if (f & P_VI) {
+            rlog("NOTE: vi session may fatal like nvdrv. .last will say vi:init:* if so.");
+            probe_vi();
+        }
         if (f & (P_MMIO_MAP | P_MMIO_READ)) probe_mmio(f);
         if (f & P_NV) {
             rlog("NOTE: nv fatalled a system process in the prior run. Expect a crash.");
