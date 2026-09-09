@@ -49,13 +49,48 @@ namespace ams::mitm::applet {
         /* Static so the allocator is never in the path. */
         alignas(0x1000) constinit u8 g_nv_tmem_buf[0x40000] = {};
 
-        /* VIC blit buffers (all page-aligned, all nvmap-CREATE'd against our
-         * own pages so the CPU can touch config/cmdbuf and read back dst).
-         * Kept small: an earlier build's ~280 KB of extra .bss coincided with
-         * the module going dark after registration. */
-        alignas(0x1000) constinit u8 g_vic_cfg_buf[0x4000] = {};   /* VicConfigStruct (1552 B) */
-        alignas(0x1000) constinit u8 g_vic_cmd_buf[0x1000] = {};   /* host1x pushbuf           */
-        alignas(0x1000) constinit u8 g_vic_dst_buf[0x10000] = {};  /* linear output          */
+        /* VIC buffers live on the REAL process heap, not in .bss.
+         *
+         * nvmap ALLOC binds the caller's pages, but a device-shared buffer also
+         * has to have its CPU mapping marked uncached - libnx's nvMapCreate does
+         * armDCacheFlush + svcSetMemoryAttribute(.., 8, 8) for exactly this. That
+         * SVC is only permitted on MemoryState_Normal, i.e. heap; a sysmodule's
+         * .bss is code-mutable and it would be rejected. Every previous run had
+         * cached, non-shared .bss standing in for device memory, which is why the
+         * engine reported OP_DONE and we read back nothing. */
+        constexpr size_t VicCfgSize = 0x4000;    /* VicConfigStruct (1552 B) */
+        constexpr size_t VicCmdSize = 0x1000;    /* host1x pushbuf           */
+        constexpr size_t VicDstSize = 0x10000;   /* linear output            */
+        constexpr size_t VicHeapSize = 2_MB;     /* os::AllocateMemoryBlock granularity */
+
+        constinit uintptr_t g_vic_heap    = 0;
+        constinit u8       *g_vic_cfg_buf = nullptr;
+        constinit u8       *g_vic_cmd_buf = nullptr;
+        constinit u8       *g_vic_dst_buf = nullptr;
+
+        bool AllocVicHeap() {
+            if (g_vic_heap != 0) { return true; }
+            if (const auto rc = os::SetMemoryHeapSize(VicHeapSize); R_FAILED(rc)) {
+                LogLine("   SetMemoryHeapSize(2MB) FAILED rc=0x%x", rc.GetValue());
+                return false;
+            }
+            uintptr_t addr = 0;
+            if (const auto rc = os::AllocateMemoryBlock(std::addressof(addr), VicHeapSize); R_FAILED(rc)) {
+                LogLine("   AllocateMemoryBlock(2MB) FAILED rc=0x%x", rc.GetValue());
+                return false;
+            }
+            g_vic_heap    = addr;
+            g_vic_cfg_buf = reinterpret_cast<u8 *>(addr + 0x0000);
+            g_vic_cmd_buf = reinterpret_cast<u8 *>(addr + 0x4000);
+            g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);   /* room to grow */
+            std::memset(reinterpret_cast<void *>(addr), 0, VicHeapSize);
+            LogLine("   VIC heap at 0x%lx: cfg=%p cmd=%p dst=%p",
+                    static_cast<unsigned long>(addr),
+                    static_cast<void *>(g_vic_cfg_buf),
+                    static_cast<void *>(g_vic_cmd_buf),
+                    static_cast<void *>(g_vic_dst_buf));
+            return true;
+        }
 
         /* Phase B geometry: a scale-free 64x64 crop of the frame's top-left.
          * The output STRIDE is aligned to 256 pixels, not to the width: that is
@@ -67,7 +102,7 @@ namespace ams::mitm::applet {
         constexpr u32 DstStridePx = 256;                 /* 1024 B pitch */
         constexpr u32 DstPitch    = DstStridePx * 4;
         constexpr u32 DstSize     = DstPitch * DstH;     /* 65536 */
-        static_assert(DstSize <= sizeof(g_vic_dst_buf));
+        static_assert(DstSize <= VicDstSize);
 
         constinit ::Service        g_nv_srv  = {};
         constinit ::TransferMemory g_nv_tmem = {};
@@ -190,6 +225,17 @@ namespace ams::mitm::applet {
             al.addr   = reinterpret_cast<u64>(cpu);
             rc = NvIoctl(fd, NvmapIocAlloc, std::addressof(al), sizeof(al), std::addressof(nverr));
             if (R_FAILED(rc) || nverr != 0) { LogLine("   nvmapOwn ALLOC fail rc=0x%x nverr=%u", rc, nverr); return rc; }
+
+            /* flags bit0 is CACHEABLE (libnx passes is_cpu_cacheable?1:0), not
+             * read-write as the wiki's comment suggests. We asked for
+             * non-cacheable, so we owe the matching CPU-side step that libnx
+             * does and we never did: flush, then mark the mapping uncached.
+             * Without it the CPU keeps a cached, non-coherent view. */
+            armDCacheFlush(cpu, size);
+            const auto sma = svc::SetMemoryAttribute(reinterpret_cast<uintptr_t>(cpu), size,
+                                                     svc::MemoryAttribute_Uncached,
+                                                     svc::MemoryAttribute_Uncached);
+            LogLine("   SetMemoryAttribute(%p, 0x%x, uncached) rc=0x%x", cpu, size, sma.GetValue());
 
             struct { u32 id; u32 handle; } gi = { 0, cr.handle };
             rc = NvIoctl(fd, NvmapIocGetId, std::addressof(gi), sizeof(gi), std::addressof(nverr));
@@ -337,11 +383,13 @@ namespace ams::mitm::applet {
             u32 words = BuildCmdbuf(w, job, c.cfg_addr, c.dst_addr, c.src_addr + c.src_off);
             words = AppendIncrSyncpt(w, words, c.syncpt, true);   /* OP_DONE: EXECUTE is present */
 
-            /* Start from a known-zero destination the device can actually see. */
-            std::memset(g_vic_dst_buf, 0, DstSize);
+            /* Prefill with a poison pattern rather than zero. "All zero" cannot
+             * distinguish "engine wrote zeros" from "engine never touched our
+             * memory"; surviving 0xAB proves the latter outright. */
+            std::memset(g_vic_dst_buf, 0xAB, DstSize);
             armDCacheFlush(g_vic_dst_buf, DstSize);
-            armDCacheFlush(g_vic_cfg_buf, sizeof(g_vic_cfg_buf));
-            armDCacheFlush(g_vic_cmd_buf, sizeof(g_vic_cmd_buf));
+            armDCacheFlush(g_vic_cfg_buf, VicCfgSize);
+            armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
 
             const bool reloc = (job == VicJob::BlitReloc);
             const u32  nr    = reloc ? ((job == VicJob::Fill) ? 2u : 3u) : 0u;
@@ -403,13 +451,17 @@ namespace ams::mitm::applet {
              * guaranteed to look empty no matter what the engine did. */
             armDCacheFlush(g_vic_dst_buf, DstSize);
 
-            u32 sum = 0, nz = 0;
-            for (u32 i = 0; i < DstSize; i++) { sum += g_vic_dst_buf[i]; if (g_vic_dst_buf[i]) { nz++; } }
+            u32 sum = 0, changed = 0;
+            for (u32 i = 0; i < DstSize; i++) {
+                sum += g_vic_dst_buf[i];
+                if (g_vic_dst_buf[i] != 0xAB) { changed++; }
+            }
             char hex[3 * 32 + 1];
             int k = 0;
             for (u32 i = 0; i < 32; i++) { k += std::snprintf(hex + k, sizeof(hex) - k, "%02x ", g_vic_dst_buf[i]); }
-            LogLine("   [%s] dst sum32=%u nonzero=%u/%u  %s", stage, sum, nz, DstSize,
-                    (nz > 0) ? "*** WROTE PIXELS ***" : "(empty)");
+            LogLine("   [%s] dst sum32=%u changed=%u/%u  %s", stage, sum, changed, DstSize,
+                    (changed > 0) ? "*** ENGINE WROTE OUR MEMORY ***"
+                                  : "(untouched - poison 0xAB intact)");
             LogLine("   [%s] dst[0..32]: %s", stage, hex);
             const u8 *mid = g_vic_dst_buf + (DstH / 2) * DstPitch;
             LogLine("   [%s] row %u: %02x %02x %02x %02x %02x %02x %02x %02x",
@@ -463,6 +515,9 @@ namespace ams::mitm::applet {
          * declaration, and close_vic reads these to decide what to unpin. */
         u32 cfg_addr = 0, dst_addr = 0, src_addr = 0;
 
+        VicStage("vb:0_heap");
+        if (!AllocVicHeap()) { VicStage("vb:0_FAILED"); return; }
+
         VicStage("vb:1_smGetService");
         ::Result rc = smGetService(std::addressof(g_nv_srv), "nvdrv:s");
         LogLine("   nvdrv:s rc=0x%x", rc);
@@ -500,11 +555,11 @@ namespace ams::mitm::applet {
 
         u32 cfg_handle, cfg_id, cmd_handle, cmd_id, dst_handle, dst_id;
         VicStage("vb:6_alloc_bufs");
-        rc = NvmapOwn(nvmap_fd, g_vic_cfg_buf, sizeof(g_vic_cfg_buf), 0, std::addressof(cfg_handle), std::addressof(cfg_id));
+        rc = NvmapOwn(nvmap_fd, g_vic_cfg_buf, VicCfgSize, 0, std::addressof(cfg_handle), std::addressof(cfg_id));
         if (R_FAILED(rc)) { VicStage("vb:6_cfg_FAILED"); goto close_sess; }
-        rc = NvmapOwn(nvmap_fd, g_vic_cmd_buf, sizeof(g_vic_cmd_buf), 0, std::addressof(cmd_handle), std::addressof(cmd_id));
+        rc = NvmapOwn(nvmap_fd, g_vic_cmd_buf, VicCmdSize, 0, std::addressof(cmd_handle), std::addressof(cmd_id));
         if (R_FAILED(rc)) { VicStage("vb:6_cmd_FAILED"); goto close_sess; }
-        rc = NvmapOwn(nvmap_fd, g_vic_dst_buf, sizeof(g_vic_dst_buf), 0, std::addressof(dst_handle), std::addressof(dst_id));
+        rc = NvmapOwn(nvmap_fd, g_vic_dst_buf, VicDstSize, 0, std::addressof(dst_handle), std::addressof(dst_id));
         if (R_FAILED(rc)) { VicStage("vb:6_dst_FAILED"); goto close_sess; }
         AMS_UNUSED(cfg_id, cmd_id, dst_id);
         AMS_UNUSED(cfg_handle, dst_handle, src_handle, src_off);   /* Phase A: relocs disabled */

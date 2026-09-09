@@ -44,6 +44,55 @@ touches NAND.
 - Channel devices are **one fd per session** — a leaked survey fd made the real
   open fail `nverr=4096`. The survey now closes each fd.
 
+## M14 run — all three jobs ran, all three wrote nothing
+
+| job | submit | engine | dst |
+|---|---|---|---|
+| `vb:job_fill` (no source) | `nr=0` nverr=0 | OP_DONE fired | empty |
+| `vb:job_blit_direct` | `nr=0` nverr=0 | OP_DONE fired | empty |
+| `vb:job_blit_reloc` | **`nr=3` nverr=0** | OP_DONE fired | empty |
+
+Two things settled:
+- **Relocs are accepted once the buffers are pinned** — the earlier
+  `InvalidState` really was "nothing was pinned", confirmed.
+- **`fill` needs no source and failed too.** So the game buffer's `phys=0`
+  is *not* what is blocking us. The fault is in the **output** half.
+
+Verified by diffing against the real libdrm header, so these are no longer
+suspects: all 9 config structs match field-for-field and bit-for-bit
+(`SlotConfig` 65 fields/512 bits, `VicConfigStruct` 1552 B), and every
+`NVB0B6_*` method offset matches.
+
+## Root cause: our "device" buffers were ordinary cached `.bss`
+
+libnx's `nvMapCreate` does one thing after `NVMAP_IOC_ALLOC` that we never did:
+
+```c
+rc = nvioctlNvmap_Alloc(fd, handle, 0, is_cpu_cacheable ? 1 : 0, align, kind, cpu_addr);
+if (R_SUCCEEDED(rc) && !is_cpu_cacheable) {
+    armDCacheFlush(m->cpu_addr, m->size);
+    svcSetMemoryAttribute(m->cpu_addr, m->size, 8, 8);   /* MemoryAttribute_Uncached */
+}
+```
+
+Note also that `flags` bit 0 is **cacheable**, not "read-write" as the wiki's
+comment says — we pass 0 (non-cacheable), which obliges us to do the CPU-side
+half above.
+
+`svcSetMemoryAttribute` is only permitted on `MemoryState_Normal` (heap). Our
+buffers were in `.bss`, which is code-mutable — so we had cached, non-coherent
+memory standing in for device memory. That is consistent with every symptom:
+the engine reports OP_DONE and the read-back is empty.
+
+**M15:** allocate the VIC buffers from the real process heap via
+`os::SetMemoryHeapSize` + `os::AllocateMemoryBlock` (2 MB, `svcSetHeapSize`
+underneath), then flush + `svc::SetMemoryAttribute(..., Uncached)` on each.
+`.bss` drops 1,531,648 → 1,445,632.
+
+**Poison prefill:** dst is now filled with `0xAB`, not zero. "All zero" could not
+distinguish *engine wrote zeros* from *engine never touched our memory*;
+surviving `0xAB` proves the latter outright.
+
 ## M13 run — MAP_CMD_BUFFER works, and **the VIC engine executed**
 
 | | |
