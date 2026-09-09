@@ -44,6 +44,42 @@ touches NAND.
 - Channel devices are **one fd per session** — a leaked survey fd made the real
   open fail `nverr=4096`. The survey now closes each fd.
 
+## M13 run — MAP_CMD_BUFFER works, and **the VIC engine executed**
+
+| | |
+|---|---|
+| queueBuffer slot parse | **slot=2**, `src_off=0x10E0000` — fixed |
+| `MAP_CMD_BUFFER(cfg)` | nverr=0 → **phys=0xE31C0000** (no crash — the M7c note really was wrong) |
+| `MAP_CMD_BUFFER(dst)` | nverr=0 → **phys=0xE31E0000** |
+| `MAP_CMD_BUFFER(src, game handle 1268)` | nverr=0 → **phys=0x0** ← the blocker |
+| `SUBMIT` `nr=0` | rc=0 nverr=0, fence=608 |
+| `SYNCPT_WAIT` / `READ` | nverr=0, **610 ≥ 608** |
+
+`cond=OP_DONE` only increments when the **engine** finishes, so the VIC really
+ran. It just read from `0x0 + 0x10E0000`, which is not where the game's frame
+lives, so it produced nothing. No freeze; 60 fps throughout.
+
+### Two things to fix
+1. **`phys=0` for the imported handle.** `PARAM(3=BASE)` is documented as
+   *"returns error"* on Horizon, so that route is closed. Options left: pin with
+   `is_compr=1`, or let **nvservices resolve the address itself via a reloc** —
+   which may well work now that everything is pinned (the earlier
+   `InvalidState` was almost certainly *because* nothing was).
+2. **No cache maintenance.** `g_vic_dst_buf` is CPU memory; the VIC writes it
+   device-side. Without `armDCacheFlush` before the read-back, the CPU returns
+   its own stale zeros **regardless of what the engine wrote**. This alone could
+   have masked a working blit.
+
+## M14 — three jobs per run
+One reboot now answers everything. Each job zeroes + flushes dst, submits,
+waits, rescues the syncpoint, invalidates, and checksums:
+
+| job | what it isolates |
+|---|---|
+| `vb:job_fill` | **no source at all** (libdrm `vic40_fill`): config struct, dst address, EXECUTE, cache handling. Non-zero here = the whole output half works. |
+| `vb:job_blit_direct` | source address inlined from MAP_CMD_BUFFER |
+| `vb:job_blit_reloc` | source address left to nvservices via a reloc, everything pinned |
+
 ## Phase B first attempt — `InvalidState`, and it named the missing step
 
 ```

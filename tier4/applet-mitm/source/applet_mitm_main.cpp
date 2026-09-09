@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M13: up. Phase B via MAP_CMD_BUFFER pinning (no relocs).");
+        mitm::applet::LogLine("applet-mitm M14: up. Three VIC jobs per run (fill, blit-direct, blit-reloc) + cache flush.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

@@ -199,28 +199,53 @@ namespace ams::mitm::applet {
             return rc;
         }
 
-        void FillBlitConfig(vic::VicConfigStruct *c) {
-            std::memset(c, 0, sizeof(*c));
+        /* Three jobs, run back-to-back in one probe so a single reboot answers
+         * everything:
+         *   Fill       - no source at all. Isolates the OUTPUT path: config
+         *                struct, dst address, EXECUTE, cache handling.
+         *   BlitDirect - source address inlined from MAP_CMD_BUFFER.
+         *   BlitReloc  - source address left to nvservices via a reloc, which
+         *                knows the game buffer's address even though pinning
+         *                would not tell us. */
+        enum class VicJob { Fill, BlitDirect, BlitReloc };
 
-            /* output: full target rect = whole dst surface */
+        void FillOutputConfig(vic::VicConfigStruct *c) {
             c->outputConfig.TargetRectLeft   = 0;
             c->outputConfig.TargetRectTop    = 0;
             c->outputConfig.TargetRectRight  = DstW - 1;
             c->outputConfig.TargetRectBottom = DstH - 1;
+
+            c->outputSurfaceConfig.OutPixelFormat   = vic::PIXFMT_A8B8G8R8;
+            c->outputSurfaceConfig.OutBlkKind       = vic::BLK_KIND_PITCH;
+            c->outputSurfaceConfig.OutBlkHeight     = 0;
+            c->outputSurfaceConfig.OutSurfaceWidth  = DstW - 1;
+            c->outputSurfaceConfig.OutSurfaceHeight = DstH - 1;
+            c->outputSurfaceConfig.OutLumaWidth     = DstStridePx - 1;
+            c->outputSurfaceConfig.OutLumaHeight    = DstH - 1;
+            c->outputSurfaceConfig.OutChromaWidth   = 16383;
+            c->outputSurfaceConfig.OutChromaHeight  = 16383;
+        }
+
+        /* libdrm vic40_fill / vic_clear: paint the whole target one colour with
+         * no slot enabled. Anything non-zero in dst afterwards proves the whole
+         * output half of the pipeline. */
+        void FillClearConfig(vic::VicConfigStruct *c) {
+            std::memset(c, 0, sizeof(*c));
+            FillOutputConfig(c);
+            c->outputConfig.BackgroundAlpha = 1023;
+            c->outputConfig.BackgroundR     = 1023;   /* opaque red */
+            c->outputConfig.BackgroundG     = 0;
+            c->outputConfig.BackgroundB     = 0;
+        }
+
+        void FillBlitConfig(vic::VicConfigStruct *c) {
+            std::memset(c, 0, sizeof(*c));
+
+            FillOutputConfig(c);
             c->outputConfig.BackgroundAlpha  = 1023;
             c->outputConfig.BackgroundR      = 1023;
             c->outputConfig.BackgroundG      = 1023;
             c->outputConfig.BackgroundB      = 1023;
-
-            c->outputSurfaceConfig.OutPixelFormat  = vic::PIXFMT_A8B8G8R8;   /* same as source */
-            c->outputSurfaceConfig.OutBlkKind      = vic::BLK_KIND_PITCH;
-            c->outputSurfaceConfig.OutBlkHeight    = 0;
-            c->outputSurfaceConfig.OutSurfaceWidth  = DstW - 1;
-            c->outputSurfaceConfig.OutSurfaceHeight = DstH - 1;
-            c->outputSurfaceConfig.OutLumaWidth    = DstStridePx - 1;
-            c->outputSurfaceConfig.OutLumaHeight   = DstH - 1;
-            c->outputSurfaceConfig.OutChromaWidth  = 16383;
-            c->outputSurfaceConfig.OutChromaHeight = 16383;
 
             /* slot 0: 1:1 crop of the frame's top-left DstW x DstH */
             vic::SlotConfig *slot = std::addressof(c->slotStruct[0].slotConfig);
@@ -255,24 +280,37 @@ namespace ams::mitm::applet {
          * Each entry: [INCR(0x10,2)] [method>>2] [value|reloc-placeholder]. */
         constexpr u32 Host1xIncr0x10x2 = (UINT32_C(1) << 28) | (0x10u << 16) | 2u;
 
-        u32 BuildCmdbuf(u32 *w, bool full, u32 cfg_addr, u32 dst_addr, u32 src_addr) {
+        /* Word indices of the three address slots, for the reloc variant. */
+        constexpr u32 CfgAddrWord = 8, DstAddrWord = 11, SrcAddrWord = 14;
+
+        u32 BuildCmdbuf(u32 *w, VicJob job, u32 cfg_addr, u32 dst_addr, u32 src_addr) {
+            const bool reloc = (job == VicJob::BlitReloc);
             u32 n = 0;
-            /* SET_APPLICATION_ID = 1 */
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_APPLICATION_ID >> 2; w[n++] = 1;
-            if (!full) { return n; }   /* Phase A: no-op cmdbuf, just exercise SUBMIT */
-            /* SET_CONTROL_PARAMS = (sizeof(cfg)/16) << 16 */
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_CONTROL_PARAMS >> 2;
             w[n++] = (static_cast<u32>(sizeof(vic::VicConfigStruct) / 16)) << 16;
-            /* Addresses go in directly, as MAP_CMD_BUFFER already pinned each
-             * buffer and handed back its device physical address. That lets us
-             * submit with num_relocs=0 - the exact shape Phase A proved. */
-            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_CONFIG_STRUCT_OFFSET >> 2;        w[n++] = cfg_addr >> 8;
-            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_OUTPUT_SURFACE_LUMA_OFFSET >> 2;  w[n++] = dst_addr >> 8;
-            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_SURFACE0_SLOT0_LUMA_OFFSET >> 2;  w[n++] = src_addr >> 8;
-            /* EXECUTE = 1 << 8 */
+            /* MAP_CMD_BUFFER already handed back a device address for buffers we
+             * own, so those go in directly and the submit needs no reloc list.
+             * The BlitReloc variant instead leaves all three as placeholders and
+             * lets nvservices patch them. */
+            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_CONFIG_STRUCT_OFFSET >> 2;
+            w[n++] = reloc ? 0u : (cfg_addr >> 8);
+            w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_OUTPUT_SURFACE_LUMA_OFFSET >> 2;
+            w[n++] = reloc ? 0u : (dst_addr >> 8);
+            if (job != VicJob::Fill) {
+                w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_SURFACE0_SLOT0_LUMA_OFFSET >> 2;
+                w[n++] = reloc ? 0u : (src_addr >> 8);
+            }
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::EXECUTE >> 2; w[n++] = 1u << 8;
             return n;
         }
+
+        struct JobCtx {
+            u32 vfd, cmd_handle, syncpt;
+            u32 cfg_addr, dst_addr, src_addr, src_off;
+            u32 cfg_handle, dst_handle, src_handle;
+        };
+
 
         /* Program the syncpoint increment the submit already promised. Omitting
          * this is what froze the console: nvhost raised syncpoint 12's max to
@@ -285,6 +323,99 @@ namespace ams::mitm::applet {
             w[n++] = (cond << vic::INCR_SYNCPT_COND_SHIFT) | syncpt;
             return n;
         }
+
+        /* One VIC job end to end: config, cmdbuf, submit, wait, rescue, read
+         * back. Called once per VicJob so a single reboot answers which half of
+         * the pipeline works. */
+        void RunOneJob(const char *stage, VicJob job, const JobCtx &c) {
+            VicStage(stage);
+
+            auto *cfg = reinterpret_cast<vic::VicConfigStruct *>(g_vic_cfg_buf);
+            if (job == VicJob::Fill) { FillClearConfig(cfg); } else { FillBlitConfig(cfg); }
+
+            auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
+            u32 words = BuildCmdbuf(w, job, c.cfg_addr, c.dst_addr, c.src_addr + c.src_off);
+            words = AppendIncrSyncpt(w, words, c.syncpt, true);   /* OP_DONE: EXECUTE is present */
+
+            /* Start from a known-zero destination the device can actually see. */
+            std::memset(g_vic_dst_buf, 0, DstSize);
+            armDCacheFlush(g_vic_dst_buf, DstSize);
+            armDCacheFlush(g_vic_cfg_buf, sizeof(g_vic_cfg_buf));
+            armDCacheFlush(g_vic_cmd_buf, sizeof(g_vic_cmd_buf));
+
+            const bool reloc = (job == VicJob::BlitReloc);
+            const u32  nr    = reloc ? ((job == VicJob::Fill) ? 2u : 3u) : 0u;
+
+            alignas(8) u8 sb[16 + 12 + 3 * (16 + 4) + 20 + 4] = {};
+            u32 off = 0;
+            auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
+
+            put(1); put(nr); put(1); put(1);
+            put(c.cmd_handle); put(0); put(words);
+            if (reloc) {
+                put(c.cmd_handle); put(CfgAddrWord * 4); put(c.cfg_handle); put(0);
+                put(c.cmd_handle); put(DstAddrWord * 4); put(c.dst_handle); put(0);
+                put(c.cmd_handle); put(SrcAddrWord * 4); put(c.src_handle); put(c.src_off);
+                put(8); put(8); put(8);
+            }
+            put(c.syncpt); put(1); put(0); put(0); put(0);
+            const u32 fence_off = off; put(0);
+            const u32 sz = off;
+
+            const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
+            u32 nverr = 0, fence_val = 0;
+            ::Result rc = NvIoctl(c.vfd, req, sb, sz, std::addressof(nverr));
+            std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
+            LogLine("   [%s] words=%u req=0x%08x sz=%u nr=%u rc=0x%x nverr=%u -> fence=%u",
+                    stage, words, req, sz, nr, rc, nverr, fence_val);
+            if (R_FAILED(rc) || nverr != 0) { LogLine("   [%s] SUBMIT REJECTED", stage); return; }
+
+            u32 cfd = 0, ce = 0;
+            if (R_SUCCEEDED(NvOpen("/dev/nvhost-ctrl", std::addressof(cfd), std::addressof(ce))) && ce == 0) {
+                struct { u32 id; u32 thresh; u32 timeout; } a = { c.syncpt, fence_val, 100 };
+                nverr = 0;
+                rc = NvIoctl(cfd, NvHostIocCtrlSyncptWait, std::addressof(a), sizeof(a), std::addressof(nverr));
+                struct { u32 id; u32 value; } r = { c.syncpt, 0 };
+                u32 e2 = 0;
+                NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
+                LogLine("   [%s] WAIT nverr=%u  syncpt=%u (want >= %u)%s",
+                        stage, nverr, r.value, fence_val,
+                        (r.value >= fence_val) ? "  OP_DONE fired" : "  ENGINE DID NOT COMPLETE");
+
+                /* Never leave a shared syncpoint short of its declared max. */
+                if (r.value < fence_val) {
+                    VicStage("vb:RESCUE_INCR");
+                    u32 ireq = NvHostIocCtrlSyncptIncrW;
+                    for (u32 k = 0, missing = fence_val - r.value; k < missing && k < 64; k++) {
+                        struct { u32 id; } ai = { c.syncpt };
+                        u32 ae = 0;
+                        NvIoctl(cfd, ireq, std::addressof(ai), sizeof(ai), std::addressof(ae));
+                        if (k == 0 && ae != 0) { ireq = NvHostIocCtrlSyncptIncrWR;
+                            NvIoctl(cfd, ireq, std::addressof(ai), sizeof(ai), std::addressof(ae)); }
+                    }
+                    LogLine("   [%s] rescued syncpt %u up to fence %u", stage, c.syncpt, fence_val);
+                }
+                NvClose(cfd);
+            }
+
+            /* The VIC wrote through the device side; our cache still holds the
+             * zeros we just stored. Without this invalidate the read-back is
+             * guaranteed to look empty no matter what the engine did. */
+            armDCacheFlush(g_vic_dst_buf, DstSize);
+
+            u32 sum = 0, nz = 0;
+            for (u32 i = 0; i < DstSize; i++) { sum += g_vic_dst_buf[i]; if (g_vic_dst_buf[i]) { nz++; } }
+            char hex[3 * 32 + 1];
+            int k = 0;
+            for (u32 i = 0; i < 32; i++) { k += std::snprintf(hex + k, sizeof(hex) - k, "%02x ", g_vic_dst_buf[i]); }
+            LogLine("   [%s] dst sum32=%u nonzero=%u/%u  %s", stage, sum, nz, DstSize,
+                    (nz > 0) ? "*** WROTE PIXELS ***" : "(empty)");
+            LogLine("   [%s] dst[0..32]: %s", stage, hex);
+            const u8 *mid = g_vic_dst_buf + (DstH / 2) * DstPitch;
+            LogLine("   [%s] row %u: %02x %02x %02x %02x %02x %02x %02x %02x",
+                    stage, DstH / 2, mid[0], mid[1], mid[2], mid[3], mid[4], mid[5], mid[6], mid[7]);
+        }
+
 
     }
 
@@ -413,127 +544,16 @@ namespace ams::mitm::applet {
             LogLine("   pinned: cfg=0x%x dst=0x%x src=0x%x (+slot off 0x%x)", cfg_addr, dst_addr, src_addr, src_off);
         }
 
-        VicStage("vb:9_fill_config");
-        FillBlitConfig(reinterpret_cast<vic::VicConfigStruct *>(g_vic_cfg_buf));
-
-        u32 words;
-        VicStage("vb:10_build_cmdbuf");
-        words = BuildCmdbuf(reinterpret_cast<u32 *>(g_vic_cmd_buf), g_vic_execute,
-                            cfg_addr, dst_addr, src_addr + src_off);
-        words = AppendIncrSyncpt(reinterpret_cast<u32 *>(g_vic_cmd_buf), words, syncpt, g_vic_execute);
-        LogLine("   cmdbuf words=%u  execute=%d  incr_syncpt=%u cond=%s  src_off=0x%x slot=%u",
-                words, static_cast<int>(g_vic_execute), syncpt,
-                g_vic_execute ? "OP_DONE" : "IMMEDIATE", src_off, sidx);
-
-        /* pre-blit dst state */
-        {
-            u32 sum = 0, nz = 0;
-            for (u32 i = 0; i < DstSize; i++) { sum += g_vic_dst_buf[i]; if (g_vic_dst_buf[i]) nz++; }
-            LogLine("   dst pre-blit: sum32=%u nonzero=%u", sum, nz);
-        }
-
-        u32 fence_val;
-        VicStage("vb:11_SUBMIT");
-        {
-            /* Flat, exactly-sized submit arg (the ioctl request code encodes
-             * the total size, so it must match the payload byte-for-byte):
-             *   u32 num_cmdbufs, num_relocs, num_syncpt_incrs, num_fences
-             *   cmdbuf[1]        {mem, offset, words}
-             *   reloc[nr]        {cmdbuf_mem, cmdbuf_offset, target, target_offset}
-             *   reloc_shift[nr]  {shift}
-             *   syncpt_incr[1]   {id, incrs, rsvd[3]}
-             *   u32 fence_threshold[1]  (out)
-             */
-            const u32 nr = 0u;   /* addresses are pinned+inlined, so no reloc list */
-            alignas(8) u8 sb[16 + 12 + 3 * (16 + 4) + 20 + 4] = {};
-            u32 off = 0;
-            auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
-
-            put(1); put(nr); put(1); put(1);
-            put(cmd_handle); put(0); put(words);                          /* cmdbufs[0] */
-            put(syncpt); put(1); put(0); put(0); put(0);                  /* syncpt_incrs[0] */
-            const u32 fence_off = off; put(0);                           /* fence_threshold (out) */
-            const u32 sz = off;
-
-            const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
-            nverr = 0;
-            rc = NvIoctl(vfd, req, sb, sz, std::addressof(nverr));
-            std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
-            LogLine("   SUBMIT req=0x%08x sz=%u nr=%u rc=0x%x nverr=%u -> fence(syncpt=%u,val=%u)",
-                    req, sz, nr, rc, nverr, syncpt, fence_val);
-            if (R_FAILED(rc) || nverr != 0) { VicStage("vb:11_SUBMIT_FAILED"); goto close_vic; }
-        }
-
-        VicStage("vb:12_wait");
-        {
-            u32 cfd, ce;
-            rc = NvOpen("/dev/nvhost-ctrl", std::addressof(cfd), std::addressof(ce));
-            if (R_SUCCEEDED(rc) && ce == 0) {
-                struct { u32 id; u32 thresh; u32 timeout; } a = { syncpt, fence_val, 100 };
-                nverr = 0;
-                rc = NvIoctl(cfd, NvHostIocCtrlSyncptWait, std::addressof(a), sizeof(a), std::addressof(nverr));
-                LogLine("   SYNCPT_WAIT(id=%u thr=%u) rc=0x%x nverr=%u", syncpt, fence_val, rc, nverr);
-
-                struct { u32 id; u32 value; } r = { syncpt, 0 };
-                u32 e2 = 0;
-                NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
-                LogLine("   SYNCPT_READ(id=%u) -> value=%u (want >= %u)", syncpt, r.value, fence_val);
-
-                /* SAFETY NET. Syncpoint 12 is the VIC's, and nvnflinger
-                 * composites on it. If our job somehow still leaves it short of
-                 * the max nvhost raised for us, every other waiter on that
-                 * syncpoint stalls forever - which is exactly how the previous
-                 * run froze the console. Force it up to the fence by hand so a
-                 * bad command stream costs us the probe, not the system. */
-                if (r.value < fence_val) {
-                    VicStage("vb:12_RESCUE_INCR");
-                    const u32 missing = fence_val - r.value;
-                    LogLine("   !! syncpt %u short by %u - forcing increments to unblock other clients",
-                            syncpt, missing);
-                    /* switchbrew documents INCR as _IOW 0x40040015; libnx encodes
-                     * _IOWR. Try the documented one, fall back on the other. */
-                    u32 req = NvHostIocCtrlSyncptIncrW;
-                    for (u32 k = 0; k < missing && k < 64; k++) {
-                        struct { u32 id; } ai = { syncpt };
-                        u32 ae = 0;
-                        NvIoctl(cfd, req, std::addressof(ai), sizeof(ai), std::addressof(ae));
-                        if (k == 0 && ae != 0) {
-                            LogLine("   INCR(_IOW) nverr=%u - retrying as _IOWR", ae);
-                            req = NvHostIocCtrlSyncptIncrWR;
-                            ae  = 0;
-                            NvIoctl(cfd, req, std::addressof(ai), sizeof(ai), std::addressof(ae));
-                            LogLine("   INCR(_IOWR) nverr=%u", ae);
-                        }
-                    }
-                    struct { u32 id; u32 value; } r2 = { syncpt, 0 };
-                    u32 e3 = 0;
-                    NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r2), sizeof(r2), std::addressof(e3));
-                    LogLine("   after rescue: syncpt %u = %u (fence %u)", syncpt, r2.value, fence_val);
-                }
-                NvClose(cfd);
-            }
-        }
-
-        VicStage("vb:13_readback");
-        {
-            u32 sum = 0, nz = 0;
-            for (u32 i = 0; i < DstSize; i++) { sum += g_vic_dst_buf[i]; if (g_vic_dst_buf[i]) nz++; }
-            char hex[3 * 64 + 1];
-            int k = 0;
-            for (u32 i = 0; i < 64 && i < DstSize; i++) {
-                k += std::snprintf(hex + k, sizeof(hex) - k, "%02x ", g_vic_dst_buf[i]);
-            }
-            LogLine("   dst post-blit: sum32=%u nonzero=%u/%u", sum, nz, DstSize);
-            LogLine("   dst[0..64]: %s", hex);
-            /* a couple of interior rows too */
-            const u32 rows[2] = { DstH / 2, DstH - 1 };
-            for (u32 ri = 0; ri < 2; ri++) {
-                const u8 *r = g_vic_dst_buf + rows[ri] * DstPitch;
-                LogLine("   row %u: %02x %02x %02x %02x  %02x %02x %02x %02x",
-                        rows[ri], r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
-            }
-            VicStage("vb:VIC_BLIT_DONE");
-        }
+        RunOneJob("vb:job_fill", VicJob::Fill,
+                  JobCtx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, src_addr, src_off,
+                          cfg_handle, dst_handle, src_handle });
+        RunOneJob("vb:job_blit_direct", VicJob::BlitDirect,
+                  JobCtx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, src_addr, src_off,
+                          cfg_handle, dst_handle, src_handle });
+        RunOneJob("vb:job_blit_reloc", VicJob::BlitReloc,
+                  JobCtx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, src_addr, src_off,
+                          cfg_handle, dst_handle, src_handle });
+        VicStage("vb:ALL_JOBS_DONE");
 
     close_vic:
         if (cfg_addr != 0) { UnmapCmdBuffer(vfd, cfg_handle); }
