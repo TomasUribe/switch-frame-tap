@@ -79,6 +79,40 @@ Cause: `src` pins to `phys=0`, so the reloc pointed the engine at
 `0 + 0x10E0000`. **Pointing the VIC at a bad source address is not a cheap
 mistake — it wedges the console.**
 
+## M17 run — byte order pinned down, and relocs proven inert
+
+**Output byte order (settled).** Asked `A=1023(0xFF) R=768(0xC0) G=512(0x80)
+B=256(0x40)`, got `ff c0 80 40` repeating. So `OutPixelFormat = 33` writes
+memory byte order **A, R, G, B** — i.e. `AV_PIX_FMT_ARGB` for the receiver.
+
+**Relocs do nothing here.**
+```
+[job_fill]        resolved addrs: cfg=0x00e31c00 dst=0x00e31e00   <- values we wrote
+[job_reloc_probe] resolved addrs: cfg=0x00000000 dst=0x00000000 src=0x00000000
+```
+All three still zero — including `cfg` and `dst`, whose handles pin perfectly.
+So our command buffer is never patched.
+
+That **reframes the M16 freeze**: it was not merely `src=0`. In the reloc path
+`cfg` was 0 too, so the VIC read its *config struct* from address 0 — garbage
+config, hung engine, dead compositor.
+
+**Source pinning is refused three ways:** `is_compr=0`, `is_compr=1` and
+`MAP_CMD_BUFFER_EX` all return `nverr=0` with `phys=0x0`. Plausibly deliberate:
+addresses are disclosed for handles we own, withheld for another process's.
+
+## M18 — separate "can we blit at all" from "can we reach the game's memory"
+
+| job | purpose |
+|---|---|
+| `vb:job_fill_direct` | control, known good |
+| `vb:job_fill_reloc` | same fill with cfg+dst as **relocs**. Says whether nvservices patches a private copy (fill works) or relocs are simply inert (nothing). Safe — a fill has no source to aim anywhere bad. |
+| `vb:job_blit_self` | **a real blit from a 4th heap buffer WE own**, CPU-painted with a ramp (`A=FF, R=x*4, G=y*4, B=11`). Exercises `SlotConfig`, `SlotSurfaceConfig`, rects and the source read path against a known-good address. |
+| `vb:job_blit_game` | still gated behind `src_addr != 0`. |
+
+If `job_blit_self` reproduces the ramp, the VIC pipeline is **complete** and the
+only remaining problem is reaching the game's pixels.
+
 ## M17 — learn the source address without ever running the engine on it
 
 - `VicJob::RelocProbe`: identical to the blit but with **`EXECUTE` omitted**
