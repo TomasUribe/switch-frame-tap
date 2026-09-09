@@ -18,7 +18,11 @@
 	"service_access": [
 		"fatal:u",
 		"lm",
-		"fsp-srv"
+		"fsp-srv",
+		"nvdrv:s",
+		"nvdrv",
+		"nvdrv:a",
+		"nvdrv:t"
 	],
 	"service_host": [
 		"vi:u"

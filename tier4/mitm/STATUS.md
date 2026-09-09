@@ -105,8 +105,50 @@ read as garbage while `width`/`height`/`size` still looked right. Fixed, with
 offset static_asserts (`layout` @0x10, `offset` @0x1C, `kind` @0x20,
 `size` @0x38).
 
-**M3c (built, awaiting confirmation run)** — parses it with the corrected layout;
-see `applet_mitm_gbuf.{hpp,cpp}`.
+**M3c CONFIRMED on hardware** — every field decodes cleanly
+(`pitch=7680 B` = 1920x4, offsets exactly 0 / 1x / 2x size,
+`layout=3(BlockLinear)`, `kind=0xfe(Generic_16BX2)`, `block_h_log2=4`,
+`scan=0(Progressive)`). See `applet_mitm_gbuf.{hpp,cpp}`. **M3 is done.**
+
+## M4 (built, awaiting result): open the game's nvmap object
+
+`nvmap_id` is a **cross-process** id — it has to be, because nvnflinger runs in
+a different process and receives this same parcel in order to composite the
+buffer. So `NVMAP_IOC_FROM_ID` on our own nvdrv session should reach the same
+memory. That is exactly how nvnflinger consumes it.
+
+Phase 0 saw a plain sysmodule fatal inside libnx's `nvInitialize()`. Cause:
+`_nvInitialize()` calls `appletGetAppletType()` to choose a service, which is
+meaningless in our context. Fix: override the weak global
+`__nx_nv_service_type = NvServiceType_System` (forces `"nvdrv:s"`, never touches
+applet) and `__nx_nv_transfermem_size = 0x40000` (libnx's 3 MB default would not
+fit our allocator; our ioctls are tiny). **Also had to add `nvdrv:s` to
+`service_access` in applet-mitm.json** — it was not there.
+
+One-shot probe, breadcrumbed at each step: `nvInitialize` -> `nvMapInit` ->
+`nvMapLoadRemote(id)` -> log handle/size. Expected size if it works:
+3 x 8,847,360 = 26,542,080 B (~25 MB) for the whole swapchain.
+
+### After M4 — reading the pixels (the real remaining work)
+
+Getting an nvmap *handle* is not the same as getting a CPU pointer. On the
+Switch, nvmap has no MMAP ioctl: the creating process allocates the backing
+memory itself and nvmap just tracks it. A foreign object's pages are not
+CPU-mapped into us. So expect to need one of:
+
+- **VIC (Video Image Compositor)** via `/dev/nvhost-vic` — purpose-built to read
+  a block-linear surface and write a linear one. This is what nvnflinger uses,
+  and it does the de-swizzle **and** format conversion for free. Best option.
+- **GPU blit** via `/dev/nvhost-gpu` + a channel (deko3d/NVN-style) — more setup.
+- CPU de-swizzle, which still requires the pages mapped somehow.
+
+Phase 0 recon's `probe_nv` can tell us which `/dev/nvhost-*` nodes we can open
+now that we have a working nvdrv session — worth re-running that list from
+inside this module.
+
+Block-linear parameters we already have: GOB is 64x8 bytes,
+`block_height_log2 = 4` (16 GOBs tall), `kind = 0xFE` (Generic_16BX2),
+`pitch = 7680`, surface 1920x1080 stored as 1920x1152.
 Layout pinned with static_asserts: `sizeof(NvGraphicBuffer) == 0x150`,
 `nvmap_id` @0x10, `magic`(0xDAFFCAFF) @0x18, `planes` @0x40,
 `sizeof(NvSurface) == 0x58`. We scan the parcel for the magic and dump

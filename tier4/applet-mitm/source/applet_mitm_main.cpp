@@ -13,6 +13,16 @@
 #include "applet_mitm_service.hpp"
 #include "applet_mitm_log.hpp"
 
+/* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
+ * appletGetAppletType() - that call is meaningless here and is what made a
+ * plain sysmodule fatal on nvInitialize() during Phase 0. Also shrink the
+ * nvdrv transfer memory: we only issue tiny nvmap ioctls, and libnx's 3 MB
+ * default would not fit our allocator. */
+extern "C" {
+    NvServiceType __nx_nv_service_type    = NvServiceType_System;
+    u32           __nx_nv_transfermem_size = 0x40000;
+}
+
 namespace ams {
 
     namespace {
@@ -81,7 +91,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M3c: up. binder tap + NvGraphicBuffer parse (u64 color_format fix).");
+        mitm::applet::LogLine("applet-mitm M4: up. binder tap + NvGraphicBuffer parse + nvmap probe.");
 
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");
