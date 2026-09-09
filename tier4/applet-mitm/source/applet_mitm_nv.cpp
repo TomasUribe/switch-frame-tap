@@ -32,6 +32,9 @@ namespace ams::mitm::applet {
          * scratch for ioctl buffers; ours are a few bytes. */
         alignas(0x1000) constinit u8 g_nv_tmem_buf[0x40000] = {};
 
+        /* Destination for a VIC blit must be memory we own; page-aligned. */
+        alignas(0x1000) constinit u8 g_own_buf[0x10000] = {};
+
         constinit ::Service g_nv_srv = {};
         constinit ::TransferMemory g_nv_tmem = {};
 
@@ -39,7 +42,10 @@ namespace ams::mitm::applet {
         constexpr u32 MakeIowr(u32 type, u32 nr, u32 size) {
             return (UINT32_C(3) << 30) | (size << 16) | (type << 8) | nr;
         }
+        constexpr u32 NvmapIocCreate = MakeIowr(0x01, 0x01, 8);   /* {u32 size; u32 handle;}        */
         constexpr u32 NvmapIocFromId = MakeIowr(0x01, 0x03, 8);   /* {u32 id; u32 handle;}          */
+        constexpr u32 NvmapIocAlloc  = MakeIowr(0x01, 0x04, 32);  /* handle/heapmask/flags/align/kind/addr */
+        constexpr u32 NvmapIocGetId  = MakeIowr(0x01, 0x0E, 8);   /* {u32 id; u32 handle;}          */
         constexpr u32 NvmapIocParam  = MakeIowr(0x01, 0x09, 12);  /* {u32 handle; u32 param; u32 v;} */
         constexpr u32 NvMapParamSize = 1;
         constexpr u32 NvMapParamKind = 5;
@@ -154,9 +160,52 @@ namespace ams::mitm::applet {
             }
         }
 
+        LogMark("nv:8_own_buffer");
+        {
+            /* The VIC's destination must be memory WE own: an nvmap object we
+             * create is backed by our own pages, so we can read it directly
+             * (unlike an imported handle, which has no CPU mapping). Prove the
+             * CREATE + ALLOC + GET_ID round trip on a small buffer. */
+            u32 own_handle = 0, own_id = 0, nverr = 0;
+
+            struct { u32 size; u32 handle; } cr = { static_cast<u32>(sizeof(g_own_buf)), 0 };
+            rc = NvIoctl(fd, NvmapIocCreate, std::addressof(cr), sizeof(cr), std::addressof(nverr));
+            LogLine("   CREATE(0x%zx) rc=0x%x nverr=%u -> handle=%u", sizeof(g_own_buf), rc, nverr, cr.handle);
+            own_handle = cr.handle;
+
+            if (R_SUCCEEDED(rc) && nverr == 0) {
+                struct {
+                    u32 handle; u32 heapmask; u32 flags; u32 align;
+                    u8 kind; u8 pad[7]; u64 addr;
+                } al = {};
+                al.handle   = own_handle;
+                al.heapmask = 0;
+                al.flags    = 0;                 /* 0 = read/write */
+                al.align    = 0x1000;
+                al.kind     = 0;                 /* Pitch (linear) */
+                al.addr     = reinterpret_cast<u64>(g_own_buf);
+                nverr = 0;
+                rc = NvIoctl(fd, NvmapIocAlloc, std::addressof(al), sizeof(al), std::addressof(nverr));
+                LogLine("   ALLOC(handle=%u, cpu=%p, linear) rc=0x%x nverr=%u",
+                        own_handle, static_cast<void *>(g_own_buf), rc, nverr);
+
+                struct { u32 id; u32 handle; } gi = { 0, own_handle };
+                nverr = 0;
+                rc = NvIoctl(fd, NvmapIocGetId, std::addressof(gi), sizeof(gi), std::addressof(nverr));
+                LogLine("   GET_ID(handle=%u) rc=0x%x nverr=%u -> id=%u", own_handle, rc, nverr, gi.id);
+                own_id = gi.id;
+
+                /* CPU write/read-back proves we really own these pages. */
+                g_own_buf[0] = 0xA5; g_own_buf[1] = 0x5A;
+                g_own_buf[sizeof(g_own_buf) - 1] = 0xC3;
+                LogLine("   cpu readback: %02x %02x ... %02x  (own_id=%u)",
+                        g_own_buf[0], g_own_buf[1], g_own_buf[sizeof(g_own_buf) - 1], own_id);
+            }
+        }
+
         /* Release everything. A probe must not hold an nvdrv session or a
          * handle on the game's buffer - doing so is what wedged homebrew. */
-        LogMark("nv:8_cleanup");
+        LogMark("nv:9_cleanup");
         serviceClose(std::addressof(g_nv_srv));
         tmemClose(std::addressof(g_nv_tmem));
 
