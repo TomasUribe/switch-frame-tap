@@ -217,14 +217,24 @@ static void probe_mmio(u32 flags)
 
 void run_probes(u32 f, int pass)
 {
+    /* Ordered safest/highest-value first so a crash in a later probe still
+     * leaves the earlier results in the log. apm is dead last: in v1 it
+     * fatalled `am` with LimitReached. */
     if (pass == 0) {
         if (f & P_SYS) probe_sys();
-        if (f & P_APM) probe_apm();
+        if (f & P_PSM) probe_psm();
         if (f & P_NV)  probe_nv(f);
-        if (f & (P_MMIO_MAP | P_MMIO_READ)) probe_mmio(f);
     }
-    if (f & P_PSM)         probe_psm();
     if (f & P_CAPS_JPEG)   probe_caps_jpeg();
     if (f & P_CAPS_RAW)    probe_caps_raw();
     if (f & P_CAPS_STREAM) probe_caps_stream();
+
+    if (pass == 0) {
+        if (f & (P_MMIO_MAP | P_MMIO_READ)) probe_mmio(f);
+        if (f & P_APM) {
+            rlog("NOTE: apm crashed am in v1. If the console fatals here, that is why.");
+            probe_apm();
+        }
+    }
+    if ((f & P_PSM) && pass > 0) probe_psm();   /* loop mode: re-sample charger */
 }

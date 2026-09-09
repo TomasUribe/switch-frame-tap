@@ -83,7 +83,8 @@ static u32 keyword(const char *w)
     if (!strcmp(w, "mmio_map"))    return P_MMIO_MAP;
     if (!strcmp(w, "mmio_read"))   return P_MMIO_MAP | P_MMIO_READ;
     if (!strcmp(w, "loop"))        return P_LOOP;
-    if (!strcmp(w, "all_safe"))    return P_SYS | P_PSM | P_APM | P_NV | P_CAPS_JPEG;
+    /* NB: apm is NOT in all_safe - v1 fatalled am inside apmInitialize/apmGetPerformanceMode */
+    if (!strcmp(w, "all_safe"))    return P_SYS | P_PSM | P_NV | P_CAPS_JPEG;
     return 0;
 }
 

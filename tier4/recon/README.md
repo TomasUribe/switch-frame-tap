@@ -51,10 +51,10 @@ sdmc:/atmosphere/contents/0100000000000C00/flags/boot2.flag <- empty file
 |---|---|---|
 | `sys` | firmware, model, ticks | safe |
 | `psm` | charger type, battery | safe |
-| `apm` | performance mode | safe |
 | `nv` | open `/dev/nvhost-*`, `/dev/nvmap` | safe-ish |
 | `caps_jpeg` | `capsscCaptureJpegScreenShot` (Recording / Default / Screenshot stacks) | medium |
-| `all_safe` | = `sys psm apm nv caps_jpeg` | medium |
+| `all_safe` | = `sys psm nv caps_jpeg` | medium |
+| `apm` | performance mode — **fatalled `am` in v1**, kept only for a controlled retry | **risky** |
 | `loop` | repeat the caps probes ~20x (15 s apart) — good for game vs HOME comparison | — |
 | `nv_disp` | also try `/dev/nvdisp-*` | **risky** |
 | `caps_raw` | hand-rolled `caps:sc` cmd 2 | **risky** |
