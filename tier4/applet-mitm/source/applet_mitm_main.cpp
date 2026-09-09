@@ -73,8 +73,11 @@ namespace ams {
         void HeartbeatThread(void *) {
             for (u32 i = 1; ; i++) {
                 os::SleepThread(TimeSpan::FromSeconds(3));
-                char b[32];
-                std::snprintf(b, sizeof(b), "hb:%u", i);
+                char b[96];
+                const auto &st = mitm::applet::g_stats;
+                std::snprintf(b, sizeof(b), "hb:%u sess=%u getdisp=%u relay=%u txn=%u",
+                              i, st.sessions.load(), st.getdisp.load(),
+                              st.relay.load(), st.txns.load());
                 mitm::applet::LogMark(b);
             }
         }
@@ -103,6 +106,7 @@ namespace ams {
             std::shared_ptr<::Service> fsrv;
             sm::MitmProcessInfo client_info;
             server->AcknowledgeMitmSession(std::addressof(fsrv), std::addressof(client_info));
+            mitm::applet::g_stats.sessions.fetch_add(1);
 
             mitm::applet::LogLine("OnNeedsToAccept port=%d program=%016llx", port_index,
                                   static_cast<unsigned long long>(client_info.program_id.value));

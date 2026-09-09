@@ -45,6 +45,7 @@ namespace ams::mitm::applet {
     Result BinderMitm::TransactParcelAuto(s32 session_id, u32 code, u32 flags, const sf::InAutoSelectBuffer &parcel_in, const sf::OutAutoSelectBuffer &parcel_out) {
         const u32 total = g_txn_total.fetch_add(1) + 1;
         const u32 per   = (code < 16) ? (g_txn_per_code[code].fetch_add(1) + 1) : 0;
+        g_stats.txns.store(total, std::memory_order_relaxed);
 
         /* first 3 of each code, then a heartbeat every 600 transactions */
         if (per <= 3 || (total % 600) == 0) {
@@ -101,6 +102,7 @@ namespace ams::mitm::applet {
     /* ---- IApplicationDisplayService ----------------------------------- */
 
     Result ViDisplaySvcMitm::GetRelayService(sf::Out<sf::SharedPointer<IBinderMitm>> out) {
+        g_stats.relay.fetch_add(1);
         LogMark("GetRelayService:enter");
 
         ::Service binder_svc = {};
@@ -142,6 +144,7 @@ namespace ams::mitm::applet {
     /* ---- vi:u root ---------------------------------------------------- */
 
     Result ViRootMitm::GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode) {
+        g_stats.getdisp.fetch_add(1);
         LogMark("GetDisplayService:enter");
         LogLine("   program=%016llx mode=%u",
                 static_cast<unsigned long long>(m_client_info.program_id.value), mode);

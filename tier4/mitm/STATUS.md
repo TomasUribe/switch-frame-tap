@@ -43,7 +43,46 @@ touches NAND.
 - Channel devices are **one fd per session** — a leaked survey fd made the real
   open fail `nverr=4096`. The survey now closes each fd.
 
-## M8 — VIC CHANNEL_SUBMIT blit (awaiting hardware test)
+## M8/M8b blackout — what it was NOT (two hardware runs)
+
+Both builds went **completely silent after `registered mitm server for vi:u`**
+while the system wedged on `vi` (force power-off needed). Ruled out so far:
+
+| Theory | Verdict |
+|---|---|
+| Build didn't pick up the sources | **No** — every new format string is in the shipped ELF (`strings`) |
+| `.bss` growth tipped a memory limit | **No** — M7d `.bss` = 1,453,824; M8b = **1,441,536**, i.e. *smaller* than the known-good build |
+| Our new code executed and hung | **Unlikely** — M8b does strictly *less* than M7d before frame 300, and never logged even `GetDisplayService` |
+| MTP showed a stale copy | **No** — `.log` is byte-exactly the two boot lines (150 B) |
+
+Why "no logs" is ambiguous by construction, and why the system wedges either way:
+`sm` blocks **every** `vi:u` open on our mitm query port, so a dead `LoopProcess`
+freezes the system identically to a hung handler — and neither writes a line.
+A forced power-off can also lose the `.log` tail before FAT commits, so absence
+of logs may not even mean absence of logging.
+
+**M9 is the instrument for this**, not another guess: see below.
+
+## M9 — heartbeat + opt-in arm gate
+
+- **Heartbeat thread** (3 s, independent of the dispatch path) writes
+  `hb:<n> sess=<n> getdisp=<n> relay=<n> txn=<n>` via `LogMark`, which rewrites
+  `.last` whole — so it survives a hard power cut and bounds process lifetime.
+- **Opt-in**: nothing touches nvdrv/VIC unless `sdmc:/applet-mitm.armed`
+  contains `vic`. The default build is a pure observer == M7d behaviour.
+- `main:heartbeat_started` / `main:LoopProcess` / `main:LoopProcess_RETURNED` marks.
+
+Reading the result:
+
+| `.last` after the run | Meaning |
+|---|---|
+| `LogInit` only | died before `Main` got going — logger or very early abort |
+| `main:LoopProcess`, no `hb:` | heartbeat thread never ran |
+| `hb:N` climbing, `sess=0` | **process alive, never receives a session** — the mitm/query routing is the problem, not our handlers |
+| `hb:N`, `sess>0`, `getdisp>0`, `txn` climbing | module is fine; the `.log` loss was a flush/power-cut artifact |
+| `hb:` stops at N | process died at ~3N seconds |
+
+## M8 — VIC CHANNEL_SUBMIT blit (built, gated behind the arm file)
 
 `applet_mitm_nv.cpp::TryVicBlit()` + `vic40_config.hpp`. On queueBuffer #>300
 (real content on screen), one-shot:

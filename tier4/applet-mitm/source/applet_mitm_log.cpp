@@ -4,6 +4,8 @@
 
 namespace ams::mitm::applet {
 
+    constinit Stats g_stats = {};
+
     namespace {
 
         constexpr const char *LogPath  = "sdmc:/applet-mitm.log";
