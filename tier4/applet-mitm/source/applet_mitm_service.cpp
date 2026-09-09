@@ -3,16 +3,16 @@
 
 namespace ams::mitm::applet {
 
-    Result AppletMitmService::OpenApplicationProxy(sf::Out<sf::SharedPointer<IApplicationProxyStub>> out, u64 reserved, const sf::ClientProcessId &client_pid, sf::CopyHandle &&process_handle) {
-        AMS_UNUSED(out, reserved, process_handle);
-
-        LogLine("OpenApplicationProxy: program=%016llx  pid=%llu",
-                static_cast<unsigned long long>(m_client_info.program_id.value),
-                static_cast<unsigned long long>(client_pid.GetValue().value));
-
-        /* M1: forward untouched. libstratosphere replays the request to the real
-         * appletOE and returns its IApplicationProxy handle to the client. */
-        R_RETURN(sm::mitm::ResultShouldForwardToSession());
+    bool AppletMitmService::ShouldMitm(const sm::MitmProcessInfo &client_info) {
+        const bool is_app = ncm::IsApplicationId(client_info.program_id) && !client_info.override_status.IsHbl();
+        if (is_app) {
+            LogLine("appletOE client: program=%016llx  (application)",
+                    static_cast<unsigned long long>(client_info.program_id.value));
+        }
+        /* Returning false = we don't mitm this client at all, cleanest possible.
+         * M1 only needs the observation above; flip to `is_app` in M2 when we
+         * actually wrap the proxy chain. */
+        return false;
     }
 
 }
