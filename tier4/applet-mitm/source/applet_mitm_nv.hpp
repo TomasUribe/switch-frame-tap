@@ -12,6 +12,7 @@
  */
 #pragma once
 #include <stratosphere.hpp>
+#include <atomic>
 #include "applet_mitm_gbuf.hpp"
 
 namespace ams::mitm::applet {
@@ -35,15 +36,27 @@ namespace ams::mitm::applet {
     /* Record one setPreallocatedBuffer's NvGraphicBuffer into g_game_surface. */
     void CaptureGameSurface(const NvGraphicBufferRaw *gb, u32 which);
 
-    /* Opt-in gate. Nothing in this file touches nvdrv unless the SD card holds
-     * sdmc:/applet-mitm.armed containing the keyword "vic". Set once at
-     * startup from Main(). Default false = the module is a pure observer. */
+    /* Opt-in gates, parsed once at startup from sdmc:/applet-mitm.armed:
+     *   "vic"        -> g_vic_armed:   run the probe at all
+     *   "exec"       -> g_vic_execute: push the real VIC blit (Phase B) rather
+     *                   than a no-op cmdbuf that only exercises the submit ABI
+     * Default (no file) = pure observer, byte-for-byte M7d behaviour. */
     extern bool g_vic_armed;
+    extern bool g_vic_execute;
 
-    /* One-shot: bring up nvdrv + VIC, blit slot `slot` of the captured
-     * swapchain into our linear buffer, wait, checksum, release. Safe to call
-     * every queueBuffer - it self-disables after the first run, and is a no-op
-     * unless g_vic_armed. */
-    void TryVicBlit(s32 slot);
+    /* Current probe step, for the heartbeat to snapshot into .last. A run that
+     * wedges therefore names the exact ioctl it wedged on. */
+    extern std::atomic<const char *> g_vic_stage;
+
+    /* Spawn the worker. The VIC probe MUST NOT run on the binder dispatch
+     * thread: doing so blocks the game's queueBuffer, which wedges vi, which
+     * forces a power-off, which loses the very log we need. M8b died exactly
+     * that way. The worker owns all nvdrv work; a hang there costs us the
+     * probe, not the console. */
+    void StartVicWorker();
+
+    /* Called from the binder thread. Records the slot and returns immediately -
+     * never blocks, never touches nvdrv. */
+    void RequestVicBlit(s32 slot);
 
 }

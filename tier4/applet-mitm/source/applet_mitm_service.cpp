@@ -90,9 +90,9 @@ namespace ams::mitm::applet {
                         std::memcpy(std::addressof(qslot), p + data_off, sizeof(qslot));
                     }
                 }
-                LogMark("binder:vic_blit_trigger");
-                LogLine("   queueBuffer txn#%u parcel=%zu slot=%d", total, psz, qslot);
-                TryVicBlit(qslot);
+                LogMark("binder:vic_blit_requested");
+                LogLine("   queueBuffer txn#%u parcel=%zu slot=%d -> handed to VIC worker", total, psz, qslot);
+                RequestVicBlit(qslot);
             }
         }
 

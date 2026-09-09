@@ -43,6 +43,31 @@ touches NAND.
 - Channel devices are **one fd per session** — a leaked survey fd made the real
   open fail `nverr=4096`. The survey now closes each fd.
 
+## The M8/M8b blackout — SOLVED (M9 observer run, verified)
+
+The module was never broken. **Two symptoms, one cause:**
+
+1. `TryVicBlit` ran **on the game's binder dispatch thread**. It blocked there,
+   so `queueBuffer` never returned → `vi` wedged → whole system froze.
+2. That forced a power-off, and **the power-off ate the log**. A forced cut
+   loses the `.log` tail before FAT commits — leaving exactly the 150 bytes
+   written at t≈9.3 s. "No logs" never meant "no logging".
+
+Timing confirms it: the trigger condition `txn > 300` lands at **t≈40 s**, ~8 s
+into rendering — the title screen, exactly where M8b froze.
+
+**M9 observer run (clean shutdown) was perfect:** `sess=1 getdisp=1 relay=1
+txn=6251`, heartbeat to 103 s, and a **rock-steady 60.0 fps for a full minute**
+(120.4 / 119.0 / 120.9 … txn/s). All three swapchain slots captured: nvmap 1268,
+1920×1080, pitch 7680, kind 0xFE, `block_h_log2=4`, pixfmt 33 (A8B8G8R8),
+offsets `0x0` / `0x870000` / `0x10E0000`. The mitm chain is transparent.
+
+**Rule going forward: nothing that can block runs on the binder thread.**
+
+### Test protocol (learned the hard way)
+Always **exit the game and power off from the menu**. If the console does wedge,
+`.last` is the only reliable evidence — it is rewritten whole on every mark.
+
 ## M8/M8b blackout — what it was NOT (two hardware runs)
 
 Both builds went **completely silent after `registered mitm server for vi:u`**

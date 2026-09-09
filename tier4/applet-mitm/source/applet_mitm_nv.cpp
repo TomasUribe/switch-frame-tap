@@ -38,7 +38,9 @@
 namespace ams::mitm::applet {
 
     constinit GameSurface g_game_surface = {};
-    constinit bool g_vic_armed = false;
+    constinit bool g_vic_armed   = false;
+    constinit bool g_vic_execute = false;
+    constinit std::atomic<const char *> g_vic_stage{"idle"};
 
     namespace {
 
@@ -54,11 +56,6 @@ namespace ams::mitm::applet {
         alignas(0x1000) constinit u8 g_vic_cfg_buf[0x4000] = {};   /* VicConfigStruct (1552 B) */
         alignas(0x1000) constinit u8 g_vic_cmd_buf[0x1000] = {};   /* host1x pushbuf           */
         alignas(0x1000) constinit u8 g_vic_dst_buf[0x8000] = {};   /* linear output           */
-
-        /* Phase A: prove the CHANNEL_SUBMIT ABI + syncpoint path with a no-op
-         * cmdbuf (SET_APPLICATION_ID only, no relocs, no EXECUTE) - this cannot
-         * fault the VIC engine. Flip to true once Phase A comes back clean. */
-        constexpr bool kVicDoExecute = false;
 
         /* Phase B geometry: a scale-free 64x64 crop of the frame's top-left. */
         constexpr u32 DstW        = 64;
@@ -88,6 +85,12 @@ namespace ams::mitm::applet {
         constexpr u32 NvHostIocChannelSetNvmapFd    = MakeIow (0x48, 0x01, 4);   /* {u32 fd}  -> 0x40044801       */
         constexpr u32 NvHostIocCtrlSyncptRead       = MakeIowr(0x00, 0x14, 8);   /* {u32 id; u32 value}           */
         constexpr u32 NvHostIocCtrlSyncptWait       = MakeIowr(0x00, 0x16, 12);  /* {u32 id; u32 thresh; u32 to}  */
+
+        /* breadcrumb + stage, so the heartbeat can name where a hang happened */
+        void VicStage(const char *s) {
+            g_vic_stage.store(s, std::memory_order_relaxed);
+            LogMark(s);
+        }
 
         ::Result NvIoctl(u32 fd, u32 request, void *argp, size_t argsz, u32 *out_err) {
             const struct { u32 fd; u32 request; } in = { fd, request };
@@ -248,7 +251,13 @@ namespace ams::mitm::applet {
                 g_game_surface.pix_format, g_game_surface.num_slots);
     }
 
-    void TryVicBlit(s32 slot) {
+    namespace {
+
+        constinit std::atomic<s32> g_vic_pending{-1};
+        alignas(os::ThreadStackAlignment) constinit u8 g_vic_stack[32_KB];
+        constinit os::ThreadType g_vic_thread;
+
+    void RunVicBlit(s32 slot) {
         if (!g_vic_armed || !g_game_surface.armed) { return; }
         bool expected = false;
         if (!g_blit_done.compare_exchange_strong(expected, true)) { return; }
@@ -257,66 +266,66 @@ namespace ams::mitm::applet {
                        ? static_cast<u32>(slot) : 0;
         const u32 src_off = g_game_surface.slot_offset[sidx];
 
-        LogMark("vb:1_smGetService");
+        VicStage("vb:1_smGetService");
         ::Result rc = smGetService(std::addressof(g_nv_srv), "nvdrv:s");
         LogLine("   nvdrv:s rc=0x%x", rc);
-        if (R_FAILED(rc)) { LogMark("vb:1_FAILED"); return; }
+        if (R_FAILED(rc)) { VicStage("vb:1_FAILED"); return; }
 
-        LogMark("vb:2_tmem");
+        VicStage("vb:2_tmem");
         rc = tmemCreateFromMemory(std::addressof(g_nv_tmem), g_nv_tmem_buf, sizeof(g_nv_tmem_buf), Perm_None);
-        if (R_FAILED(rc)) { LogMark("vb:2_FAILED"); serviceClose(std::addressof(g_nv_srv)); return; }
+        if (R_FAILED(rc)) { VicStage("vb:2_FAILED"); serviceClose(std::addressof(g_nv_srv)); return; }
 
-        LogMark("vb:3_Initialize");
+        VicStage("vb:3_Initialize");
         {
             const u32 tmem_size = static_cast<u32>(sizeof(g_nv_tmem_buf));
             rc = serviceDispatchIn(std::addressof(g_nv_srv), 3, tmem_size,
                 .in_num_handles = 2,
                 .in_handles     = { CUR_PROCESS_HANDLE, g_nv_tmem.handle });
             LogLine("   Initialize rc=0x%x", rc);
-            if (R_FAILED(rc)) { LogMark("vb:3_FAILED"); goto close_sess; }
+            if (R_FAILED(rc)) { VicStage("vb:3_FAILED"); goto close_sess; }
         }
 
         u32 nvmap_fd, nverr;
-        LogMark("vb:4_open_nvmap");
+        VicStage("vb:4_open_nvmap");
         rc = NvOpen("/dev/nvmap", std::addressof(nvmap_fd), std::addressof(nverr));
         LogLine("   /dev/nvmap rc=0x%x fd=%u nverr=%u", rc, nvmap_fd, nverr);
-        if (R_FAILED(rc) || nverr != 0) { LogMark("vb:4_FAILED"); goto close_sess; }
+        if (R_FAILED(rc) || nverr != 0) { VicStage("vb:4_FAILED"); goto close_sess; }
 
         u32 src_handle;
-        LogMark("vb:5_FROM_ID");
+        VicStage("vb:5_FROM_ID");
         {
             struct { u32 id; u32 handle; } a = { g_game_surface.nvmap_id, 0 };
             rc = NvIoctl(nvmap_fd, NvmapIocFromId, std::addressof(a), sizeof(a), std::addressof(nverr));
             LogLine("   FROM_ID(%u) rc=0x%x nverr=%u -> handle=%u", g_game_surface.nvmap_id, rc, nverr, a.handle);
-            if (R_FAILED(rc) || nverr != 0) { LogMark("vb:5_FAILED"); goto close_sess; }
+            if (R_FAILED(rc) || nverr != 0) { VicStage("vb:5_FAILED"); goto close_sess; }
             src_handle = a.handle;
         }
 
         u32 cfg_handle, cfg_id, cmd_handle, cmd_id, dst_handle, dst_id;
-        LogMark("vb:6_alloc_bufs");
+        VicStage("vb:6_alloc_bufs");
         rc = NvmapOwn(nvmap_fd, g_vic_cfg_buf, sizeof(g_vic_cfg_buf), 0, std::addressof(cfg_handle), std::addressof(cfg_id));
-        if (R_FAILED(rc)) { LogMark("vb:6_cfg_FAILED"); goto close_sess; }
+        if (R_FAILED(rc)) { VicStage("vb:6_cfg_FAILED"); goto close_sess; }
         rc = NvmapOwn(nvmap_fd, g_vic_cmd_buf, sizeof(g_vic_cmd_buf), 0, std::addressof(cmd_handle), std::addressof(cmd_id));
-        if (R_FAILED(rc)) { LogMark("vb:6_cmd_FAILED"); goto close_sess; }
+        if (R_FAILED(rc)) { VicStage("vb:6_cmd_FAILED"); goto close_sess; }
         rc = NvmapOwn(nvmap_fd, g_vic_dst_buf, sizeof(g_vic_dst_buf), 0, std::addressof(dst_handle), std::addressof(dst_id));
-        if (R_FAILED(rc)) { LogMark("vb:6_dst_FAILED"); goto close_sess; }
+        if (R_FAILED(rc)) { VicStage("vb:6_dst_FAILED"); goto close_sess; }
         AMS_UNUSED(cfg_id, cmd_id, dst_id);
         AMS_UNUSED(cfg_handle, dst_handle, src_handle, src_off);   /* Phase A: relocs disabled */
 
         u32 vfd, syncpt;
-        LogMark("vb:7_open_vic");
+        VicStage("vb:7_open_vic");
         rc = NvOpen("/dev/nvhost-vic", std::addressof(vfd), std::addressof(nverr));
         LogLine("   /dev/nvhost-vic rc=0x%x fd=%u nverr=%u", rc, vfd, nverr);
-        if (R_FAILED(rc) || nverr != 0) { LogMark("vb:7_FAILED"); goto close_sess; }
+        if (R_FAILED(rc) || nverr != 0) { VicStage("vb:7_FAILED"); goto close_sess; }
         {
             struct { u32 module_id; u32 syncpt; } gs = { 0, 0 };
             rc = NvIoctl(vfd, NvHostIocChannelGetSyncpoint, std::addressof(gs), sizeof(gs), std::addressof(nverr));
             LogLine("   GET_SYNCPOINT rc=0x%x nverr=%u -> syncpt=%u", rc, nverr, gs.syncpt);
-            if (R_FAILED(rc) || nverr != 0) { LogMark("vb:7_syncpt_FAILED"); goto close_vic; }
+            if (R_FAILED(rc) || nverr != 0) { VicStage("vb:7_syncpt_FAILED"); goto close_vic; }
             syncpt = gs.syncpt;
         }
 
-        LogMark("vb:8_set_nvmap_fd");
+        VicStage("vb:8_set_nvmap_fd");
         {
             struct { u32 fd; } a = { nvmap_fd };
             rc = NvIoctl(vfd, NvHostIocChannelSetNvmapFd, std::addressof(a), sizeof(a), std::addressof(nverr));
@@ -328,13 +337,13 @@ namespace ams::mitm::applet {
             LogLine("   SET_SUBMIT_TIMEOUT rc=0x%x nverr=%u", rc, nverr);
         }
 
-        LogMark("vb:9_fill_config");
+        VicStage("vb:9_fill_config");
         FillBlitConfig(reinterpret_cast<vic::VicConfigStruct *>(g_vic_cfg_buf));
 
         u32 words;
-        LogMark("vb:10_build_cmdbuf");
-        words = BuildCmdbuf(reinterpret_cast<u32 *>(g_vic_cmd_buf), kVicDoExecute);
-        LogLine("   cmdbuf words=%u  execute=%d  src_off=0x%x slot=%u", words, (int)kVicDoExecute, src_off, sidx);
+        VicStage("vb:10_build_cmdbuf");
+        words = BuildCmdbuf(reinterpret_cast<u32 *>(g_vic_cmd_buf), g_vic_execute);
+        LogLine("   cmdbuf words=%u  execute=%d  src_off=0x%x slot=%u", words, (int)g_vic_execute, src_off, sidx);
 
         /* pre-blit dst state */
         {
@@ -344,7 +353,7 @@ namespace ams::mitm::applet {
         }
 
         u32 fence_val;
-        LogMark("vb:11_SUBMIT");
+        VicStage("vb:11_SUBMIT");
         {
             /* Flat, exactly-sized submit arg (the ioctl request code encodes
              * the total size, so it must match the payload byte-for-byte):
@@ -355,14 +364,14 @@ namespace ams::mitm::applet {
              *   syncpt_incr[1]   {id, incrs, rsvd[3]}
              *   u32 fence_threshold[1]  (out)
              */
-            const u32 nr = kVicDoExecute ? 3u : 0u;
+            const u32 nr = g_vic_execute ? 3u : 0u;
             alignas(8) u8 sb[16 + 12 + 3 * (16 + 4) + 20 + 4] = {};
             u32 off = 0;
             auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
 
             put(1); put(nr); put(1); put(1);
             put(cmd_handle); put(0); put(words);                          /* cmdbufs[0] */
-            if (kVicDoExecute) {
+            if (g_vic_execute) {
                 put(cmd_handle); put(8  * 4); put(cfg_handle); put(0);        /* reloc cfg */
                 put(cmd_handle); put(11 * 4); put(dst_handle); put(0);        /* reloc dst */
                 put(cmd_handle); put(14 * 4); put(src_handle); put(src_off);  /* reloc src */
@@ -378,10 +387,10 @@ namespace ams::mitm::applet {
             std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
             LogLine("   SUBMIT req=0x%08x sz=%u nr=%u rc=0x%x nverr=%u -> fence(syncpt=%u,val=%u)",
                     req, sz, nr, rc, nverr, syncpt, fence_val);
-            if (R_FAILED(rc) || nverr != 0) { LogMark("vb:11_SUBMIT_FAILED"); goto close_vic; }
+            if (R_FAILED(rc) || nverr != 0) { VicStage("vb:11_SUBMIT_FAILED"); goto close_vic; }
         }
 
-        LogMark("vb:12_wait");
+        VicStage("vb:12_wait");
         {
             u32 cfd, ce;
             rc = NvOpen("/dev/nvhost-ctrl", std::addressof(cfd), std::addressof(ce));
@@ -399,7 +408,7 @@ namespace ams::mitm::applet {
             }
         }
 
-        LogMark("vb:13_readback");
+        VicStage("vb:13_readback");
         {
             u32 sum = 0, nz = 0;
             for (u32 i = 0; i < DstSize; i++) { sum += g_vic_dst_buf[i]; if (g_vic_dst_buf[i]) nz++; }
@@ -417,7 +426,7 @@ namespace ams::mitm::applet {
                 LogLine("   row %u: %02x %02x %02x %02x  %02x %02x %02x %02x",
                         rows[ri], r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
             }
-            LogMark("vb:VIC_BLIT_DONE");
+            VicStage("vb:VIC_BLIT_DONE");
         }
 
     close_vic:
@@ -425,7 +434,35 @@ namespace ams::mitm::applet {
     close_sess:
         serviceClose(std::addressof(g_nv_srv));
         tmemClose(std::addressof(g_nv_tmem));
-        LogMark("vb:released");
+        VicStage("vb:released");
+    }
+
+        void VicWorkerThread(void *) {
+            for (;;) {
+                os::SleepThread(TimeSpan::FromMilliSeconds(200));
+                const s32 slot = g_vic_pending.exchange(-1, std::memory_order_acq_rel);
+                if (slot >= 0) {
+                    RunVicBlit(slot);
+                }
+            }
+        }
+
+    }
+
+    void StartVicWorker() {
+        if (!g_vic_armed) { return; }
+        R_ABORT_UNLESS(os::CreateThread(std::addressof(g_vic_thread), VicWorkerThread, nullptr,
+                                        g_vic_stack, sizeof(g_vic_stack),
+                                        os::GetThreadPriority(os::GetCurrentThread())));
+        os::SetThreadNamePointer(std::addressof(g_vic_thread), "applet-mitm.VIC");
+        os::StartThread(std::addressof(g_vic_thread));
+        g_vic_stage.store("waiting", std::memory_order_relaxed);
+        LogLine("VIC worker started (execute=%s)", g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
+    }
+
+    void RequestVicBlit(s32 slot) {
+        /* binder thread: hand off and get out. */
+        g_vic_pending.store(slot, std::memory_order_release);
     }
 
 }

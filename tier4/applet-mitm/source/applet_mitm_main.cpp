@@ -75,9 +75,10 @@ namespace ams {
                 os::SleepThread(TimeSpan::FromSeconds(3));
                 char b[96];
                 const auto &st = mitm::applet::g_stats;
-                std::snprintf(b, sizeof(b), "hb:%u sess=%u getdisp=%u relay=%u txn=%u",
+                std::snprintf(b, sizeof(b), "hb:%u sess=%u getdisp=%u relay=%u txn=%u vic=%s",
                               i, st.sessions.load(), st.getdisp.load(),
-                              st.relay.load(), st.txns.load());
+                              st.relay.load(), st.txns.load(),
+                              mitm::applet::g_vic_stage.load(std::memory_order_relaxed));
                 mitm::applet::LogMark(b);
             }
         }
@@ -147,11 +148,13 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M9: up. Observer by default; heartbeat every 3s.");
+        mitm::applet::LogLine("applet-mitm M10: up. VIC probe on its own worker thread; observer by default.");
 
-        mitm::applet::g_vic_armed = ArmFileContains("vic");
-        mitm::applet::LogLine("arm file: vic=%s  (sdmc:/applet-mitm.armed)",
-                              mitm::applet::g_vic_armed ? "ARMED" : "absent - observer only");
+        mitm::applet::g_vic_armed   = ArmFileContains("vic");
+        mitm::applet::g_vic_execute = ArmFileContains("exec");
+        mitm::applet::LogLine("arm file (sdmc:/applet-mitm.armed): vic=%s exec=%s",
+                              mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
+                              mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
 
         /* start the heartbeat before anything that can block */
         R_ABORT_UNLESS(os::CreateThread(std::addressof(g_hb_thread), HeartbeatThread, nullptr,
@@ -160,6 +163,8 @@ namespace ams {
         os::SetThreadNamePointer(std::addressof(g_hb_thread), "applet-mitm.HB");
         os::StartThread(std::addressof(g_hb_thread));
         mitm::applet::LogMark("main:heartbeat_started");
+
+        mitm::applet::StartVicWorker();
 
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");
