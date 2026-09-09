@@ -1,17 +1,18 @@
 /*
- * applet-mitm - Track B / M2 diagnostic D2
+ * applet-mitm - Track B / M2 diagnostic D3
  *
- * Empty command list (zero intercepts) but ShouldMitm() returns TRUE for game
- * clients, so sm actually routes the game's appletOE session through us and
- * every command auto-forwards. Purpose: determine whether mitm'ing appletOE at
- * all is what breaks games, independent of any handler we write.
+ * appletOE mitm is dead (one-session-only service; transparent mitm still
+ * breaks game launch). Next candidate: vi:u, which games use for layer setup
+ * (OpenLayer carries layer_id + AppletResourceUserId) and which is NOT
+ * session-limited. D3: transparent mitm of vi:u for game clients - do games
+ * still launch?
  */
 #pragma once
 #include <stratosphere.hpp>
 
 #define AMS_APPLET_MITM_INTERFACE_INFO(C, H)
 
-AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IAppletMitmInterface, AMS_APPLET_MITM_INTERFACE_INFO, 0x2AB1E010)
+AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IAppletMitmInterface, AMS_APPLET_MITM_INTERFACE_INFO, 0x2AB1E020)
 
 namespace ams::mitm::applet {
 

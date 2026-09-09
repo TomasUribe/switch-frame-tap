@@ -21,7 +21,7 @@
 		"fsp-srv"
 	],
 	"service_host": [
-		"appletOE"
+		"vi:u"
 	],
 	"kernel_capabilities": [
 		{

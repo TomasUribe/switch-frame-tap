@@ -25,7 +25,7 @@ namespace ams {
             PortIndex_Count,
         };
 
-        constexpr sm::ServiceName AppletMitmServiceName = sm::ServiceName::Encode("appletOE");
+        constexpr sm::ServiceName AppletMitmServiceName = sm::ServiceName::Encode("vi:u");
 
         struct ServerOptions {
             static constexpr size_t PointerBufferSize   = 0x1000;
@@ -81,10 +81,10 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M1: up. mitm(appletOE), forwarding all.");
+        mitm::applet::LogLine("applet-mitm D3: up. mitm(vi:u), empty iface, all forward.");
 
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::AppletMitmService>(PortIndex_AppletMitm, AppletMitmServiceName));
-        mitm::applet::LogLine("registered mitm server for appletOE");
+        mitm::applet::LogLine("registered mitm server for vi:u");
 
         g_server_manager.LoopProcess();
     }
