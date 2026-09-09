@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M18: up. Blit from a source WE own - separates blit path from game-buffer access.");
+        mitm::applet::LogLine("applet-mitm M19: up. Relocs removed; zero-address guard; blit from a source we own.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

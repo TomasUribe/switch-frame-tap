@@ -258,7 +258,7 @@ namespace ams::mitm::applet {
          *   BlitReloc  - source address left to nvservices via a reloc, which
          *                knows the game buffer's address even though pinning
          *                would not tell us. */
-        enum class VicJob { Fill, FillReloc, BlitSelf, BlitGame };
+        enum class VicJob { Fill, BlitSelf, BlitGame };
 
         struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt; };
 
@@ -344,7 +344,6 @@ namespace ams::mitm::applet {
         constexpr u32 CfgAddrWord = 8, DstAddrWord = 11, SrcAddrWord = 14;   /* + 1 if SETCL is emitted */
 
         u32 BuildCmdbuf(u32 *w, VicJob job, u32 cfg_addr, u32 dst_addr, u32 src_addr, bool set_class) {
-            const bool reloc    = (job == VicJob::FillReloc);
             const bool has_src  = (job == VicJob::BlitSelf || job == VicJob::BlitGame);
             u32 n = 0;
             /* Point the channel at the VIC's register space before touching
@@ -358,9 +357,9 @@ namespace ams::mitm::applet {
              * The BlitReloc variant instead leaves all three as placeholders and
              * lets nvservices patch them. */
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_CONFIG_STRUCT_OFFSET >> 2;
-            w[n++] = reloc ? 0u : (cfg_addr >> 8);
+            w[n++] = cfg_addr >> 8;
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_OUTPUT_SURFACE_LUMA_OFFSET >> 2;
-            w[n++] = reloc ? 0u : (dst_addr >> 8);
+            w[n++] = dst_addr >> 8;
             if (has_src) {
                 w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_SURFACE0_SLOT0_LUMA_OFFSET >> 2;
                 w[n++] = src_addr >> 8;
@@ -392,15 +391,28 @@ namespace ams::mitm::applet {
         /* One VIC job end to end: config, cmdbuf, submit, wait, rescue, read
          * back. Called once per VicJob so a single reboot answers which half of
          * the pipeline works. */
-        void RunOneJob(const char *stage, VicJob job, bool set_class, const JobCtx &c) {
+        /* Returns false if the engine did not complete, so the caller can stop.
+         *
+         * The guard below is the lesson from two console freezes: a VIC handed a
+         * zero address does not fail politely, it HANGS, and a hung VIC takes the
+         * compositor and the whole console with it. Every address the engine will
+         * dereference is checked here, once, rather than trusted per call site. */
+        bool RunOneJob(const char *stage, VicJob job, bool set_class, const JobCtx &c) {
             VicStage(stage);
+
+            const bool needs_src = (job == VicJob::BlitSelf || job == VicJob::BlitGame);
+            if (c.cfg_addr == 0 || c.dst_addr == 0 || (needs_src && c.src_addr == 0)) {
+                LogLine("   [%s] REFUSING to submit: cfg=0x%x dst=0x%x src=0x%x - a zero "
+                        "address hangs the VIC and freezes the console",
+                        stage, c.cfg_addr, c.dst_addr, c.src_addr);
+                return false;
+            }
 
             auto *cfg = reinterpret_cast<vic::VicConfigStruct *>(g_vic_cfg_buf);
             switch (job) {
-                case VicJob::Fill:
-                case VicJob::FillReloc: FillClearConfig(cfg);              break;
-                case VicJob::BlitSelf:  FillBlitConfig(cfg, SelfSrc);      break;
-                case VicJob::BlitGame:  FillBlitConfig(cfg, c.game_src);   break;
+                case VicJob::Fill:     FillClearConfig(cfg);            break;
+                case VicJob::BlitSelf: FillBlitConfig(cfg, SelfSrc);    break;
+                case VicJob::BlitGame: FillBlitConfig(cfg, c.game_src); break;
             }
 
             auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
@@ -416,8 +428,7 @@ namespace ams::mitm::applet {
             armDCacheFlush(g_vic_cfg_buf, VicCfgSize);
             armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
 
-            const bool reloc = (job == VicJob::FillReloc);
-            const u32  nr    = reloc ? 2u : 0u;   /* FillReloc: cfg + dst, no source */
+            const u32 nr = 0u;   /* relocs are inert on Horizon - always inline the addresses */
 
             alignas(8) u8 sb[16 + 12 + 3 * (16 + 4) + 20 + 4] = {};
             u32 off = 0;
@@ -425,11 +436,6 @@ namespace ams::mitm::applet {
 
             put(1); put(nr); put(1); put(1);
             put(c.cmd_handle); put(0); put(words);
-            if (reloc) {
-                put(c.cmd_handle); put((CfgAddrWord + rw) * 4); put(c.cfg_handle); put(0);
-                put(c.cmd_handle); put((DstAddrWord + rw) * 4); put(c.dst_handle); put(0);
-                put(8); put(8);
-            }
             put(c.syncpt); put(1); put(0); put(0); put(0);
             const u32 fence_off = off; put(0);
             const u32 sz = off;
@@ -442,17 +448,18 @@ namespace ams::mitm::applet {
                     stage, static_cast<int>(set_class), words, w[0], w[1], w[2], w[3]);
             LogLine("   [%s] req=0x%08x sz=%u nr=%u rc=0x%x nverr=%u -> fence=%u",
                     stage, req, sz, nr, rc, nverr, fence_val);
-            if (R_FAILED(rc) || nverr != 0) { LogLine("   [%s] SUBMIT REJECTED", stage); return; }
+            if (R_FAILED(rc) || nverr != 0) { LogLine("   [%s] SUBMIT REJECTED", stage); return false; }
 
             /* Read the cmdbuf back: nvservices patches reloc targets in place,
              * so these words now hold the addresses the engine would be given. */
             armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
             LogLine("   [%s] resolved addrs: cfg=0x%08x dst=0x%08x src=0x%08x (<<8: 0x%x 0x%x 0x%x)",
                     stage, w[CfgAddrWord + rw], w[DstAddrWord + rw],
-                    (job == VicJob::Fill || job == VicJob::FillReloc) ? 0u : w[SrcAddrWord + rw],
+                    (job == VicJob::Fill) ? 0u : w[SrcAddrWord + rw],
                     w[CfgAddrWord + rw] << 8, w[DstAddrWord + rw] << 8,
-                    (job == VicJob::Fill || job == VicJob::FillReloc) ? 0u : (w[SrcAddrWord + rw] << 8));
+                    (job == VicJob::Fill) ? 0u : (w[SrcAddrWord + rw] << 8));
 
+            bool completed = false;
             u32 cfd = 0, ce = 0;
             if (R_SUCCEEDED(NvOpen("/dev/nvhost-ctrl", std::addressof(cfd), std::addressof(ce))) && ce == 0) {
                 struct { u32 id; u32 thresh; u32 timeout; } a = { c.syncpt, fence_val, 100 };
@@ -461,9 +468,10 @@ namespace ams::mitm::applet {
                 struct { u32 id; u32 value; } r = { c.syncpt, 0 };
                 u32 e2 = 0;
                 NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
+                completed = (r.value >= fence_val);
                 LogLine("   [%s] WAIT nverr=%u  syncpt=%u (want >= %u)%s",
                         stage, nverr, r.value, fence_val,
-                        (r.value >= fence_val) ? "  OP_DONE fired" : "  ENGINE DID NOT COMPLETE");
+                        completed ? "  OP_DONE fired" : "  ENGINE DID NOT COMPLETE");
 
                 /* Never leave a shared syncpoint short of its declared max. */
                 if (r.value < fence_val) {
@@ -501,6 +509,7 @@ namespace ams::mitm::applet {
             const u8 *mid = g_vic_dst_buf + (DstH / 2) * DstPitch;
             LogLine("   [%s] row %u: %02x %02x %02x %02x %02x %02x %02x %02x",
                     stage, DstH / 2, mid[0], mid[1], mid[2], mid[3], mid[4], mid[5], mid[6], mid[7]);
+            return completed;
         }
 
 
@@ -666,32 +675,26 @@ namespace ams::mitm::applet {
             const JobCtx ctx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr,
                               (self_addr != 0) ? self_addr : src_addr, 0,
                               cfg_handle, dst_handle, src_handle, game_src };
-            /* 1. Control: direct addresses, known good since M16. */
-            RunOneJob("vb:job_fill_direct", VicJob::Fill, true, ctx);
+            /* Once the VIC stops completing it is wedged; further submits achieve
+             * nothing and keep the compositor starved. Stop at the first failure. */
 
-            /* 2. Same fill, but cfg+dst supplied as RELOCS instead of inline.
-             *    The reloc probe showed our cmdbuf is never patched; this says
-             *    whether nvservices patches a private copy (fill works) or
-             *    whether relocs are simply inert here (fill produces nothing).
-             *    Safe either way - a fill has no source to point anywhere bad. */
-            RunOneJob("vb:job_fill_reloc", VicJob::FillReloc, true, ctx);
-
-            /* 3. THE REAL TEST: a genuine blit, but reading from a buffer WE own
-             *    and whose address we therefore have. This exercises SlotConfig,
-             *    SlotSurfaceConfig, rect setup and the source read path against a
-             *    known-good address, separating "can we blit at all" from "can we
-             *    reach the game's memory". */
-            if (self_addr != 0) {
+            /* 1. Control: known good since M16. */
+            if (!RunOneJob("vb:job_fill", VicJob::Fill, true, ctx)) {
+                LogLine("   fill did not complete - engine wedged, skipping the rest");
+                VicStage("vb:ABORTED_after_fill");
+            } else if (self_addr == 0) {
+                LogLine("   no address for our own source buffer; nothing further to try");
+                VicStage("vb:no_self_addr");
+            } else {
+                /* 2. A genuine blit from a buffer WE own, so every address the
+                 *    engine touches is one MAP_CMD_BUFFER actually gave us. */
                 RunOneJob("vb:job_blit_self", VicJob::BlitSelf, true, ctx);
             }
 
-            /* 4. The game's buffer - still gated. compr=0, compr=1 and
-             *    MAP_CMD_BUFFER_EX all return phys=0, and a bad source address
-             *    hangs the VIC and takes the console with it. */
-            if (src_addr != 0) {
-                RunOneJob("vb:job_blit_game", VicJob::BlitGame, true, ctx);
-            } else {
-                LogLine("   SKIPPING game blit: its handle still pins to phys=0.");
+            /* The game's buffer stays out of reach: its handle pins to phys=0
+             * three different ways, and RunOneJob now refuses zero addresses. */
+            if (src_addr == 0) {
+                LogLine("   game blit still not possible: handle pins to phys=0");
                 VicStage("vb:game_blit_SKIPPED");
             }
         }

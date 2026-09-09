@@ -101,6 +101,34 @@ config, hung engine, dead compositor.
 `MAP_CMD_BUFFER_EX` all return `nverr=0` with `phys=0x0`. Plausibly deliberate:
 addresses are disclosed for handles we own, withheld for another process's.
 
+## M18 froze the console — my mistake, but it settled the reloc question
+
+`job_fill_reloc` passed **cfg and dst as relocs**, leaving both words zero in the
+command buffer. M17 had already proven relocs never patch our buffer, so the VIC
+was handed `SET_CONFIG_STRUCT_OFFSET = 0`, read its config struct from address 0,
+and hung — taking the compositor and the console with it. Exactly the M16
+mechanism. I reasoned "a fill has no source to aim anywhere bad" and missed that
+in *that* job the **config struct address itself** was the reloc.
+
+Destructive, but conclusive: **relocs are inert AND the engine really does
+receive the unpatched zeros.** Nothing more to test — the reloc path is deleted.
+
+### Structural guards added in M19
+Two console freezes have now had the same root cause: an address of 0 reaching
+the engine. That is no longer left to per-call-site reasoning.
+
+- `RunOneJob` **refuses to submit** if `cfg_addr`, `dst_addr`, or (for a blit)
+  `src_addr` is zero. One check, before every submit.
+- `RunOneJob` returns whether the engine completed; the sequence **stops at the
+  first failure**, since further submits on a wedged VIC only starve the
+  compositor further.
+- The whole reloc code path is gone.
+
+### Testing note
+A freeze forces a power-off, which truncates the `.log`, and MTP then tends to
+return I/O errors on it. **Read the SD in a card reader** (`/media/tomas/SWITCH SD`)
+rather than over MTP — every clean log so far came from the card reader.
+
 ## M18 — separate "can we blit at all" from "can we reach the game's memory"
 
 | job | purpose |
