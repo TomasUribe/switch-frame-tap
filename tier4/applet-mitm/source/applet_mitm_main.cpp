@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M22: up. Adopt the game aruid BEFORE opening any device node.");
+        mitm::applet::LogLine("applet-mitm M23: up. Game buffer ruled out structurally; surveying the display path.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

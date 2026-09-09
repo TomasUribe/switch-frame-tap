@@ -138,6 +138,47 @@ Self-blit still byte-exact at the new addresses. But the game's handle returns
 So it is not a permission bit. `FROM_ID` hands us a reference; the pages live in
 the game's address space and nvservices will not map them into our channel.
 
+## Reading the game's swapchain is STRUCTURALLY BLOCKED — route closed
+
+Five builds established this, and every observation agrees:
+
+| attempt | result |
+|---|---|
+| `nvdrv:s`, default identity | `phys=0` |
+| `is_compr=1` | `phys=0` |
+| `MAP_CMD_BUFFER_EX` (0x25) | `phys=0` |
+| relocs (let nvservices resolve it) | inert — cmdbuf never patched |
+| `nvdrv:t`, **full `0xFFFFFFFF` mask** (verified: `/dev/nvhost-gpu` opens, IOVAs leave the restricted window) | `phys=0` |
+| **exact aruid 142 discovered and adopted** (`SetAruidWithoutCheck` rc=0 err=0) | `phys=0` |
+| aruid adopted **before** any `Open`, fresh fd under that identity | `phys=0` |
+
+**Why.** At `Initialize` we hand nvservices `CUR_PROCESS_HANDLE`, and it maps
+client memory through *that* process handle. The game's swapchain pages live in
+the **game's** process. nvservices has no route to map them for our client — so
+`FROM_ID` succeeds (it is only a refcounted reference to the object) while
+pinning is a silent no-op, and the **IOVA allocator does not even advance**. No
+permission bit and no aruid can change that.
+
+**Do not spend further builds on pinning a foreign nvmap handle.**
+
+## What we own, and what that is worth
+
+The hard, reusable half is finished and verified on hardware: a sysmodule that
+allocates device memory, pins it, configures the VIC, submits host1x work, and
+gets **byte-exact** de-swizzled / scaled / format-converted output back —
+`AV_PIX_FMT_ARGB`, with NVENC (`/dev/nvhost-msenc`) also open. What is missing is
+only a *source* we are allowed to read.
+
+## M23 — survey what the full mask reaches (read-only)
+
+`nvdrv:t` grants bit 8 (Display) and bit 0 (Gpu), both denied in every earlier
+run. A **post-composition** source needs no foreign handle at all, and would
+capture the home menu and system overlays — one of the original goals, and
+something SysDVR cannot do. M23 opens and immediately closes each of
+`/dev/nvhost-display`, `/dev/nvdisp-ctrl`, `/dev/nvdisp-disp0/1`,
+`/dev/nvdcutil-disp0`, `/dev/nvcec-ctrl`, `-as-gpu`, `-ctrl-gpu`, `-msenc`,
+`-nvdec`, `-tsec`, `-nvjpg` and logs which are reachable.
+
 ## M21 — the last untried mechanism: **aruid ownership**
 
 nvmap objects are bound to an **AppletResourceUserId**. libnx's `nvInitialize`

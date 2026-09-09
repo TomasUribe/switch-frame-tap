@@ -674,6 +674,30 @@ namespace ams::mitm::applet {
         }
 
         u32 src_handle;
+        /* --- what did the full mask actually open? -------------------------
+         * Reading another process's swapchain is structurally out (nvservices
+         * maps client memory through the process handle we gave it at
+         * Initialize, and the game's pages are not in our process). So survey
+         * the nodes the full mask now reaches - particularly the DISPLAY group,
+         * bit 8 - because a post-composition source needs no foreign handle at
+         * all, and would capture the home menu and overlays too. */
+        {
+            VicStage("vb:4b_node_survey");
+            static const char *const nodes[] = {
+                "/dev/nvhost-display", "/dev/nvdisp-ctrl", "/dev/nvdisp-disp0",
+                "/dev/nvdisp-disp1",   "/dev/nvdcutil-disp0", "/dev/nvcec-ctrl",
+                "/dev/nvhost-as-gpu",  "/dev/nvhost-ctrl-gpu", "/dev/nvhost-msenc",
+                "/dev/nvhost-nvdec",   "/dev/nvhost-tsec",     "/dev/nvhost-nvjpg",
+            };
+            for (const char *n : nodes) {
+                u32 fd = 0, e = 0;
+                const ::Result r = NvOpen(n, std::addressof(fd), std::addressof(e));
+                const bool ok = R_SUCCEEDED(r) && e == 0;
+                LogLine("   node %-22s %s (rc=0x%x nverr=%u)", n, ok ? "OPEN" : "denied", r, e);
+                if (ok) { NvClose(fd); }   /* channels are exclusive - never leak one */
+            }
+        }
+
         VicStage("vb:5_FROM_ID");
         {
             struct { u32 id; u32 handle; } a = { g_game_surface.nvmap_id, 0 };
