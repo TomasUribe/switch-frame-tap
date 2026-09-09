@@ -152,8 +152,27 @@ static void probe_caps_raw(void)
     rlog("<- caps_raw");
 }
 
+/* Read the whole open stream in BUF_SZ chunks (data discarded). Returns total
+ * bytes; *first8 gets the first 8 bytes of the frame. */
+static u64 stream_drain(u8 first8[8])
+{
+    u64 off = 0;
+    for (;;) {
+        u64 got = 0;
+        Result r = capsscReadRawScreenShotReadStream(&got, g_buf, BUF_SZ, off);
+        if (R_FAILED(r)) { rlog("     read @%llu rc=0x%x", (unsigned long long)off, r); break; }
+        if (off == 0 && got >= 8) memcpy(first8, g_buf, 8);
+        if (got == 0) break;
+        off += got;
+        if (off > 64ull * 1024 * 1024) break;   /* safety */
+    }
+    return off;
+}
+
 /* caps:sc cmd 1201/1203/1202 - raw screenshot read stream (libnx wrapper).
- * switchbrew: "only usable when set:sys GetDebugModeFlag is set". */
+ * Gated by set:sys GetDebugModeFlag  (settings_debug!is_debug_mode_enabled).
+ * If it opens: report resolution, then time 5 full-frame reads for an fps
+ * estimate. */
 static void probe_caps_stream(void)
 {
     log_mark("caps_stream:init");
@@ -164,19 +183,33 @@ static void probe_caps_stream(void)
 
         u64 sz = 0, w = 0, h = 0;
         Result rc = capsscOpenRawScreenShotReadStream(&sz, &w, &h, g_stacks[si], 1000000000LL);
-        rlog("   Open  stack=%-12s rc=0x%-8x size=%llu %llux%llu",
+        rlog("   Open  stack=%-12s rc=0x%-8x size=%llu (%llux%llu, %llu B/px)",
              g_stackn[si], rc, (unsigned long long)sz,
-             (unsigned long long)w, (unsigned long long)h);
+             (unsigned long long)w, (unsigned long long)h,
+             (unsigned long long)((w && h) ? sz / (w * h) : 0));
         if (R_FAILED(rc)) continue;
 
-        memset(g_buf, 0, 4096);
-        u64 got = 0, t0 = armGetSystemTick();
-        Result r = capsscReadRawScreenShotReadStream(&got, g_buf, BUF_SZ, 0);
-        u64 us = armTicksToNs(armGetSystemTick() - t0) / 1000;
-        rlog("   Read  rc=0x%-8x bytes=%llu %lluus nonzero=%u  first=%02x %02x %02x %02x",
-             r, (unsigned long long)got, (unsigned long long)us, nonzero(g_buf, 4096),
-             g_buf[0], g_buf[1], g_buf[2], g_buf[3]);
+        u8 f8[8] = {0};
+        u64 b0 = stream_drain(f8);
         capsscCloseRawScreenShotReadStream();
+        rlog("   frame0: %llu bytes  first8=%02x %02x %02x %02x %02x %02x %02x %02x",
+             (unsigned long long)b0, f8[0], f8[1], f8[2], f8[3], f8[4], f8[5], f8[6], f8[7]);
+
+        /* fps: 5x open/drain/close */
+        u64 best = ~0ULL, sum = 0; int ok = 0;
+        for (int k = 0; k < 5; k++) {
+            u64 t0 = armGetSystemTick();
+            if (R_FAILED(capsscOpenRawScreenShotReadStream(&sz, &w, &h, g_stacks[si], 1000000000LL))) break;
+            stream_drain(f8);
+            capsscCloseRawScreenShotReadStream();
+            u64 ms = armTicksToNs(armGetSystemTick() - t0) / 1000000;
+            if (ms < best) best = ms;
+            sum += ms; ok++;
+        }
+        if (ok)
+            rlog("   timing: %d frames, best %llums (~%llu fps), avg %llums (~%llu fps)",
+                 ok, (unsigned long long)best, (unsigned long long)(best ? 1000 / best : 0),
+                 (unsigned long long)(sum / ok), (unsigned long long)(sum ? 1000 * ok / sum : 0));
     }
     capsscExit();
     rlog("<- caps_stream");
