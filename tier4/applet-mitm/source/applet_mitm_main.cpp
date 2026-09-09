@@ -91,7 +91,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M6: up. nvmap import + engines + own-buffer alloc.");
+        mitm::applet::LogLine("applet-mitm M7: up. + VIC channel bring-up probe.");
 
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");

@@ -50,6 +50,13 @@ namespace ams::mitm::applet {
         constexpr u32 NvMapParamSize = 1;
         constexpr u32 NvMapParamKind = 5;
 
+        /* nvhost host1x channel ioctls (type 'H' = 0x00). Sizes per switchbrew. */
+        constexpr u32 NvHostIocChannelGetSyncpoint  = MakeIowr(0x00, 0x02, 8);   /* {u32 module_id; u32 syncpt}  */
+        constexpr u32 NvHostIocChannelSetSubmitTo   = (UINT32_C(1) << 30) | (4 << 16) | (0x00 << 8) | 0x07; /* _IOW, {u32 timeout} */
+        constexpr u32 NvHostIocCtrlSyncptRead       = MakeIowr(0x00, 0x14, 8);   /* {u32 id; u32 value}          */
+        /* MAP_CMD_BUFFER: size varies with num_handles. header 8 + per-handle 8. */
+        constexpr u32 NvHostIocChannelMapCmdBuf1    = MakeIowr(0x00, 0x09, 8 + 1 * 8);
+
         ::Result NvIoctl(u32 fd, u32 request, void *argp, size_t argsz, u32 *out_err) {
             const struct { u32 fd; u32 request; } in = { fd, request };
             u32 error = 0;
@@ -160,6 +167,7 @@ namespace ams::mitm::applet {
             }
         }
 
+        u32 own_handle_out = 0;
         LogMark("nv:8_own_buffer");
         {
             /* The VIC's destination must be memory WE own: an nvmap object we
@@ -200,6 +208,73 @@ namespace ams::mitm::applet {
                 g_own_buf[sizeof(g_own_buf) - 1] = 0xC3;
                 LogLine("   cpu readback: %02x %02x ... %02x  (own_id=%u)",
                         g_own_buf[0], g_own_buf[1], g_own_buf[sizeof(g_own_buf) - 1], own_id);
+            }
+            own_handle_out = own_handle;
+        }
+
+        /* --- Stage 1: is the VIC channel actually usable? -----------------
+         * /dev/nvhost-vic opened in the survey, but so did nothing-useful nodes
+         * before. Prove we can GET_SYNCPOINT, read it via /dev/nvhost-ctrl, set
+         * a submit timeout, and MAP_CMD_BUFFER an nvmap handle into the channel.
+         * If all four work, the config-struct + real blit in Stage 2 is pure
+         * implementation. */
+        LogMark("nv:10_vic_channel");
+        {
+            struct { u32 fd; u32 error; } vo = {};
+            const char *vpath = "/dev/nvhost-vic";
+            rc = serviceDispatchOut(std::addressof(g_nv_srv), 0, vo,
+                .buffer_attrs = { SfBufferAttr_In | SfBufferAttr_HipcMapAlias },
+                .buffers      = { { vpath, std::strlen(vpath) } });
+            LogLine("   open /dev/nvhost-vic rc=0x%x fd=%u nverr=%u", rc, vo.fd, vo.error);
+
+            if (R_SUCCEEDED(rc) && vo.error == 0) {
+                const u32 vfd = vo.fd;
+                u32 nverr = 0;
+
+                struct { u32 module_id; u32 syncpt; } gs = { 0, 0 };
+                rc = NvIoctl(vfd, NvHostIocChannelGetSyncpoint, std::addressof(gs), sizeof(gs), std::addressof(nverr));
+                LogLine("   GET_SYNCPOINT(0) rc=0x%x nverr=%u -> syncpt=%u", rc, nverr, gs.syncpt);
+                const u32 syncpt_id = gs.syncpt;
+
+                struct { u32 fd; u32 error; } co = {};
+                const char *cpath = "/dev/nvhost-ctrl";
+                rc = serviceDispatchOut(std::addressof(g_nv_srv), 0, co,
+                    .buffer_attrs = { SfBufferAttr_In | SfBufferAttr_HipcMapAlias },
+                    .buffers      = { { cpath, std::strlen(cpath) } });
+                if (R_SUCCEEDED(rc) && co.error == 0) {
+                    struct { u32 id; u32 value; } sr = { syncpt_id, 0 };
+                    nverr = 0;
+                    rc = NvIoctl(co.fd, NvHostIocCtrlSyncptRead, std::addressof(sr), sizeof(sr), std::addressof(nverr));
+                    LogLine("   ctrl SYNCPT_READ(%u) rc=0x%x nverr=%u -> value=%u", syncpt_id, rc, nverr, sr.value);
+                }
+
+                struct { u32 timeout; } st = { 1000 };
+                nverr = 0;
+                rc = NvIoctl(vfd, NvHostIocChannelSetSubmitTo, std::addressof(st), sizeof(st), std::addressof(nverr));
+                LogLine("   SET_SUBMIT_TIMEOUT(1000) rc=0x%x nverr=%u", rc, nverr);
+
+                /* MAP_CMD_BUFFER our own buffer's handle into the channel. */
+                {
+                    struct {
+                        u32 num_handles; u32 reserved; u8 is_compr; u8 pad[3];
+                        struct { u32 handle_id; u32 phys_out; } h[1];
+                    } mc = {};
+                    mc.num_handles = 1;
+                    mc.h[0].handle_id = own_handle_out;
+                    nverr = 0;
+                    rc = NvIoctl(vfd, NvHostIocChannelMapCmdBuf1, std::addressof(mc), sizeof(mc), std::addressof(nverr));
+                    LogLine("   MAP_CMD_BUFFER(handle=%u) rc=0x%x nverr=%u -> phys=0x%08x",
+                            own_handle_out, rc, nverr, mc.h[0].phys_out);
+                    if (R_SUCCEEDED(rc) && nverr == 0 && mc.h[0].phys_out != 0) {
+                        LogMark("nv:VIC_CHANNEL_USABLE");
+                    }
+                }
+
+                /* close vfd + ctrl fd via nvClose cmd (cmd 2) */
+                { const struct { u32 fd; } in = { vfd }; u32 e = 0;
+                  serviceDispatchInOut(std::addressof(g_nv_srv), 2, in, e); }
+                { const struct { u32 fd; } in = { co.fd }; u32 e = 0;
+                  serviceDispatchInOut(std::addressof(g_nv_srv), 2, in, e); }
             }
         }
 
