@@ -12,8 +12,11 @@ mkdir -p "$DST"
 # docker builds as root; reclaim ownership before touching the tree
 docker run --rm -v "$AMS":/ams "$IMG" chown -R "$UIDGID" /ams/stratosphere/applet-mitm >/dev/null 2>&1 || true
 
+# tier4 libstratosphere patch (idempotent): non-domain mitm sub-object forwarding
+python3 "$SRC/patch_libstrat.py" "$AMS"
+
 rsync -a --delete \
-  --exclude build.sh --exclude '*.nsp' --exclude out/ --exclude build/ \
+  --exclude build.sh --exclude '*.nsp' --exclude patch_libstrat.py --exclude out/ --exclude build/ \
   "$SRC"/ "$DST"/
 
 set +e

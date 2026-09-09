@@ -6,9 +6,19 @@ namespace ams::mitm::applet {
 
     namespace {
 
-        constexpr const char *LogPath = "sdmc:/applet-mitm.log";
+        constexpr const char *LogPath  = "sdmc:/applet-mitm.log";
+        constexpr const char *LastPath = "sdmc:/applet-mitm.last";
         constinit os::SdkMutex g_lock;
         constinit bool g_ready = false;
+
+        void WriteWhole(const char *path, const char *data, size_t len) {
+            fs::DeleteFile(path);
+            if (R_FAILED(fs::CreateFile(path, static_cast<s64>(len)))) { return; }
+            fs::FileHandle f;
+            if (R_FAILED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Write))) { return; }
+            static_cast<void>(fs::WriteFile(f, 0, data, len, fs::WriteOption::Flush));
+            fs::CloseFile(f);
+        }
 
     }
 
@@ -21,6 +31,19 @@ namespace ams::mitm::applet {
         fs::DeleteFile(LogPath);
         fs::CreateFile(LogPath, 0);
         g_ready = true;
+        WriteWhole(LastPath, "LogInit\n", 8);
+    }
+
+    void LogMark(const char *what) {
+        {
+            std::scoped_lock lk(g_lock);
+            if (g_ready) {
+                char b[128];
+                const int n = std::snprintf(b, sizeof(b), "%s\n", what);
+                if (n > 0) { WriteWhole(LastPath, b, static_cast<size_t>(n)); }
+            }
+        }
+        LogLine("-> %s", what);
     }
 
     void LogLine(const char *fmt, ...) {
