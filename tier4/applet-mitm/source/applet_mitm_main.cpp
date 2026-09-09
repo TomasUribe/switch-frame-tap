@@ -52,7 +52,7 @@ namespace ams {
             switch (port_index) {
                 case PortIndex_AppletMitm:
                     R_RETURN(this->AcceptMitmImpl(server,
-                        sf::CreateSharedObjectEmplaced<mitm::applet::IAppletMitmInterface, mitm::applet::AppletMitmService>(decltype(fsrv)(fsrv), client_info),
+                        sf::CreateSharedObjectEmplaced<mitm::applet::IViRootMitm, mitm::applet::ViRootMitm>(decltype(fsrv)(fsrv), client_info),
                         fsrv));
                 AMS_UNREACHABLE_DEFAULT_CASE();
             }
@@ -81,9 +81,9 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm D3: up. mitm(vi:u), empty iface, all forward.");
+        mitm::applet::LogLine("applet-mitm M2(vi:u): up. wrap GetDisplayService, sniff OpenLayer.");
 
-        R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::AppletMitmService>(PortIndex_AppletMitm, AppletMitmServiceName));
+        R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");
 
         g_server_manager.LoopProcess();
