@@ -28,23 +28,30 @@ namespace ams::mitm::applet {
     };
     static_assert(sizeof(NvNativeHandle) == 0xC);
 
+    /* NB: NvColorFormat is a 64-bit enum in libnx (e.g. A8B8G8R8 =
+     * 0x0100532120), NOT u32. Getting this wrong shifts every field after it
+     * by 4 - which is exactly what the first hardware run showed. */
     struct NvSurfaceRaw {
-        u32 width;
-        u32 height;
-        u32 color_format;
-        u32 layout;
-        u32 pitch;
-        u32 unused_nvmap;
-        u32 offset;
-        u32 kind;
-        u32 block_height_log2;
-        u32 scan;
-        u32 second_field_offset;
-        u64 flags;
-        u64 size;
-        u32 unk[6];
+        u32 width;              /* 0x00 */
+        u32 height;             /* 0x04 */
+        u64 color_format;       /* 0x08  NvColorFormat */
+        u32 layout;             /* 0x10  NvLayout: 1=Pitch 2=Tiled 3=BlockLinear */
+        u32 pitch;              /* 0x14  bytes per row */
+        u32 unused_nvmap;       /* 0x18  "usually the nvmap handle", unused */
+        u32 offset;             /* 0x1C  plane offset within the nvmap object */
+        u32 kind;               /* 0x20  NvKind, 0xFE = Generic_16BX2 */
+        u32 block_height_log2;  /* 0x24 */
+        u32 scan;               /* 0x28  NvDisplayScanFormat */
+        u32 second_field_offset;/* 0x2C */
+        u64 flags;              /* 0x30 */
+        u64 size;               /* 0x38 */
+        u32 unk[6];             /* 0x40 */
     };
     static_assert(sizeof(NvSurfaceRaw) == 0x58);
+    static_assert(__builtin_offsetof(NvSurfaceRaw, layout) == 0x10);
+    static_assert(__builtin_offsetof(NvSurfaceRaw, offset) == 0x1C);
+    static_assert(__builtin_offsetof(NvSurfaceRaw, kind)   == 0x20);
+    static_assert(__builtin_offsetof(NvSurfaceRaw, size)   == 0x38);
 
     struct NvGraphicBufferRaw {
         NvNativeHandle header;

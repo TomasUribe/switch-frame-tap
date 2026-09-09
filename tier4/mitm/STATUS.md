@@ -80,7 +80,33 @@ The three `code=14` (`SET_PREALLOCATED_BUFFER`, Nintendo's extension) calls at
 startup are MK8 registering its triple-buffered swapchain. Each carries a
 flattened `NvGraphicBuffer` in its **input** parcel.
 
-**M3b (built, awaiting result)** parses it — see `applet_mitm_gbuf.{hpp,cpp}`.
+## M3b RESULT: full frame descriptor decoded ✅
+
+The three `setPreallocatedBuffer` parcels decode (after the u64 `color_format`
+fix in M3c) to:
+
+```
+nvmap_id  = 1268                 <- ONE nvmap object holds the whole swapchain
+buffers   = 3, at offsets 0x000000, 0x870000, 0x10E0000  (0, 1x, 2x total_size)
+each      = 1920 x 1080, A8B8G8R8 (0x0100532120), format=1 (RGBA_8888)
+layout    = 3 (BlockLinear)
+kind      = 0xFE (Generic_16BX2)
+block_height_log2 = 4            (block height 16)
+size      = 8,847,360 B each     = 1920 x 1152 x 4 (height 1080 aligned to 1152)
+total_size= 8,847,360   stride = 1920 px   usage = 0xB00
+```
+
+**The game's swapchain is native 1920x1080** — vs SysDVR's 720p30 via `grc:d`.
+
+Gotcha that cost one run: libnx's `NvColorFormat` is a **64-bit** enum
+(`A8B8G8R8 = 0x0100532120`). Declaring it `u32` shifts every following
+`NvSurface` field by 4, which made `pitch`/`offset`/`kind`/`block_height_log2`
+read as garbage while `width`/`height`/`size` still looked right. Fixed, with
+offset static_asserts (`layout` @0x10, `offset` @0x1C, `kind` @0x20,
+`size` @0x38).
+
+**M3c (built, awaiting confirmation run)** — parses it with the corrected layout;
+see `applet_mitm_gbuf.{hpp,cpp}`.
 Layout pinned with static_asserts: `sizeof(NvGraphicBuffer) == 0x150`,
 `nvmap_id` @0x10, `magic`(0xDAFFCAFF) @0x18, `planes` @0x40,
 `sizeof(NvSurface) == 0x58`. We scan the parcel for the magic and dump
