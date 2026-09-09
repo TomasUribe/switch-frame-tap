@@ -44,6 +44,51 @@ touches NAND.
 - Channel devices are **one fd per session** — a leaked survey fd made the real
   open fail `nverr=4096`. The survey now closes each fd.
 
+## *** M16: THE VIC WRITES OUR MEMORY *** — the bug was the missing SETCL
+
+```
+job_fill_SETCL   setcl=1  cmd[0]=00001740  changed=16384/65536  *** ENGINE WROTE OUR MEMORY ***
+job_fill_plain   setcl=0  cmd[0]=10100002  changed=0/65536      (poison intact)
+```
+
+A clean A/B. `METHOD_OFFSET`/`METHOD_DATA` (0x10/0x11) are registers **of the
+current host1x class**; nvservices' `CHANNEL_SUBMIT` does *not* set the class to
+VIC for us, so without `SETCL(0, 0x5D, 0)` every method write landed on
+meaningless registers. `INCR_SYNCPT` lives at register 0x00 in every class,
+which is why `OP_DONE` fired for six runs while nothing was produced.
+
+**Geometry is exactly right:** 64 px × 4 B = 256 B per row × 64 rows =
+**16384 bytes changed** out of a 65536-byte buffer — the 64×64 image at a
+1024-byte stride, precisely as configured.
+
+Output half of the pipeline: **DONE.**
+
+### Colour byte order — still to pin down
+We asked for `A=1023 R=1023 G=0 B=0` and got `ff ff 00 00` per pixel: two
+channels at max, two at zero, exactly as set — but alpha and red were both
+`0xFF`, so it cannot say which byte is which. M17 fills with four **distinct**
+levels (`A=1023→0xFF, R=768→0xC0, G=512→0x80, B=256→0x40`) to read the order
+straight off the dump.
+
+### The blit hung the engine and froze the console
+`job_blit_SETCL` submitted fine but `WAIT nverr=5 … ENGINE DID NOT COMPLETE`.
+The rescue restored syncpoint 12, but a **hung VIC still takes the compositor
+with it** — the game stopped presenting at txn 492 and the console froze.
+
+Cause: `src` pins to `phys=0`, so the reloc pointed the engine at
+`0 + 0x10E0000`. **Pointing the VIC at a bad source address is not a cheap
+mistake — it wedges the console.**
+
+## M17 — learn the source address without ever running the engine on it
+
+- `VicJob::RelocProbe`: identical to the blit but with **`EXECUTE` omitted**
+  (syncpt cond `IMMEDIATE`). nvservices still patches the reloc addresses into
+  our command buffer, so we read back what it resolved for the game's
+  handle — with zero risk to the engine.
+- Try `MAP_CMD_BUFFER` with `is_compr=0`, then `is_compr=1`, then
+  `MAP_CMD_BUFFER_EX` (0x25). All diagnostics; none submit.
+- **Hard safety gate:** the blit only runs when `src_addr != 0`. No guessing.
+
 ## M15 run — heap+uncached confirmed working, but NOT the fix
 
 ```

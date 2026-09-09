@@ -129,6 +129,7 @@ namespace ams::mitm::applet {
          * pad[3]) + 8 B per handle -> 20 for one. */
         constexpr u32 NvHostIocChannelMapCmdBuf     = MakeIowr(0x00, 0x09, 20);  /* -> 0xC0140009 */
         constexpr u32 NvHostIocChannelUnmapCmdBuf   = MakeIowr(0x00, 0x0A, 20);
+        constexpr u32 NvHostIocChannelMapCmdBufEx   = MakeIowr(0x00, 0x25, 20);   /* unpins on error */
         constexpr u32 NvHostIocCtrlSyncptRead       = MakeIowr(0x00, 0x14, 8);   /* {u32 id; u32 value}           */
         constexpr u32 NvHostIocCtrlSyncptWait       = MakeIowr(0x00, 0x16, 12);  /* {u32 id; u32 thresh; u32 to}  */
         constexpr u32 NvHostIocCtrlSyncptIncrW      = MakeIow (0x00, 0x15, 4);   /* {u32 id} - switchbrew 0x40040015 */
@@ -184,16 +185,16 @@ namespace ams::mitm::applet {
         /* Pin one nvmap handle into the channel and get its device physical
          * address. Each call is breadcrumbed by the caller so that if this ever
          * takes nvservices down again we know exactly which handle did it. */
-        bool MapCmdBuffer(u32 chan_fd, u32 handle, u32 *out_addr, const char *what) {
+        bool MapCmdBuffer(u32 chan_fd, u32 handle, u32 *out_addr, const char *what, u8 is_compr = 0, u32 req = 0) {
             MapCmdBufArgs a = {};
             a.num_handles  = 1;
-            a.is_compr     = 0;
+            a.is_compr     = is_compr;
             a.handle_id_in = handle;
             u32 nverr = 0;
-            const ::Result rc = NvIoctl(chan_fd, NvHostIocChannelMapCmdBuf,
-                                        std::addressof(a), sizeof(a), std::addressof(nverr));
-            LogLine("   MAP_CMD_BUFFER(%s handle=%u) rc=0x%x nverr=%u -> phys=0x%x",
-                    what, handle, rc, nverr, a.phys_addr_out);
+            if (req == 0) { req = NvHostIocChannelMapCmdBuf; }
+            const ::Result rc = NvIoctl(chan_fd, req, std::addressof(a), sizeof(a), std::addressof(nverr));
+            LogLine("   MAP_CMD_BUFFER(%s handle=%u compr=%u req=0x%08x) rc=0x%x nverr=%u -> phys=0x%x",
+                    what, handle, is_compr, req, rc, nverr, a.phys_addr_out);
             if (R_FAILED(rc) || nverr != 0) { return false; }
             *out_addr = a.phys_addr_out;
             return true;
@@ -253,7 +254,7 @@ namespace ams::mitm::applet {
          *   BlitReloc  - source address left to nvservices via a reloc, which
          *                knows the game buffer's address even though pinning
          *                would not tell us. */
-        enum class VicJob { Fill, BlitDirect, BlitReloc };
+        enum class VicJob { Fill, BlitDirect, BlitReloc, RelocProbe };
 
         void FillOutputConfig(vic::VicConfigStruct *c) {
             c->outputConfig.TargetRectLeft   = 0;
@@ -278,10 +279,14 @@ namespace ams::mitm::applet {
         void FillClearConfig(vic::VicConfigStruct *c) {
             std::memset(c, 0, sizeof(*c));
             FillOutputConfig(c);
-            c->outputConfig.BackgroundAlpha = 1023;
-            c->outputConfig.BackgroundR     = 1023;   /* opaque red */
-            c->outputConfig.BackgroundG     = 0;
-            c->outputConfig.BackgroundB     = 0;
+            /* Four DISTINCT levels so the output byte order can be read straight
+             * off the dump: 1023->0xFF, 768->0xC0, 512->0x80, 256->0x40.
+             * The previous red gave 'ff ff 00 00', which could not say which
+             * byte was alpha and which was red. */
+            c->outputConfig.BackgroundAlpha = 1023;   /* 0xFF */
+            c->outputConfig.BackgroundR     = 768;    /* 0xC0 */
+            c->outputConfig.BackgroundG     = 512;    /* 0x80 */
+            c->outputConfig.BackgroundB     = 256;    /* 0x40 */
         }
 
         void FillBlitConfig(vic::VicConfigStruct *c) {
@@ -330,7 +335,7 @@ namespace ams::mitm::applet {
         constexpr u32 CfgAddrWord = 8, DstAddrWord = 11, SrcAddrWord = 14;   /* + 1 if SETCL is emitted */
 
         u32 BuildCmdbuf(u32 *w, VicJob job, u32 cfg_addr, u32 dst_addr, u32 src_addr, bool set_class) {
-            const bool reloc = (job == VicJob::BlitReloc);
+            const bool reloc = (job == VicJob::BlitReloc || job == VicJob::RelocProbe);
             u32 n = 0;
             /* Point the channel at the VIC's register space before touching
              * METHOD_OFFSET/METHOD_DATA, which are per-class registers. */
@@ -350,7 +355,14 @@ namespace ams::mitm::applet {
                 w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_SURFACE0_SLOT0_LUMA_OFFSET >> 2;
                 w[n++] = reloc ? 0u : (src_addr >> 8);
             }
-            w[n++] = Host1xIncr0x10x2; w[n++] = vic::EXECUTE >> 2; w[n++] = 1u << 8;
+            /* RelocProbe deliberately omits EXECUTE. nvservices still patches the
+             * reloc addresses into our cmdbuf, so we can read back the address it
+             * resolved for the game's buffer WITHOUT ever pointing the engine at
+             * it. Handing the VIC a bad source address hangs it, and a hung VIC
+             * takes the compositor - and the console - with it. */
+            if (job != VicJob::RelocProbe) {
+                w[n++] = Host1xIncr0x10x2; w[n++] = vic::EXECUTE >> 2; w[n++] = 1u << 8;
+            }
             return n;
         }
 
@@ -385,7 +397,8 @@ namespace ams::mitm::applet {
             auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
             u32 words = BuildCmdbuf(w, job, c.cfg_addr, c.dst_addr, c.src_addr + c.src_off, set_class);
             const u32 rw = set_class ? 1u : 0u;   /* reloc word indices shift when SETCL leads */
-            words = AppendIncrSyncpt(w, words, c.syncpt, true);   /* OP_DONE: EXECUTE is present */
+            const bool has_exec = (job != VicJob::RelocProbe);
+            words = AppendIncrSyncpt(w, words, c.syncpt, has_exec);
 
             /* Prefill with a poison pattern rather than zero. "All zero" cannot
              * distinguish "engine wrote zeros" from "engine never touched our
@@ -395,7 +408,7 @@ namespace ams::mitm::applet {
             armDCacheFlush(g_vic_cfg_buf, VicCfgSize);
             armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
 
-            const bool reloc = (job == VicJob::BlitReloc);
+            const bool reloc = (job == VicJob::BlitReloc || job == VicJob::RelocProbe);
             const u32  nr    = reloc ? ((job == VicJob::Fill) ? 2u : 3u) : 0u;
 
             alignas(8) u8 sb[16 + 12 + 3 * (16 + 4) + 20 + 4] = {};
@@ -423,6 +436,15 @@ namespace ams::mitm::applet {
             LogLine("   [%s] req=0x%08x sz=%u nr=%u rc=0x%x nverr=%u -> fence=%u",
                     stage, req, sz, nr, rc, nverr, fence_val);
             if (R_FAILED(rc) || nverr != 0) { LogLine("   [%s] SUBMIT REJECTED", stage); return; }
+
+            /* Read the cmdbuf back: nvservices patches reloc targets in place,
+             * so these words now hold the addresses the engine would be given. */
+            armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
+            LogLine("   [%s] resolved addrs: cfg=0x%08x dst=0x%08x src=0x%08x (<<8: 0x%x 0x%x 0x%x)",
+                    stage, w[CfgAddrWord + rw], w[DstAddrWord + rw],
+                    (job == VicJob::Fill) ? 0u : w[SrcAddrWord + rw],
+                    w[CfgAddrWord + rw] << 8, w[DstAddrWord + rw] << 8,
+                    (job == VicJob::Fill) ? 0u : (w[SrcAddrWord + rw] << 8));
 
             u32 cfd = 0, ce = 0;
             if (R_SUCCEEDED(NvOpen("/dev/nvhost-ctrl", std::addressof(cfd), std::addressof(ce))) && ce == 0) {
@@ -600,18 +622,37 @@ namespace ams::mitm::applet {
             if (!MapCmdBuffer(vfd, cfg_handle, std::addressof(cfg_addr), "cfg")) { VicStage("vb:8a_FAILED"); goto close_vic; }
             VicStage("vb:8b_map_dst");
             if (!MapCmdBuffer(vfd, dst_handle, std::addressof(dst_addr), "dst")) { VicStage("vb:8b_FAILED"); goto close_vic; }
+            /* The game's imported handle pins with nverr=0 but phys=0. Try every
+             * variant before giving up; none of these submit anything. */
             VicStage("vb:8c_map_src");
-            if (!MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)")) { VicStage("vb:8c_FAILED"); goto close_vic; }
+            MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)", 0);
+            if (src_addr == 0) { MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)", 1); }
+            if (src_addr == 0) { MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)", 0, NvHostIocChannelMapCmdBufEx); }
             LogLine("   pinned: cfg=0x%x dst=0x%x src=0x%x (+slot off 0x%x)", cfg_addr, dst_addr, src_addr, src_off);
         }
 
         {
             const JobCtx ctx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, src_addr, src_off,
                               cfg_handle, dst_handle, src_handle };
-            /* A/B the class hypothesis in one run. */
-            RunOneJob("vb:job_fill_SETCL",  VicJob::Fill,      true,  ctx);
-            RunOneJob("vb:job_fill_plain",  VicJob::Fill,      false, ctx);   /* control */
-            RunOneJob("vb:job_blit_SETCL",  VicJob::BlitReloc, true,  ctx);
+            /* 1. Known good since M16: proves the pipeline every run and, with
+             *    four distinct colour levels, pins down the output byte order. */
+            RunOneJob("vb:job_fill", VicJob::Fill, true, ctx);
+
+            /* 2. Relocs patched, engine never run. Safe way to discover what
+             *    address nvservices resolves for the game's buffer. */
+            RunOneJob("vb:job_reloc_probe", VicJob::RelocProbe, true, ctx);
+
+            /* 3. The real blit - ONLY with a source address we actually trust.
+             *    M16 proved that pointing the VIC at a bad source hangs the
+             *    engine, and a hung VIC freezes the compositor and the console.
+             *    Not worth guessing: if we do not have an address, skip. */
+            if (src_addr != 0) {
+                RunOneJob("vb:job_blit", VicJob::BlitReloc, true, ctx);
+            } else {
+                LogLine("   SKIPPING blit: no source address (src pinned to 0).");
+                LogLine("   A bad source address hangs the VIC and takes the compositor with it.");
+                VicStage("vb:blit_SKIPPED_no_src_addr");
+            }
         }
         VicStage("vb:ALL_JOBS_DONE");
 
