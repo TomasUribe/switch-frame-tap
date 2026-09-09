@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M11: up. Syncpoint increment now programmed into the cmdbuf (+rescue).");
+        mitm::applet::LogLine("applet-mitm M12: up. Phase A verified; Phase B ready (256px-aligned dst stride).");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

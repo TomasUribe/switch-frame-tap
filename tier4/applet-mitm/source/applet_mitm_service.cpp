@@ -91,6 +91,16 @@ namespace ams::mitm::applet {
                     }
                 }
                 LogMark("binder:vic_blit_requested");
+                /* slot came back as 256 last run, so this parse is wrong. Dump
+                 * the parcel head once and decode it properly next round; until
+                 * then RequestVicBlit clamps out-of-range to slot 0, which is a
+                 * live framebuffer either way (the game rotates all three). */
+                if (p != nullptr && psz >= 32) {
+                    u32 w[8];
+                    std::memcpy(w, p, sizeof(w));
+                    LogLine("   parcel head: %08x %08x %08x %08x %08x %08x %08x %08x",
+                            w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+                }
                 LogLine("   queueBuffer txn#%u parcel=%zu slot=%d -> handed to VIC worker", total, psz, qslot);
                 RequestVicBlit(qslot);
             }

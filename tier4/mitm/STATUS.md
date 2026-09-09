@@ -43,6 +43,34 @@ touches NAND.
 - Channel devices are **one fd per session** — a leaked survey fd made the real
   open fail `nverr=4096`. The survey now closes each fd.
 
+## Phase A — **PASSED** (M11, verified on hardware)
+
+```
+cmdbuf words=5  execute=0  incr_syncpt=12 cond=IMMEDIATE
+SUBMIT req=0xC0340001 sz=52 nr=0  rc=0x0 nverr=0 -> fence(syncpt=12, val=584)
+SYNCPT_WAIT(id=12 thr=584)        rc=0x0 nverr=0      <- was nverr=5
+SYNCPT_READ(id=12) -> value=586   (want >= 584)       <- passed the fence
+```
+
+No rescue fired, **no freeze**, and **59.2 fps sustained for 51 s** after the
+submit (worst 3 s window 55.0 fps). The full host1x path is now proven:
+channel open → `SET_NVMAP_FD` → `CHANNEL_SUBMIT` → syncpoint increment → wait.
+
+Nothing about driving the VIC from a mitm sysmodule is unknown any more. What
+remains is getting the VIC's own config right.
+
+### Known bug (harmless for now)
+The `queueBuffer` parcel slot parse returns **256**, not 0/1/2. `RunVicBlit`
+clamps out-of-range to slot 0, which is a live framebuffer either way (the game
+rotates all three), so the blit still sees real pixels. M12 dumps the parcel
+head so the layout can be decoded properly.
+
+### Phase B alignment fix
+libdrm's `vic_image_new` aligns every VIC surface stride to **256 pixels**
+(`align = 256; stride = ALIGN(width, align)`), pitch-linear included. The 64 px
+dst stride (256 B pitch) was almost certainly under-aligned, so the dst is now
+64×64 with a **256 px / 1024 B** stride (`DstSize` 0x10000).
+
 ## Phase A run — CHANNEL_SUBMIT ABI **verified**, and the freeze root-caused
 
 The whole probe ran end to end on the worker thread, and the game kept

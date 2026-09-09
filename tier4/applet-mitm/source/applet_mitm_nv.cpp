@@ -55,14 +55,18 @@ namespace ams::mitm::applet {
          * the module going dark after registration. */
         alignas(0x1000) constinit u8 g_vic_cfg_buf[0x4000] = {};   /* VicConfigStruct (1552 B) */
         alignas(0x1000) constinit u8 g_vic_cmd_buf[0x1000] = {};   /* host1x pushbuf           */
-        alignas(0x1000) constinit u8 g_vic_dst_buf[0x8000] = {};   /* linear output           */
+        alignas(0x1000) constinit u8 g_vic_dst_buf[0x10000] = {};  /* linear output          */
 
-        /* Phase B geometry: a scale-free 64x64 crop of the frame's top-left. */
+        /* Phase B geometry: a scale-free 64x64 crop of the frame's top-left.
+         * The output STRIDE is aligned to 256 pixels, not to the width: that is
+         * what libdrm's vic_image_new does for every VIC surface, pitch-linear
+         * included (align = 256, stride = ALIGN(width, align)). 64 px of stride
+         * would be a 256-byte pitch, well under what the engine expects. */
         constexpr u32 DstW        = 64;
         constexpr u32 DstH        = 64;
-        constexpr u32 DstStridePx = 64;                  /* 256 B pitch */
+        constexpr u32 DstStridePx = 256;                 /* 1024 B pitch */
         constexpr u32 DstPitch    = DstStridePx * 4;
-        constexpr u32 DstSize     = DstPitch * DstH;     /* 16384 */
+        constexpr u32 DstSize     = DstPitch * DstH;     /* 65536 */
         static_assert(DstSize <= sizeof(g_vic_dst_buf));
 
         constinit ::Service        g_nv_srv  = {};
