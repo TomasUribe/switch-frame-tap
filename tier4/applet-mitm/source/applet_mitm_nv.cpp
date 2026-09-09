@@ -58,7 +58,6 @@ namespace ams::mitm::applet {
          * + padding[3]); each handle entry is 8. So 1 handle = 20 bytes, and
          * the ioctl request code must encode 20 or the kernel's _NV_IOC_SIZE
          * disagrees with the buffer -> nverr=11 (BadParameter). */
-        constexpr u32 NvHostIocChannelMapCmdBuf1    = MakeIowr(0x00, 0x09, 12 + 1 * 8);
 
         ::Result NvIoctl(u32 fd, u32 request, void *argp, size_t argsz, u32 *out_err) {
             const struct { u32 fd; u32 request; } in = { fd, request };
@@ -223,12 +222,13 @@ namespace ams::mitm::applet {
             own_handle_out = own_handle;
         }
 
-        /* --- Stage 1: is the VIC channel actually usable? -----------------
-         * /dev/nvhost-vic opened in the survey, but so did nothing-useful nodes
-         * before. Prove we can GET_SYNCPOINT, read it via /dev/nvhost-ctrl, set
-         * a submit timeout, and MAP_CMD_BUFFER an nvmap handle into the channel.
-         * If all four work, the config-struct + real blit in Stage 2 is pure
-         * implementation. */
+        /* --- Stage 1: is the VIC channel usable? --------------------------
+         * open + GET_SYNCPOINT + SYNCPT_READ + SET_SUBMIT_TIMEOUT is enough to
+         * establish the channel is ours. (An earlier build also tried
+         * MAP_CMD_BUFFER here and it crashed nvservices - that call pins memory
+         * into the channel and is fragile from this context; the real VIC path
+         * uses NVHOST_IOCTL_CHANNEL_SUBMIT with a reloc list and per-submit
+         * pinning, so MAP_CMD_BUFFER is not needed. Removed.) */
         LogMark("nv:10_vic_channel");
         {
             struct { u32 fd; u32 error; } vo = {};
@@ -264,22 +264,11 @@ namespace ams::mitm::applet {
                 rc = NvIoctl(vfd, NvHostIocChannelSetSubmitTo, std::addressof(st), sizeof(st), std::addressof(nverr));
                 LogLine("   SET_SUBMIT_TIMEOUT(1000) rc=0x%x nverr=%u", rc, nverr);
 
-                /* MAP_CMD_BUFFER our own buffer's handle into the channel. */
-                {
-                    struct {
-                        u32 num_handles; u32 reserved; u8 is_compr; u8 pad[3];
-                        struct { u32 handle_id; u32 phys_out; } h[1];
-                    } mc = {};
-                    mc.num_handles = 1;
-                    mc.h[0].handle_id = own_handle_out;
-                    nverr = 0;
-                    rc = NvIoctl(vfd, NvHostIocChannelMapCmdBuf1, std::addressof(mc), sizeof(mc), std::addressof(nverr));
-                    LogLine("   MAP_CMD_BUFFER(handle=%u) rc=0x%x nverr=%u -> phys=0x%08x",
-                            own_handle_out, rc, nverr, mc.h[0].phys_out);
-                    if (R_SUCCEEDED(rc) && nverr == 0 && mc.h[0].phys_out != 0) {
-                        LogMark("nv:VIC_CHANNEL_USABLE");
-                    }
+                if (syncpt_id != 0) {
+                    LogMark("nv:VIC_CHANNEL_USABLE");
+                    LogLine("   channel open, syncpt=%u - ready for SUBMIT (Stage 2)", syncpt_id);
                 }
+                AMS_UNUSED(own_handle_out);
 
                 /* close vfd + ctrl fd via nvClose cmd (cmd 2) */
                 { const struct { u32 fd; } in = { vfd }; u32 e = 0;
