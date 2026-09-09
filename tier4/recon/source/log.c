@@ -13,8 +13,8 @@ static char  g_buf[1024];
 void log_init(void)
 {
     g_f = fopen(LOG_PATH, "ab");
-    logf("");
-    logf("============================================================");
+    rlog(" ");
+    rlog("============================================================");
 }
 
 void log_exit(void)
@@ -22,7 +22,7 @@ void log_exit(void)
     if (g_f) { fflush(g_f); fclose(g_f); g_f = NULL; }
 }
 
-void logf(const char *fmt, ...)
+void rlog(const char *fmt, ...)
 {
     u64 t = armGetSystemTick();
     u64 ms = armTicksToNs(t) / 1000000ULL;
@@ -47,12 +47,12 @@ void log_hex(const char *label, const void *p, unsigned len)
 {
     const unsigned char *b = p;
     char line[3 * 16 + 16];
-    logf("%s (%u bytes):", label, len);
+    rlog("%s (%u bytes):", label, len);
     for (unsigned i = 0; i < len; i += 16) {
         int k = 0;
         k += snprintf(line + k, sizeof(line) - k, "  +%04x  ", i);
         for (unsigned j = 0; j < 16 && i + j < len; j++)
             k += snprintf(line + k, sizeof(line) - k, "%02x ", b[i + j]);
-        logf("%s", line);
+        rlog("%s", line);
     }
 }

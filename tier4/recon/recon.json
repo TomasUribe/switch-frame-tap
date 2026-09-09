@@ -158,7 +158,7 @@
 		},
 		{
 			"type": "debug_flags",
-			"value": { "allow_debug": true, "force_debug": true }
+			"value": { "allow_debug": false, "force_debug": true }
 		}
 	]
 }

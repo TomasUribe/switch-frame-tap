@@ -63,7 +63,7 @@ void __appExit(void)
 int main(void)
 {
     log_init();
-    logf("tier4 recon: boot. settling 3s...");
+    rlog("tier4 recon: boot. settling 3s...");
     svcSleepThread(3000000000ULL);
 
     probe_sys();
@@ -72,14 +72,14 @@ int main(void)
     probe_mmio();
 
     for (int pass = 0; pass < 28; pass++) {
-        logf("");
-        logf("==== PASS %d  (switch foreground: game / HOME / Settings) ====", pass);
+        rlog(" ");
+        rlog("==== PASS %d  (switch foreground: game / HOME / Settings) ====", pass);
         probe_psm();
         probe_caps(pass);
         svcSleepThread(15000000000ULL);
     }
 
-    logf("recon finished. Pull sdmc:/tier4-recon.log and send it over.");
+    rlog("recon finished. Pull sdmc:/tier4-recon.log and send it over.");
     log_exit();
     for (;;) svcSleepThread(60000000000ULL);
     return 0;

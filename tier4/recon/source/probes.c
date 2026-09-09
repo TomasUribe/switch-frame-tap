@@ -23,23 +23,23 @@ static unsigned nonzero(const void *p, unsigned n)
 
 void probe_sys(void)
 {
-    logf("## probe_sys");
+    rlog("## probe_sys");
 
     SetSysFirmwareVersion fw;
     Result rc = setsysGetFirmwareVersion(&fw);
     if (R_SUCCEEDED(rc))
-        logf("  firmware: %u.%u.%u  \"%s\" (%s)",
+        rlog("  firmware: %u.%u.%u  \"%s\" (%s)",
              fw.major, fw.minor, fw.micro, fw.display_version, fw.display_title);
     else
-        logf("  setsysGetFirmwareVersion: rc=0x%x", rc);
+        rlog("  setsysGetFirmwareVersion: rc=0x%x", rc);
 
     /* product model: 1=Erista 3=Mariko 4=Hoag(Lite) 6=Aula(OLED) */
     SetSysProductModel model = SetSysProductModel_Invalid;
     rc = setsysGetProductModel(&model);
-    logf("  productModel: %d (rc=0x%x)  [1=Erista 3=Mariko 4=Lite 6=OLED]", (int)model, rc);
+    rlog("  productModel: %d (rc=0x%x)  [1=Erista 3=Mariko 4=Lite 6=OLED]", (int)model, rc);
 
-    logf("  tick freq: %llu Hz", (unsigned long long)armGetSystemTickFreq());
-    logf("  running on core %u", svcGetCurrentProcessorNumber());
+    rlog("  tick freq: %llu Hz", (unsigned long long)armGetSystemTickFreq());
+    rlog("  running on core %u", svcGetCurrentProcessorNumber());
 }
 
 /* ---------------------------------------------------------------- psm ---- */
@@ -50,7 +50,7 @@ void probe_psm(void)
     u32 pct = 0;
     Result r1 = psmGetChargerType(&ct);
     Result r2 = psmGetBatteryChargePercentage(&pct);
-    logf("  psm: chargerType=%d (0=none 1=EnoughPower 2=LowPower 3=NotSupported) rc=0x%x | battery=%u%% rc=0x%x",
+    rlog("  psm: chargerType=%d (0=none 1=EnoughPower 2=LowPower 3=NotSupported) rc=0x%x | battery=%u%% rc=0x%x",
          ct, r1, pct, r2);
 }
 
@@ -78,7 +78,7 @@ static void caps_try_stream(Service *s, u32 stack)
     struct { u64 size; u64 width; u64 height; } out = {0};
 
     Result rc = serviceDispatchInOut(s, 1201, in, out);
-    logf("    OpenRawScreenShotReadStream(stack=%u): rc=0x%x  size=%llu %llux%llu",
+    rlog("    OpenRawScreenShotReadStream(stack=%u): rc=0x%x  size=%llu %llux%llu",
          stack, rc, (unsigned long long)out.size,
          (unsigned long long)out.width, (unsigned long long)out.height);
     if (R_FAILED(rc)) return;
@@ -92,23 +92,23 @@ static void caps_try_stream(Service *s, u32 stack)
         Result r = serviceDispatchInOut(s, 1203, rin, rout,
             .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
             .buffers = { { g_frame + got, chunk } });
-        if (R_FAILED(r)) { logf("    ReadRawStream @%llu: rc=0x%x", (unsigned long long)got, r); break; }
+        if (R_FAILED(r)) { rlog("    ReadRawStream @%llu: rc=0x%x", (unsigned long long)got, r); break; }
         if (rout == 0) break;
         got += rout;
     }
     u64 us = armTicksToNs(armGetSystemTick() - t0) / 1000;
-    logf("    ReadRawStream: got %llu bytes in %llu us, nonzero=%u",
+    rlog("    ReadRawStream: got %llu bytes in %llu us, nonzero=%u",
          (unsigned long long)got, (unsigned long long)us, nonzero(g_frame, got < 65536 ? got : 65536));
     serviceDispatch(s, 1202);
 }
 
 void probe_caps(int pass)
 {
-    logf("  -- caps:sc (pass %d) --", pass);
+    rlog("  -- caps:sc (pass %d) --", pass);
 
     Service caps;
     Result rc = smGetService(&caps, "caps:sc");
-    if (R_FAILED(rc)) { logf("    smGetService(caps:sc): rc=0x%x  (need service_access)", rc); return; }
+    if (R_FAILED(rc)) { rlog("    smGetService(caps:sc): rc=0x%x  (need service_access)", rc); return; }
 
     const u32 stacks[] = { ViLayerStack_Default, ViLayerStack_Recording, ViLayerStack_Screenshot };
     const char *sn[]   = { "Default(all)", "Recording",  "Screenshot" };
@@ -121,7 +121,7 @@ void probe_caps(int pass)
             Result r = caps_cmd2(&caps, stacks[si], res[ri][0], res[ri][1], g_frame,
                                  res[ri][0] * res[ri][1] * 4);
             u64 us = armTicksToNs(armGetSystemTick() - t0) / 1000;
-            logf("    cmd2 raw  stack=%-13s %llux%llu: rc=0x%x  %lluus  nonzero(64k)=%u",
+            rlog("    cmd2 raw  stack=%-13s %llux%llu: rc=0x%x  %lluus  nonzero(64k)=%u",
                  sn[si], (unsigned long long)res[ri][0], (unsigned long long)res[ri][1],
                  r, (unsigned long long)us, nonzero(g_frame, 65536));
         }
@@ -140,15 +140,15 @@ void probe_caps(int pass)
                 if (R_SUCCEEDED(r)) { ok++; jsz = sz; if (us < best) best = us; }
             }
             if (ok)
-                logf("    jpeg      stack=%-13s: OK x%d  size~%llukB  best %llums (~%llufps)",
+                rlog("    jpeg      stack=%-13s: OK x%d  size~%llukB  best %llums (~%llufps)",
                      sn[si], ok, (unsigned long long)(jsz / 1024),
                      (unsigned long long)(best / 1000), (unsigned long long)(best ? 1000000 / best : 0));
             else
-                logf("    jpeg      stack=%-13s: rc=0x%x (0x7FECE=stub)", sn[si], rlast);
+                rlog("    jpeg      stack=%-13s: rc=0x%x (0x7FECE=stub)", sn[si], rlast);
         }
         capsscExit();
     } else {
-        logf("    capsscInitialize failed");
+        rlog("    capsscInitialize failed");
     }
 
     if (pass == 0) {
@@ -167,11 +167,11 @@ static void dc_dump(const char *name, u64 phys)
     /* [10.0.0+] name; older firmware uses svcLegacyQueryIoMapping(&va, phys, size) */
     Result rc = svcQueryMemoryMapping(&va, &mapped, phys, 0x40000);
     if (R_FAILED(rc) || !va) {
-        logf("    svcQueryMemoryMapping(%s=0x%llx): rc=0x%x va=0x%llx  -> NOT mapped",
+        rlog("    svcQueryMemoryMapping(%s=0x%llx): rc=0x%x va=0x%llx  -> NOT mapped",
              name, (unsigned long long)phys, rc, (unsigned long long)va);
         return;
     }
-    logf("    %s mapped: phys=0x%llx va=0x%llx size=0x%llx  DUMPING word regs",
+    rlog("    %s mapped: phys=0x%llx va=0x%llx size=0x%llx  DUMPING word regs",
          name, (unsigned long long)phys, (unsigned long long)va, (unsigned long long)mapped);
 
     volatile u32 *r = (volatile u32 *)va;
@@ -181,26 +181,26 @@ static void dc_dump(const char *name, u64 phys)
                               {0x700,0x730}, {0x800,0x830}, {0xa00,0xa30} };
     for (unsigned g = 0; g < sizeof(ranges)/sizeof(ranges[0]); g++) {
         for (u32 i = ranges[g][0]; i < ranges[g][1]; i += 4)
-            logf("      [0x%03x] %08x %08x %08x %08x", i,
+            rlog("      [0x%03x] %08x %08x %08x %08x", i,
                  r[i + 0], r[i + 1], r[i + 2], r[i + 3]);
-        logf("      ----");
+        rlog("      ----");
     }
 }
 
 void probe_mmio(void)
 {
-    logf("## probe_mmio");
+    rlog("## probe_mmio");
     dc_dump("DC0", 0x54200000ULL);
     dc_dump("DC1", 0x54240000ULL);
 
     /* also: what does the kernel let us see of our own address space? */
-    logf("  address-space scan (non-free regions, MemType: 3=Io 4=Static 5=Code ...):");
+    rlog("  address-space scan (non-free regions, MemType: 3=Io 4=Static 5=Code ...):");
     u64 addr = 0; int lines = 0;
     while (addr < 0x100000000ULL && lines < 120) {
         MemoryInfo mi; u32 pi;
         if (R_FAILED(svcQueryMemory(&mi, &pi, addr))) break;
         if (mi.type != 0) {
-            logf("    0x%010llx +0x%09llx  type=%2u perm=%u attr=%u",
+            rlog("    0x%010llx +0x%09llx  type=%2u perm=%u attr=%u",
                  (unsigned long long)mi.addr, (unsigned long long)mi.size,
                  mi.type, mi.perm, mi.attr);
             lines++;
@@ -215,8 +215,8 @@ void probe_mmio(void)
 
 void probe_nv(void)
 {
-    logf("## probe_nv");
-    if (R_FAILED(nvInitialize())) { logf("  nvInitialize failed"); return; }
+    rlog("## probe_nv");
+    if (R_FAILED(nvInitialize())) { rlog("  nvInitialize failed"); return; }
 
     static const char *paths[] = {
         "/dev/nvhost-ctrl", "/dev/nvmap", "/dev/nvhost-gpu", "/dev/nvhost-as-gpu",
@@ -227,7 +227,7 @@ void probe_nv(void)
     for (unsigned i = 0; i < sizeof(paths)/sizeof(paths[0]); i++) {
         u32 fd = 0;
         Result rc = nvOpen(&fd, paths[i]);
-        logf("  open %-22s rc=0x%-8x fd=%d", paths[i], rc, (int)fd);
+        rlog("  open %-22s rc=0x%-8x fd=%d", paths[i], rc, (int)fd);
         if (R_SUCCEEDED(rc)) nvClose(fd);
     }
     nvExit();
@@ -237,13 +237,13 @@ void probe_nv(void)
 
 void probe_apm(void)
 {
-    logf("## probe_apm");
+    rlog("## probe_apm");
     if (R_SUCCEEDED(apmInitialize())) {
         ApmPerformanceMode pm = ApmPerformanceMode_Invalid;
         Result rc = apmGetPerformanceMode(&pm);
-        logf("  apmGetPerformanceMode: %d (0=Normal 1=Boost) rc=0x%x", pm, rc);
+        rlog("  apmGetPerformanceMode: %d (0=Normal 1=Boost) rc=0x%x", pm, rc);
         apmExit();
     } else {
-        logf("  apmInitialize failed");
+        rlog("  apmInitialize failed");
     }
 }
