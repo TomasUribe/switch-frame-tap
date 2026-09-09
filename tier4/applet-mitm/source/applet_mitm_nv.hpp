@@ -35,13 +35,15 @@ namespace ams::mitm::applet {
     /* Record one setPreallocatedBuffer's NvGraphicBuffer into g_game_surface. */
     void CaptureGameSurface(const NvGraphicBufferRaw *gb, u32 which);
 
+    /* Opt-in gate. Nothing in this file touches nvdrv unless the SD card holds
+     * sdmc:/applet-mitm.armed containing the keyword "vic". Set once at
+     * startup from Main(). Default false = the module is a pure observer. */
+    extern bool g_vic_armed;
+
     /* One-shot: bring up nvdrv + VIC, blit slot `slot` of the captured
      * swapchain into our linear buffer, wait, checksum, release. Safe to call
-     * every queueBuffer - it self-disables after the first run. */
+     * every queueBuffer - it self-disables after the first run, and is a no-op
+     * unless g_vic_armed. */
     void TryVicBlit(s32 slot);
-
-    /* Stage-1 probe (import + survey + own-buffer). Retained for reference;
-     * TryVicBlit now supersedes it. */
-    void TryNvmapProbe(u32 nvmap_id);
 
 }

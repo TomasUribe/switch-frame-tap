@@ -38,15 +38,14 @@
 namespace ams::mitm::applet {
 
     constinit GameSurface g_game_surface = {};
+    constinit bool g_vic_armed = false;
 
     namespace {
 
-        constinit std::atomic<bool> g_probe_done{false};
         constinit std::atomic<bool> g_blit_done{false};
 
         /* Static so the allocator is never in the path. */
         alignas(0x1000) constinit u8 g_nv_tmem_buf[0x40000] = {};
-        alignas(0x1000) constinit u8 g_own_buf[0x10000]     = {};
 
         /* VIC blit buffers (all page-aligned, all nvmap-CREATE'd against our
          * own pages so the CPU can touch config/cmdbuf and read back dst).
@@ -83,9 +82,6 @@ namespace ams::mitm::applet {
         constexpr u32 NvmapIocFromId = MakeIowr(0x01, 0x03, 8);
         constexpr u32 NvmapIocAlloc  = MakeIowr(0x01, 0x04, 32);
         constexpr u32 NvmapIocGetId  = MakeIowr(0x01, 0x0E, 8);
-        constexpr u32 NvmapIocParam  = MakeIowr(0x01, 0x09, 12);
-        constexpr u32 NvMapParamSize = 1;
-        constexpr u32 NvMapParamKind = 5;
 
         constexpr u32 NvHostIocChannelGetSyncpoint  = MakeIowr(0x00, 0x02, 8);   /* {u32 module_id; u32 syncpt}   */
         constexpr u32 NvHostIocChannelSetSubmitTo   = MakeIow (0x00, 0x07, 4);   /* {u32 timeout}                 */
@@ -253,7 +249,7 @@ namespace ams::mitm::applet {
     }
 
     void TryVicBlit(s32 slot) {
-        if (!g_game_surface.armed) { return; }
+        if (!g_vic_armed || !g_game_surface.armed) { return; }
         bool expected = false;
         if (!g_blit_done.compare_exchange_strong(expected, true)) { return; }
 
@@ -430,68 +426,6 @@ namespace ams::mitm::applet {
         serviceClose(std::addressof(g_nv_srv));
         tmemClose(std::addressof(g_nv_tmem));
         LogMark("vb:released");
-    }
-
-    /* ---- Stage-1 probe (retained; no longer wired) ---------------------- */
-    void TryNvmapProbe(u32 nvmap_id) {
-        bool expected = false;
-        if (!g_probe_done.compare_exchange_strong(expected, true)) {
-            return;
-        }
-
-        LogMark("nv:1_smGetService");
-        ::Result rc = smGetService(std::addressof(g_nv_srv), "nvdrv:s");
-        LogLine("   smGetService(\"nvdrv:s\") rc=0x%x", rc);
-        if (R_FAILED(rc)) { LogMark("nv:1_FAILED"); return; }
-
-        LogMark("nv:2_tmemCreateFromMemory");
-        rc = tmemCreateFromMemory(std::addressof(g_nv_tmem), g_nv_tmem_buf, sizeof(g_nv_tmem_buf), Perm_None);
-        LogLine("   tmemCreateFromMemory(0x%zx) rc=0x%x handle=0x%x",
-                sizeof(g_nv_tmem_buf), rc, g_nv_tmem.handle);
-        if (R_FAILED(rc)) { LogMark("nv:2_FAILED"); return; }
-
-        LogMark("nv:3_Initialize");
-        {
-            const u32 tmem_size = static_cast<u32>(sizeof(g_nv_tmem_buf));
-            rc = serviceDispatchIn(std::addressof(g_nv_srv), 3, tmem_size,
-                .in_num_handles = 2,
-                .in_handles     = { CUR_PROCESS_HANDLE, g_nv_tmem.handle },
-            );
-            LogLine("   nvdrv Initialize rc=0x%x", rc);
-            if (R_FAILED(rc)) { LogMark("nv:3_FAILED"); return; }
-        }
-
-        u32 fd = 0, err = 0;
-        LogMark("nv:4_open_nvmap");
-        rc = NvOpen("/dev/nvmap", std::addressof(fd), std::addressof(err));
-        LogLine("   Open(\"/dev/nvmap\") rc=0x%x fd=%u nverr=%u", rc, fd, err);
-        if (R_FAILED(rc) || err != 0) { LogMark("nv:4_FAILED"); return; }
-
-        u32 handle = 0;
-        LogMark("nv:5_FROM_ID");
-        {
-            struct { u32 id; u32 handle; } args = { nvmap_id, 0 };
-            u32 nverr = 0;
-            rc = NvIoctl(fd, NvmapIocFromId, std::addressof(args), sizeof(args), std::addressof(nverr));
-            LogLine("   FROM_ID(id=%u) rc=0x%x nverr=%u -> handle=%u", nvmap_id, rc, nverr, args.handle);
-            if (R_FAILED(rc) || nverr != 0) { LogMark("nv:5_FAILED"); return; }
-            handle = args.handle;
-        }
-
-        LogMark("nv:6_PARAM");
-        {
-            struct { u32 handle; u32 param; u32 value; } args = { handle, NvMapParamSize, 0 };
-            u32 nverr = 0;
-            rc = NvIoctl(fd, NvmapIocParam, std::addressof(args), sizeof(args), std::addressof(nverr));
-            LogLine("   PARAM(Size) rc=0x%x nverr=%u -> %u B (%u MB)",
-                    rc, nverr, args.value, args.value / (1024 * 1024));
-        }
-
-        LogMark("nv:9_cleanup");
-        serviceClose(std::addressof(g_nv_srv));
-        tmemClose(std::addressof(g_nv_tmem));
-        LogMark("nv:DONE_OPENED");
-        AMS_UNUSED(g_own_buf);
     }
 
 }

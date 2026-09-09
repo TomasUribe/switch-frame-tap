@@ -10,8 +10,11 @@
  * Log: sdmc:/applet-mitm.log
  */
 #include <stratosphere.hpp>
+#include <cstdio>
+#include <cstring>
 #include "applet_mitm_service.hpp"
 #include "applet_mitm_log.hpp"
+#include "applet_mitm_nv.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -53,6 +56,48 @@ namespace ams {
         };
 
         ServerManager g_server_manager;
+
+        /* ---- liveness heartbeat -------------------------------------------
+         * Two runs in a row went silent after "registered mitm server", with
+         * the system wedging on vi. That is ambiguous: the process may have
+         * died, or it may be alive but never reaching our handlers (sm blocks
+         * every vi:u open on the mitm query port, so a dead LoopProcess wedges
+         * the system exactly the same way).
+         *
+         * This thread is independent of the dispatch path. LogMark rewrites
+         * sdmc:/applet-mitm.last whole, so even after a forced power-off the
+         * last committed beat tells us how long the process lived. */
+        alignas(os::ThreadStackAlignment) constinit u8 g_hb_stack[16_KB];
+        constinit os::ThreadType g_hb_thread;
+
+        void HeartbeatThread(void *) {
+            for (u32 i = 1; ; i++) {
+                os::SleepThread(TimeSpan::FromSeconds(3));
+                char b[32];
+                std::snprintf(b, sizeof(b), "hb:%u", i);
+                mitm::applet::LogMark(b);
+            }
+        }
+
+        /* ---- opt-in arm file ----------------------------------------------
+         * Nothing touches nvdrv/VIC unless sdmc:/applet-mitm.armed exists and
+         * contains "vic". Default is a pure observer, i.e. M7d behaviour. */
+        bool ArmFileContains(const char *keyword) {
+            fs::FileHandle f;
+            if (R_FAILED(fs::OpenFile(std::addressof(f), "sdmc:/applet-mitm.armed", fs::OpenMode_Read))) {
+                return false;
+            }
+            char buf[256] = {};
+            s64 fsz = 0;
+            if (R_FAILED(fs::GetFileSize(std::addressof(fsz), f))) { fs::CloseFile(f); return false; }
+            size_t n = static_cast<size_t>(fsz);
+            if (n > sizeof(buf) - 1) { n = sizeof(buf) - 1; }
+            const bool ok = n > 0 && R_SUCCEEDED(fs::ReadFile(f, 0, buf, n));
+            fs::CloseFile(f);
+            if (!ok) { return false; }
+            buf[n] = '\0';
+            return std::strstr(buf, keyword) != nullptr;
+        }
 
         Result ServerManager::OnNeedsToAccept(int port_index, Server *server) {
             std::shared_ptr<::Service> fsrv;
@@ -98,12 +143,26 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M8b: up. VIC CHANNEL_SUBMIT Phase A (no-op cmdbuf, ABI+syncpt probe), one-shot.");
+        mitm::applet::LogLine("applet-mitm M9: up. Observer by default; heartbeat every 3s.");
+
+        mitm::applet::g_vic_armed = ArmFileContains("vic");
+        mitm::applet::LogLine("arm file: vic=%s  (sdmc:/applet-mitm.armed)",
+                              mitm::applet::g_vic_armed ? "ARMED" : "absent - observer only");
+
+        /* start the heartbeat before anything that can block */
+        R_ABORT_UNLESS(os::CreateThread(std::addressof(g_hb_thread), HeartbeatThread, nullptr,
+                                        g_hb_stack, sizeof(g_hb_stack),
+                                        os::GetThreadPriority(os::GetCurrentThread())));
+        os::SetThreadNamePointer(std::addressof(g_hb_thread), "applet-mitm.HB");
+        os::StartThread(std::addressof(g_hb_thread));
+        mitm::applet::LogMark("main:heartbeat_started");
 
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");
 
+        mitm::applet::LogMark("main:LoopProcess");
         g_server_manager.LoopProcess();
+        mitm::applet::LogMark("main:LoopProcess_RETURNED");
     }
 
 }

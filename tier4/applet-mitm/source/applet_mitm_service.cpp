@@ -76,7 +76,7 @@ namespace ams::mitm::applet {
          * the first int32 of the parcel payload. Once the game has presented a
          * few hundred frames (real content on screen), run the one-shot VIC
          * blit against that slot. */
-        if (code == 7 && total > 300 && g_game_surface.armed) {
+        if (code == 7 && g_vic_armed && total > 300 && g_game_surface.armed) {
             bool ex = false;
             if (g_blit_attempted.compare_exchange_strong(ex, true)) {
                 s32 qslot = 0;
