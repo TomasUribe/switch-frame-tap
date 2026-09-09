@@ -327,11 +327,14 @@ namespace ams::mitm::applet {
         constexpr u32 Host1xIncr0x10x2 = (UINT32_C(1) << 28) | (0x10u << 16) | 2u;
 
         /* Word indices of the three address slots, for the reloc variant. */
-        constexpr u32 CfgAddrWord = 8, DstAddrWord = 11, SrcAddrWord = 14;
+        constexpr u32 CfgAddrWord = 8, DstAddrWord = 11, SrcAddrWord = 14;   /* + 1 if SETCL is emitted */
 
-        u32 BuildCmdbuf(u32 *w, VicJob job, u32 cfg_addr, u32 dst_addr, u32 src_addr) {
+        u32 BuildCmdbuf(u32 *w, VicJob job, u32 cfg_addr, u32 dst_addr, u32 src_addr, bool set_class) {
             const bool reloc = (job == VicJob::BlitReloc);
             u32 n = 0;
+            /* Point the channel at the VIC's register space before touching
+             * METHOD_OFFSET/METHOD_DATA, which are per-class registers. */
+            if (set_class) { w[n++] = vic::Host1xOpcodeSetClass(0, vic::HOST1X_CLASS_VIC, 0); }
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_APPLICATION_ID >> 2; w[n++] = 1;
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_CONTROL_PARAMS >> 2;
             w[n++] = (static_cast<u32>(sizeof(vic::VicConfigStruct) / 16)) << 16;
@@ -373,14 +376,15 @@ namespace ams::mitm::applet {
         /* One VIC job end to end: config, cmdbuf, submit, wait, rescue, read
          * back. Called once per VicJob so a single reboot answers which half of
          * the pipeline works. */
-        void RunOneJob(const char *stage, VicJob job, const JobCtx &c) {
+        void RunOneJob(const char *stage, VicJob job, bool set_class, const JobCtx &c) {
             VicStage(stage);
 
             auto *cfg = reinterpret_cast<vic::VicConfigStruct *>(g_vic_cfg_buf);
             if (job == VicJob::Fill) { FillClearConfig(cfg); } else { FillBlitConfig(cfg); }
 
             auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
-            u32 words = BuildCmdbuf(w, job, c.cfg_addr, c.dst_addr, c.src_addr + c.src_off);
+            u32 words = BuildCmdbuf(w, job, c.cfg_addr, c.dst_addr, c.src_addr + c.src_off, set_class);
+            const u32 rw = set_class ? 1u : 0u;   /* reloc word indices shift when SETCL leads */
             words = AppendIncrSyncpt(w, words, c.syncpt, true);   /* OP_DONE: EXECUTE is present */
 
             /* Prefill with a poison pattern rather than zero. "All zero" cannot
@@ -401,9 +405,9 @@ namespace ams::mitm::applet {
             put(1); put(nr); put(1); put(1);
             put(c.cmd_handle); put(0); put(words);
             if (reloc) {
-                put(c.cmd_handle); put(CfgAddrWord * 4); put(c.cfg_handle); put(0);
-                put(c.cmd_handle); put(DstAddrWord * 4); put(c.dst_handle); put(0);
-                put(c.cmd_handle); put(SrcAddrWord * 4); put(c.src_handle); put(c.src_off);
+                put(c.cmd_handle); put((CfgAddrWord + rw) * 4); put(c.cfg_handle); put(0);
+                put(c.cmd_handle); put((DstAddrWord + rw) * 4); put(c.dst_handle); put(0);
+                put(c.cmd_handle); put((SrcAddrWord + rw) * 4); put(c.src_handle); put(c.src_off);
                 put(8); put(8); put(8);
             }
             put(c.syncpt); put(1); put(0); put(0); put(0);
@@ -414,8 +418,10 @@ namespace ams::mitm::applet {
             u32 nverr = 0, fence_val = 0;
             ::Result rc = NvIoctl(c.vfd, req, sb, sz, std::addressof(nverr));
             std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
-            LogLine("   [%s] words=%u req=0x%08x sz=%u nr=%u rc=0x%x nverr=%u -> fence=%u",
-                    stage, words, req, sz, nr, rc, nverr, fence_val);
+            LogLine("   [%s] setcl=%d words=%u cmd[0..3]=%08x %08x %08x %08x",
+                    stage, static_cast<int>(set_class), words, w[0], w[1], w[2], w[3]);
+            LogLine("   [%s] req=0x%08x sz=%u nr=%u rc=0x%x nverr=%u -> fence=%u",
+                    stage, req, sz, nr, rc, nverr, fence_val);
             if (R_FAILED(rc) || nverr != 0) { LogLine("   [%s] SUBMIT REJECTED", stage); return; }
 
             u32 cfd = 0, ce = 0;
@@ -599,15 +605,14 @@ namespace ams::mitm::applet {
             LogLine("   pinned: cfg=0x%x dst=0x%x src=0x%x (+slot off 0x%x)", cfg_addr, dst_addr, src_addr, src_off);
         }
 
-        RunOneJob("vb:job_fill", VicJob::Fill,
-                  JobCtx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, src_addr, src_off,
-                          cfg_handle, dst_handle, src_handle });
-        RunOneJob("vb:job_blit_direct", VicJob::BlitDirect,
-                  JobCtx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, src_addr, src_off,
-                          cfg_handle, dst_handle, src_handle });
-        RunOneJob("vb:job_blit_reloc", VicJob::BlitReloc,
-                  JobCtx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, src_addr, src_off,
-                          cfg_handle, dst_handle, src_handle });
+        {
+            const JobCtx ctx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, src_addr, src_off,
+                              cfg_handle, dst_handle, src_handle };
+            /* A/B the class hypothesis in one run. */
+            RunOneJob("vb:job_fill_SETCL",  VicJob::Fill,      true,  ctx);
+            RunOneJob("vb:job_fill_plain",  VicJob::Fill,      false, ctx);   /* control */
+            RunOneJob("vb:job_blit_SETCL",  VicJob::BlitReloc, true,  ctx);
+        }
         VicStage("vb:ALL_JOBS_DONE");
 
     close_vic:

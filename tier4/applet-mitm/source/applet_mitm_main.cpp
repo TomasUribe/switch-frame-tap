@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M15: up. VIC buffers on real heap + uncached mapping + 0xAB poison.");
+        mitm::applet::LogLine("applet-mitm M16: up. A/B test: does the cmdbuf need an explicit SETCL(VIC)?");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

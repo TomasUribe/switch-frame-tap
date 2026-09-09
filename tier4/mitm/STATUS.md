@@ -44,6 +44,51 @@ touches NAND.
 - Channel devices are **one fd per session** — a leaked survey fd made the real
   open fail `nverr=4096`. The survey now closes each fd.
 
+## M15 run — heap+uncached confirmed working, but NOT the fix
+
+```
+VIC heap at 0x83f400000: cfg=0x83f400000 cmd=0x83f404000 dst=0x83f410000
+SetMemoryAttribute(0x83f400000, 0x4000, uncached) rc=0x0     (all three rc=0)
+[vb:job_fill] dst sum32=11206656 changed=0/65536  (untouched - poison 0xAB intact)
+```
+
+The heap route and the uncached attribute both work. But the poison survived
+**100% intact on all three jobs**, which is stronger than "read back zeros":
+the engine is **not writing our memory at all**.
+
+And the decisive detail — the pinned addresses did **not move** when the buffers
+did:
+
+| | cfg | dst |
+|---|---|---|
+| M13/M14, buffers in `.bss` | `0xE31C0000` | `0xE31E0000` |
+| M15, buffers on heap `0x83F400000` | `0xE31C0000` | `0xE31E0000` |
+
+Identical. So `MAP_CMD_BUFFER` returns an **SMMU IOVA allocated in request
+order**, not a physical page address — the address was never wrong, and
+cache/`.bss` was never the blocker either. (Both changes were still correct and
+are kept.)
+
+## M16 — the assumption nobody tested: the host1x **class**
+
+`VIC_UCLASS_METHOD_OFFSET` (0x10) and `METHOD_DATA` (0x11) are registers **of the
+current host1x class**. libdrm never emits `SETCL` because the DRM kernel driver
+sets `job->class = HOST1X_CLASS_VIC` and emits it before the gather. Whether
+nvservices' `CHANNEL_SUBMIT` does the same has been an untested assumption for
+six runs.
+
+If the class is not VIC:
+- writes to 0x10/0x11 hit meaningless registers → engine does nothing
+- `EXECUTE` likewise → no output
+- but `INCR_SYNCPT` (register 0x00) exists in **every** class → **OP_DONE still fires**
+
+That is exactly the behaviour observed every time.
+
+M16 emits `SETCL(0, 0x5D, 0)` = `0x00001740` at the head of the cmdbuf and A/Bs it
+in one run: `job_fill_SETCL`, `job_fill_plain` (control), `job_blit_SETCL`.
+Reloc word indices shift by one when SETCL leads. `cmd[0..3]` is logged so the
+encoding can be checked on-device.
+
 ## M14 run — all three jobs ran, all three wrote nothing
 
 | job | submit | engine | dst |

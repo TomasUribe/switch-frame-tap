@@ -34,6 +34,14 @@ namespace ams::mitm::applet::vic {
      * on the VIC!) stalls forever. libdrm does this via
      * drm_tegra_pushbuf_sync_cond: NONINCR(0x0,1) then cond<<shift | syncpt_id.
      * VIC 4.0 reports version 0x21 -> cond_shift 8. */
+    /* SETCL selects which engine's register space the following opcodes address.
+     * libdrm omits it because the DRM kernel driver emits it from job->class;
+     * nvservices' CHANNEL_SUBMIT may not, so we emit it ourselves. Harmless if
+     * the class was already VIC. mask=0 means "set class, write no registers". */
+    constexpr u32 Host1xOpcodeSetClass(u32 offset, u32 class_id, u32 mask) {
+        return (UINT32_C(0) << 28) | ((offset & 0xFFF) << 16) | ((class_id & 0x3FF) << 6) | (mask & 0x3F);
+    }
+
     constexpr u32 Host1xOpcodeNonIncr(u32 offset, u32 count) {
         return (UINT32_C(2) << 28) | ((offset & 0xFFF) << 16) | (count & 0xFFFF);
     }
