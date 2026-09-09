@@ -83,8 +83,9 @@ static u32 keyword(const char *w)
     if (!strcmp(w, "mmio_map"))    return P_MMIO_MAP;
     if (!strcmp(w, "mmio_read"))   return P_MMIO_MAP | P_MMIO_READ;
     if (!strcmp(w, "loop"))        return P_LOOP;
-    /* NB: apm is NOT in all_safe - v1 fatalled am inside apmInitialize/apmGetPerformanceMode */
-    if (!strcmp(w, "all_safe"))    return P_SYS | P_PSM | P_NV | P_CAPS_JPEG;
+    /* NB: apm and nv both fatal a system process from a boot2 sysmodule on
+     * 22.5.0 - they are NOT in all_safe. */
+    if (!strcmp(w, "all_safe"))    return P_SYS | P_PSM | P_CAPS_JPEG;
     return 0;
 }
 

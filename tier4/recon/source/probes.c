@@ -13,6 +13,7 @@
 
 #include <switch.h>
 #include <string.h>
+#include <stdio.h>
 
 #define BUF_SZ (256 * 1024)
 static u8 g_buf[BUF_SZ] __attribute__((aligned(0x1000)));
@@ -110,10 +111,14 @@ static const char *g_stackn[] = { "Recording", "Default(all)", "Screenshot" };
 
 static void probe_caps_jpeg(void)
 {
-    log_mark("caps_jpeg (libnx wrapper)");
+    log_mark("caps_jpeg:init");
     if (R_FAILED(capsscInitialize())) { rlog("   capsscInitialize failed"); rlog("<- caps_jpeg"); return; }
 
     for (int si = 0; si < 3; si++) {
+        char mk[48];
+        snprintf(mk, sizeof(mk), "caps_jpeg:%s", g_stackn[si]);
+        log_mark(mk);                       /* .last names the exact stack in flight */
+
         u64 sz = 0, t0 = armGetSystemTick();
         Result r = capsscCaptureJpegScreenShot(&sz, g_buf, BUF_SZ, g_stacks[si], 1000000000LL);
         u64 us = armTicksToNs(armGetSystemTick() - t0) / 1000;
@@ -217,22 +222,26 @@ static void probe_mmio(u32 flags)
 
 void run_probes(u32 f, int pass)
 {
-    /* Ordered safest/highest-value first so a crash in a later probe still
-     * leaves the earlier results in the log. apm is dead last: in v1 it
-     * fatalled `am` with LimitReached. */
+    /* Known-safe first, then caps:sc (the actual Phase 0 question), then the
+     * probes that fatal a system process on 22.5.0 (nv, apm) dead last so
+     * they can't rob us of earlier results. */
     if (pass == 0) {
         if (f & P_SYS) probe_sys();
         if (f & P_PSM) probe_psm();
-        if (f & P_NV)  probe_nv(f);
     }
+
     if (f & P_CAPS_JPEG)   probe_caps_jpeg();
     if (f & P_CAPS_RAW)    probe_caps_raw();
     if (f & P_CAPS_STREAM) probe_caps_stream();
 
     if (pass == 0) {
         if (f & (P_MMIO_MAP | P_MMIO_READ)) probe_mmio(f);
+        if (f & P_NV) {
+            rlog("NOTE: nv fatalled a system process in the prior run. Expect a crash.");
+            probe_nv(f);
+        }
         if (f & P_APM) {
-            rlog("NOTE: apm crashed am in v1. If the console fatals here, that is why.");
+            rlog("NOTE: apm fatalled am in the prior run. Expect a crash.");
             probe_apm();
         }
     }
