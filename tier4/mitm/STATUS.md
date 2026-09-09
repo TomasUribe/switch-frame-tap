@@ -58,7 +58,36 @@ libstratosphere rebuild** — expect it, and run the build in the background.
 - `TransactParcel` is **cmd 0 (MapAlias)** pre-3.0.0 and **cmd 3 (AutoSelect)**
   on ≥ 3.0.0. We're on 22.5.0 → cmd 3.
 
-## Where we are now: M3 (built, awaiting hardware result)
+## M3 RESULT: we are on the frame pipeline ✅
+
+Verified on hardware with Mario Kart 8 Deluxe (`0100152000022000`), game
+running normally:
+
+```
+-> GetRelayService:wrapped
+*** binder txn #1  session=20  code=10(connect)   in=108
+*** binder txn #3  session=20  code=14(?)         in=476   x3   <- setPreallocatedBuffer
+*** binder txn #6  session=20  code=3(dequeueBuffer)
+*** binder txn #7  session=20  code=1(requestBuffer)
+*** binder txn #600  at 43.237s  queueBuffer x296
+*** binder txn #1200 at 48.237s  queueBuffer x596
+```
+
+600 transactions in exactly 5.000 s; queueBuffer 296 -> 596 = **300 frames in
+5 s = 60.0 fps**. We observe every frame the game presents.
+
+The three `code=14` (`SET_PREALLOCATED_BUFFER`, Nintendo's extension) calls at
+startup are MK8 registering its triple-buffered swapchain. Each carries a
+flattened `NvGraphicBuffer` in its **input** parcel.
+
+**M3b (built, awaiting result)** parses it — see `applet_mitm_gbuf.{hpp,cpp}`.
+Layout pinned with static_asserts: `sizeof(NvGraphicBuffer) == 0x150`,
+`nvmap_id` @0x10, `magic`(0xDAFFCAFF) @0x18, `planes` @0x40,
+`sizeof(NvSurface) == 0x58`. We scan the parcel for the magic and dump
+nvmap_id, stride, format, and per-plane width/height/pitch/offset/size/kind/
+block_height_log2.
+
+## Previous section: M3 design
 
 Dropped `OpenLayer` (its only purpose was `aruid` + `layer_id`, and it's the one
 thing that broke games). Went straight for the frame pipeline instead:

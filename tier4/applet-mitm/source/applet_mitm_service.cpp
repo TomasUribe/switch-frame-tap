@@ -1,5 +1,7 @@
 #include "applet_mitm_service.hpp"
+#include <cstdio>
 #include "applet_mitm_log.hpp"
+#include "applet_mitm_gbuf.hpp"
 #include <atomic>
 
 namespace ams::mitm::applet {
@@ -25,7 +27,9 @@ namespace ams::mitm::applet {
                 case 9:  return "query";
                 case 10: return "connect";
                 case 11: return "disconnect";
-                case 12: return "setPreallocatedBuffer";
+                case 12: return "setSidebandStream";
+                case 13: return "allocateBuffers";
+                case 14: return "setPreallocatedBuffer";
                 default: return "?";
             }
         }
@@ -47,6 +51,21 @@ namespace ams::mitm::applet {
                     parcel_in.GetSize(), parcel_out.GetSize());
         }
         if (total == 1) { LogMark("binder:first_txn"); }
+
+        /* SET_PREALLOCATED_BUFFER (14) carries a flattened NvGraphicBuffer in
+         * its INPUT parcel - the full description of one frame's memory.
+         * Games register one per swapchain slot at startup (MK8: 3 = triple
+         * buffered). This is the descriptor we need to import and read pixels. */
+        if (code == 14 && per <= 8) {
+            LogMark("binder:parse_preallocated");
+            if (const auto *gb = FindGraphicBuffer(parcel_in.GetPointer(), parcel_in.GetSize()); gb != nullptr) {
+                char tag[48];
+                std::snprintf(tag, sizeof(tag), "setPreallocatedBuffer#%u", per);
+                LogGraphicBuffer(tag, gb);
+            } else {
+                LogLine("    (no NvGraphicBuffer magic found in %zu-byte parcel)", parcel_in.GetSize());
+            }
+        }
 
         R_RETURN(sm::mitm::ResultShouldForwardToSession());
     }
