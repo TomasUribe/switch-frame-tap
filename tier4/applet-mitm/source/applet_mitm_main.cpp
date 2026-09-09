@@ -91,7 +91,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M4: up. binder tap + NvGraphicBuffer parse + nvmap probe.");
+        mitm::applet::LogLine("applet-mitm M4b: up. hand-rolled nvdrv probe (breadcrumb per step).");
 
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");

@@ -2,6 +2,7 @@
 #include <cstdio>
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_gbuf.hpp"
+#include "applet_mitm_nv.hpp"
 #include <atomic>
 
 namespace ams::mitm::applet {
@@ -13,46 +14,6 @@ namespace ams::mitm::applet {
          * only a periodic heartbeat. */
         constinit std::atomic<u32> g_txn_total{0};
         constinit std::atomic<u32> g_txn_per_code[16] = {};
-
-        /* ---- M4: can we open the game's nvmap object? -------------------
-         * nvmap ids are cross-process (nvnflinger lives in another process and
-         * must map this very buffer to composite it), so NVMAP_IOC_FROM_ID on
-         * our own nvdrv session should reach the same memory.
-         *
-         * Phase 0 saw a plain sysmodule fatal inside libnx's nvInitialize().
-         * The cause is _nvInitialize() calling appletGetAppletType() to pick a
-         * service - meaningless in our context. Overriding the weak global
-         * __nx_nv_service_type (see below) makes it use "nvdrv:s" directly and
-         * never touch applet. One-shot, breadcrumbed at every step. */
-        constinit std::atomic<bool> g_nvmap_probe_done{false};
-
-        void TryNvmapProbe(u32 nvmap_id) {
-            bool expected = false;
-            if (!g_nvmap_probe_done.compare_exchange_strong(expected, true)) {
-                return;
-            }
-
-            LogMark("nvmap:nvInitialize");
-            Result rc = nvInitialize();
-            LogLine("    nvInitialize rc=0x%x", rc.GetValue());
-            if (R_FAILED(rc)) { LogMark("nvmap:nvInitialize_FAILED"); return; }
-
-            LogMark("nvmap:nvMapInit");
-            rc = nvMapInit();
-            LogLine("    nvMapInit rc=0x%x  fd=%u", rc.GetValue(), nvMapGetFd());
-            if (R_FAILED(rc)) { LogMark("nvmap:nvMapInit_FAILED"); return; }
-
-            LogMark("nvmap:LoadRemote");
-            NvMap m = {};
-            rc = nvMapLoadRemote(std::addressof(m), nvmap_id);
-            LogLine("    nvMapLoadRemote(id=%u) rc=0x%x", nvmap_id, rc.GetValue());
-            if (R_FAILED(rc)) { LogMark("nvmap:LoadRemote_FAILED"); return; }
-
-            LogMark("nvmap:OPENED");
-            LogLine("*** nvmap OPENED  id=%u  handle=%u  size=%u B (%u MB)",
-                    nvMapGetId(std::addressof(m)), nvMapGetHandle(std::addressof(m)),
-                    nvMapGetSize(std::addressof(m)), nvMapGetSize(std::addressof(m)) / (1024 * 1024));
-        }
 
         const char *TxnName(u32 code) {
             switch (code) {
