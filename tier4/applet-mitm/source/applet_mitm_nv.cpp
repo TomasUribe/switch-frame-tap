@@ -54,8 +54,11 @@ namespace ams::mitm::applet {
         constexpr u32 NvHostIocChannelGetSyncpoint  = MakeIowr(0x00, 0x02, 8);   /* {u32 module_id; u32 syncpt}  */
         constexpr u32 NvHostIocChannelSetSubmitTo   = (UINT32_C(1) << 30) | (4 << 16) | (0x00 << 8) | 0x07; /* _IOW, {u32 timeout} */
         constexpr u32 NvHostIocCtrlSyncptRead       = MakeIowr(0x00, 0x14, 8);   /* {u32 id; u32 value}          */
-        /* MAP_CMD_BUFFER: size varies with num_handles. header 8 + per-handle 8. */
-        constexpr u32 NvHostIocChannelMapCmdBuf1    = MakeIowr(0x00, 0x09, 8 + 1 * 8);
+        /* MAP_CMD_BUFFER: header is 12 bytes (num_handles + reserved + is_compr
+         * + padding[3]); each handle entry is 8. So 1 handle = 20 bytes, and
+         * the ioctl request code must encode 20 or the kernel's _NV_IOC_SIZE
+         * disagrees with the buffer -> nverr=11 (BadParameter). */
+        constexpr u32 NvHostIocChannelMapCmdBuf1    = MakeIowr(0x00, 0x09, 12 + 1 * 8);
 
         ::Result NvIoctl(u32 fd, u32 request, void *argp, size_t argsz, u32 *out_err) {
             const struct { u32 fd; u32 request; } in = { fd, request };
