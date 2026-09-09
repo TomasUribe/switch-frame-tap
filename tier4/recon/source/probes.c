@@ -40,6 +40,13 @@ static void probe_sys(void)
     rlog("   productModel=%d rc=0x%x  [1=Erista 3=Mariko 4=Lite 6=OLED]", (int)model, rc);
     rlog("   tickfreq=%llu core=%u",
          (unsigned long long)armGetSystemTickFreq(), svcGetCurrentProcessorNumber());
+
+    /* did the system_settings.ini debug-mode override take? */
+    u8 dbg = 0xEE; u64 osz = 0;
+    Result dr = setsysGetSettingsItemValue("settings_debug", "is_debug_mode_enabled",
+                                           &dbg, sizeof(dbg), &osz);
+    rlog("   settings_debug!is_debug_mode_enabled = 0x%02x (rc=0x%x outsz=%llu)",
+         dbg, dr, (unsigned long long)osz);
     rlog("<- sys");
 }
 
@@ -215,6 +222,61 @@ static void probe_caps_stream(void)
     rlog("<- caps_stream");
 }
 
+/* caps:sc cmd 3 + cmd 5 - AttachSharedBufferToCaptureModule /
+ * CaptureRawImageToAttachedSharedBuffer. Not wrapped by libnx. switchbrew:
+ * cmd3 = 8 bytes in / no out; cmd5 = 0x10 bytes in / no out.
+ * We try a few plausible ABIs, all EXPERIMENTAL - garbage return codes are
+ * fine, we're mapping it. Buffer is our 256 KB g_buf via TransferMemory. */
+static void probe_caps_attach(void)
+{
+    log_mark("caps_attach:init");
+    Service s;
+    if (R_FAILED(smGetService(&s, "caps:sc"))) { rlog("   smGetService(caps:sc) failed"); rlog("<- caps_attach"); return; }
+
+    TransferMemory tmem;
+    Result rc = tmemCreateFromMemory(&tmem, g_buf, BUF_SZ, Perm_Rw);
+    rlog("   tmemCreateFromMemory(256KB) rc=0x%x handle=0x%x", rc, tmem.handle);
+    if (R_FAILED(rc)) { serviceClose(&s); rlog("<- caps_attach"); return; }
+
+    /* cmd 3 variant A: u64 size in, transfer-memory as copy handle */
+    {
+        u64 in = BUF_SZ;
+        Result r = serviceDispatchIn(&s, 3, in,
+            .in_num_handles = 1, .in_handles = { tmem.handle });
+        rlog("   cmd3(A: size+handle) rc=0x%x", r);
+    }
+    /* cmd 3 variant B: (s32 index, u32 pad), no handle */
+    {
+        struct { s32 index; u32 pad; } in = { 0, 0 };
+        Result r = serviceDispatchIn(&s, 3, in);
+        rlog("   cmd3(B: index,no handle) rc=0x%x", r);
+    }
+
+    /* cmd 5 variant A: (s32 layer_stack, u32 pad, s64 timeout) */
+    for (int si = 0; si < 2; si++) {
+        char mk[48]; snprintf(mk, sizeof(mk), "caps_attach:cmd5:%s", g_stackn[si]); log_mark(mk);
+        memset(g_buf, 0, 4096);
+        struct { s32 layer_stack; u32 pad; s64 timeout; } in = { (s32)g_stacks[si], 0, 1000000000LL };
+        u64 t0 = armGetSystemTick();
+        Result r = serviceDispatchIn(&s, 5, in);
+        u64 us = armTicksToNs(armGetSystemTick() - t0) / 1000;
+        rlog("   cmd5(A) stack=%-12s rc=0x%-8x %lluus  buf: %02x %02x %02x %02x  nonzero=%u",
+             g_stackn[si], r, (unsigned long long)us,
+             g_buf[0], g_buf[1], g_buf[2], g_buf[3], nonzero(g_buf, 4096));
+    }
+    /* cmd 5 variant B: (u64 width, u64 height) */
+    {
+        memset(g_buf, 0, 4096);
+        struct { u64 w, h; } in = { 256, 256 };
+        Result r = serviceDispatchIn(&s, 5, in);
+        rlog("   cmd5(B: 256x256) rc=0x%x  nonzero=%u", r, nonzero(g_buf, 4096));
+    }
+
+    tmemClose(&tmem);
+    serviceClose(&s);
+    rlog("<- caps_attach");
+}
+
 /* ------------------------------------------------------------- mmio ----- */
 /* Only meaningful in the -mmio build (recon-mmio.json declares the map caps). */
 
@@ -257,6 +319,7 @@ void run_probes(u32 f, int pass)
     if (f & P_CAPS_JPEG)   probe_caps_jpeg();
     if (f & P_CAPS_RAW)    probe_caps_raw();
     if (f & P_CAPS_STREAM) probe_caps_stream();
+    if (f & P_CAPS_ATTACH) probe_caps_attach();
 
     if (pass == 0) {
         if (f & (P_MMIO_MAP | P_MMIO_READ)) probe_mmio(f);

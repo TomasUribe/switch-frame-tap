@@ -11,8 +11,9 @@ enum {
     P_NV          = 1u << 3,   /* open common /dev/nvhost* + /dev/nvmap (safe-ish) */
     P_NV_DISP     = 1u << 4,   /* also try /dev/nvdisp-*                (RISKY)  */
     P_CAPS_JPEG   = 1u << 5,   /* libnx capsscCaptureJpegScreenShot     (medium) */
-    P_CAPS_RAW    = 1u << 6,   /* hand-rolled caps:sc cmd 2             (RISKY)  */
-    P_CAPS_STREAM = 1u << 7,   /* hand-rolled caps:sc cmd 1201/1203     (RISKY)  */
+    P_CAPS_RAW    = 1u << 6,   /* caps:sc cmd 2 (libnx)                          */
+    P_CAPS_STREAM = 1u << 7,   /* caps:sc cmd 1201/1203 raw stream (libnx)       */
+    P_CAPS_ATTACH = 1u << 11,  /* caps:sc cmd 3+5 shared-buffer  (EXPERIMENTAL)  */
     P_MMIO_MAP    = 1u << 8,   /* svcQueryMemoryMapping only (needs -mmio build)  */
     P_MMIO_READ   = 1u << 9,   /* dereference mapped DC regs (needs -mmio build) (RISKY) */
     P_LOOP        = 1u << 10,  /* repeat the caps probes ~20 passes, 15s apart    */

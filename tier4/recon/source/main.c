@@ -80,6 +80,7 @@ static u32 keyword(const char *w)
     if (!strcmp(w, "caps_jpeg"))   return P_CAPS_JPEG;
     if (!strcmp(w, "caps_raw"))    return P_CAPS_RAW;
     if (!strcmp(w, "caps_stream")) return P_CAPS_STREAM;
+    if (!strcmp(w, "caps_attach")) return P_CAPS_ATTACH;
     if (!strcmp(w, "mmio_map"))    return P_MMIO_MAP;
     if (!strcmp(w, "mmio_read"))   return P_MMIO_MAP | P_MMIO_READ;
     if (!strcmp(w, "loop"))        return P_LOOP;
