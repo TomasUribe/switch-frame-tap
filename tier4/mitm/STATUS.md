@@ -101,6 +101,60 @@ config, hung engine, dead compositor.
 `MAP_CMD_BUFFER_EX` all return `nverr=0` with `phys=0x0`. Plausibly deliberate:
 addresses are disclosed for handles we own, withheld for another process's.
 
+## *** M19: THE VIC BLIT WORKS, VERIFIED BYTE-FOR-BYTE ***
+
+Source painted by CPU as `A=0xFF, R=x*4, G=y*4, B=0x11`; blitted 64×64 through
+the VIC into our linear destination:
+
+```
+row  0 expected: ff 00 00 11 ff 04 00 11 ff 08 00 11 ff 0c 00 11 ...
+row  0 got     : ff 00 00 11 ff 04 00 11 ff 08 00 11 ff 0c 00 11 ...   EXACT
+row 32 expected: ff 00 80 11 ff 04 80 11        (G = 32*4 = 0x80)
+row 32 got     : ff 00 80 11 ff 04 80 11                                EXACT
+```
+
+Source read, rect setup, `SlotConfig`, `SlotSurfaceConfig`, block-kind handling,
+output write, cache maintenance — **the entire VIC pipeline is proven**. No
+freeze; 8423 txns at 60 fps.
+
+**One thing is left in the whole project: reaching the game's pixels.**
+
+## Why the game's handle pins to 0 — it is a *permission*, not a bug
+
+`FROM_ID` succeeds, `MAP_CMD_BUFFER` returns `nverr=0` with `phys=0`, and the
+IOVA allocator **does not advance** across the attempt (cfg→dst +0x20000,
+dst→self +0x20000), so the pin is a silent no-op.
+
+The wiki's `NvDrvPermission` table maps exactly onto everything we have observed:
+
+| bit | meaning | our result |
+|---|---|---|
+| 0 | Gpu | `/dev/nvhost-gpu` **denied** (0x30003) → clear |
+| 3 | VIC | `/dev/nvhost-vic` **open** → set |
+| 4 | VideoEncoder | `/dev/nvhost-msenc` **open** → set |
+| 5 / 7 | VideoDecoder / JPEG | denied → clear |
+| 15 | full VA range | our IOVAs are `0xE31xxxxx`, i.e. **the restricted `0xE0000000–0xFFFE0000` window** → clear |
+
+And the masks are per **service name**:
+
+| service | mask | notes |
+|---|---|---|
+| `nvdrv` (apps) | `0xA83B` | |
+| `nvdrv:a` (applets) | `0x10A9` | |
+| **`nvdrv:s` (sysmodules, what we used)** | **`0x439E`** | no bit 10, no bit 12, no bit 15 |
+| **`nvdrv:t` (factory)** | **`0xFFFFFFFF`** | everything |
+
+`nvdrv:s` *does* have bit 9 (ImportMemory) — which is why `FROM_ID` works — but
+lacks **bit 12** (import *exported* handles) and **bit 10**
+(`SetAruidWithoutCheck`). nvmap objects are bound to an **AppletResourceUserId**
+(`EXPORT_FOR_ARUID`, `IS_OWNED_BY_ARUID`), and our session has never called
+`SetAruid` at all.
+
+**M20** opens `nvdrv:t` (already in our NPDM's `service_access`), falling back to
+`nvdrv:s`, and proves which mask it got by opening `/dev/nvhost-gpu` — bit 0 is
+clear for `nvdrv:s` and set for `nvdrv:t`. If the pin still returns 0, the next
+step is `SetAruidWithoutCheck` with the game's aruid, which bit 10 permits.
+
 ## M18 froze the console — my mistake, but it settled the reloc question
 
 `job_fill_reloc` passed **cfg and dst as relocs**, leaving both words zero in the

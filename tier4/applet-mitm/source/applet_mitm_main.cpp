@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M19: up. Relocs removed; zero-address guard; blit from a source we own.");
+        mitm::applet::LogLine("applet-mitm M20: up. Self-blit VERIFIED; trying nvdrv:t for the ImportMemory permissions.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

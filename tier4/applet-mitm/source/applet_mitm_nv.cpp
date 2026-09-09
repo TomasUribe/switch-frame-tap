@@ -563,8 +563,24 @@ namespace ams::mitm::applet {
         if (!AllocVicHeap()) { VicStage("vb:0_FAILED"); return; }
 
         VicStage("vb:1_smGetService");
-        ::Result rc = smGetService(std::addressof(g_nv_srv), "nvdrv:s");
-        LogLine("   nvdrv:s rc=0x%x", rc);
+        /* Service name decides the NvDrvPermission mask, and phys=0 on the
+         * game's handle is a permissions story, not a bug:
+         *   nvdrv:s (sysmodules) 0x439E  - no bit 10 (SetAruidWithoutCheck),
+         *                                  no bit 12 (import EXPORTED handles),
+         *                                  no bit 15 (full VA range - and indeed
+         *                                  our IOVAs sit in the restricted
+         *                                  0xE0000000+ window)
+         *   nvdrv:t (factory)    0xFFFFFFFF - everything
+         * nvmap objects are bound to an AppletResourceUserId, so importing
+         * another process's buffer plausibly needs the aruid bits we lack. */
+        ::Result rc = smGetService(std::addressof(g_nv_srv), "nvdrv:t");
+        const char *nv_svc = "nvdrv:t";
+        if (R_FAILED(rc)) {
+            LogLine("   nvdrv:t unavailable rc=0x%x - falling back", rc);
+            rc = smGetService(std::addressof(g_nv_srv), "nvdrv:s");
+            nv_svc = "nvdrv:s";
+        }
+        LogLine("   using %s rc=0x%x", nv_svc, rc);
         if (R_FAILED(rc)) { VicStage("vb:1_FAILED"); return; }
 
         VicStage("vb:2_tmem");
@@ -588,6 +604,17 @@ namespace ams::mitm::applet {
         if (R_FAILED(rc) || nverr != 0) { VicStage("vb:4_FAILED"); goto close_sess; }
 
         u32 src_handle;
+        /* Cheap proof of which mask we actually got: bit 0 (Gpu) is clear for
+         * nvdrv:s and set for nvdrv:t, so this open flips with the service. */
+        {
+            u32 gfd = 0, gerr = 0;
+            const ::Result gr = NvOpen("/dev/nvhost-gpu", std::addressof(gfd), std::addressof(gerr));
+            LogLine("   perm probe: /dev/nvhost-gpu rc=0x%x nverr=%u -> %s",
+                    gr, gerr, (R_SUCCEEDED(gr) && gerr == 0) ? "OPEN (bit0 set: full mask)"
+                                                             : "denied (restricted mask)");
+            if (R_SUCCEEDED(gr) && gerr == 0) { NvClose(gfd); }
+        }
+
         VicStage("vb:5_FROM_ID");
         {
             struct { u32 id; u32 handle; } a = { g_game_surface.nvmap_id, 0 };
