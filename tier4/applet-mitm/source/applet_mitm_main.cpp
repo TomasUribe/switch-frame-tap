@@ -81,7 +81,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M2(vi:u): up. wrap GetDisplayService, sniff OpenLayer.");
+        mitm::applet::LogLine("applet-mitm M2s3: up. wrap GetDisplayService; sniff OpenDisplay + OpenLayer.");
 
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");
