@@ -43,17 +43,37 @@ touches NAND.
 - Channel devices are **one fd per session** — a leaked survey fd made the real
   open fail `nverr=4096`. The survey now closes each fd.
 
+## M8 — VIC CHANNEL_SUBMIT blit (awaiting hardware test)
+
+`applet_mitm_nv.cpp::TryVicBlit()` + `vic40_config.hpp`. On queueBuffer #>300
+(real content on screen), one-shot:
+
+1. nvdrv:s up, import game nvmap (`FROM_ID`), `SET_NVMAP_FD`.
+2. `CREATE`+`ALLOC` three of our own nvmap buffers: config (0x4000), host1x
+   cmdbuf (0x1000), linear dst (0x40000).
+3. Fill `vic::VicConfigStruct` (1552 B, `/16 = 97`) for a **scale-free 320×180
+   crop** of the frame's top-left: src A8B8G8R8 block-linear kind 0xFE
+   `SlotBlkHeight=4` `SlotCacheWidth=64Bx4`, dst A8B8G8R8 pitch.
+4. Build host1x pushbuf (libdrm `vic40_execute`): SET_APPLICATION_ID=1,
+   SET_CONTROL_PARAMS=97<<16, SET_CONFIG_STRUCT_OFFSET / OUTPUT_SURFACE_LUMA /
+   SURFACE0_SLOT0_LUMA as reloc placeholders (shift 8), EXECUTE=1<<8. 18 words.
+5. `NVHOST_IOCTL_CHANNEL_SUBMIT` (`0xC0700001`, 1 cmdbuf + 3 relocs + 1
+   syncpt_incr + 1 fence). Wait fence via ctrl `SYNCPT_WAIT` (300 ms).
+6. Checksum + hexdump `g_vic_dst_buf`; release everything.
+
+Breadcrumbs `vb:1`..`vb:VIC_BLIT_DONE` in `applet-mitm.last`. Failure modes:
+malformed submit → possible nvservices fatal (recover as below); wrong
+config → VIC faults, `SYNCPT_WAIT` times out, clean release.
+
+**Read after test:** `vb:11` line (SUBMIT rc/nverr/fence), `vb:13` dst
+sum32/nonzero + `dst[0..64]` (all-zero pre, structured post = de-swizzle works).
+
 ## Current module behaviour
 
 `applet_mitm_service.cpp` wraps the chain and logs binder transactions
-(rate-limited: first 3 per code + heartbeat every 600). On the first three
-`setPreallocatedBuffer` calls it parses the `NvGraphicBuffer`
-(`applet_mitm_gbuf.*`) and, once, runs the nvdrv probe (`applet_mitm_nv.*`):
-import the game's nvmap, survey engines, alloc our own buffer, release
-everything.
-
-Everything after the probe is still **just logging + forward** — no frame is
-actually captured yet.
+(rate-limited). First 8 `setPreallocatedBuffer` → `CaptureGameSurface()` records
+nvmap id + per-slot plane offsets + geometry into `g_game_surface`. First
+queueBuffer past txn 300 → `TryVicBlit(slot)` (one-shot).
 
 ## Next: drive the VIC (implementation, no open unknowns)
 

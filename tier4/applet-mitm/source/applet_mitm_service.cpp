@@ -1,5 +1,6 @@
 #include "applet_mitm_service.hpp"
 #include <cstdio>
+#include <cstring>
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_gbuf.hpp"
 #include "applet_mitm_nv.hpp"
@@ -63,10 +64,30 @@ namespace ams::mitm::applet {
                 char tag[48];
                 std::snprintf(tag, sizeof(tag), "setPreallocatedBuffer#%u", per);
                 LogGraphicBuffer(tag, gb);
-                TryNvmapProbe(static_cast<u32>(gb->nvmap_id));
+                CaptureGameSurface(gb, per);
             } else {
                 LogLine("    (no NvGraphicBuffer magic found in %zu-byte parcel)", parcel_in.GetSize());
             }
+        }
+
+        /* queueBuffer (7): the frame is now rendered and its swapchain slot is
+         * the first int32 of the parcel payload. Once the game has presented a
+         * few hundred frames (real content on screen), run the one-shot VIC
+         * blit against that slot. */
+        if (code == 7 && total > 300 && g_game_surface.armed) {
+            s32 qslot = 0;
+            const auto *p = static_cast<const u8 *>(parcel_in.GetPointer());
+            const size_t psz = parcel_in.GetSize();
+            if (p != nullptr && psz >= 24) {
+                u32 data_off = 0;
+                std::memcpy(std::addressof(data_off), p + 4, sizeof(data_off));
+                if (data_off + 4 <= psz) {
+                    std::memcpy(std::addressof(qslot), p + data_off, sizeof(qslot));
+                }
+            }
+            LogMark("binder:vic_blit_trigger");
+            LogLine("   queueBuffer txn#%u parcel=%zu slot=%d", total, psz, qslot);
+            TryVicBlit(qslot);
         }
 
         R_RETURN(sm::mitm::ResultShouldForwardToSession());
