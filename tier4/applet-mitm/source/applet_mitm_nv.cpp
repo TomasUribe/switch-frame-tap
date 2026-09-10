@@ -70,21 +70,25 @@ namespace ams::mitm::applet {
         constexpr size_t VicBufsEnd  = 0x30000;   /* cfg+cmd+dst+src all live below this */
         constinit size_t g_vic_heap_size = 0;
 
-        /* The heap tops out at 2 MB for a sysmodule, and 720p needs 3,801,088 B.
-         * But 2450's destination is an ordinary type-0x46 MapAlias buffer that
-         * the KERNEL maps into vi's address space - no nvmap, no pinning, no
-         * uncached attribute - so unlike the VIC buffers it can simply live in
-         * .bss and sidestep the heap cap entirely. */
-        constexpr size_t IndBufSize = 4_MB;
-        alignas(0x1000) constinit u8 g_ind_static[IndBufSize] = {};
-        constexpr size_t g_ind_size = IndBufSize;
+        /* The capture buffer stays on the HEAP, deliberately.
+         *
+         * Moving it to a 4 MB .bss array to dodge the 2 MB heap cap fataled a
+         * different sysmodule (0100000000000023) with 0x10801 LimitReached at
+         * boot: a sysmodule's static memory is drawn from the shared system
+         * pool (pool_partition 2), so taking 4 MB of it starves everyone else.
+         * This project already learned that once, when the early recon module
+         * carried 9.3 MB of .bss.
+         *
+         * Heap is the safe place, so we live within the 2 MB ceiling and let
+         * the resolution picker choose whatever actually fits. */
+        constinit size_t g_ind_size = 0;
 
         constinit uintptr_t g_vic_heap    = 0;
         constinit u8       *g_vic_cfg_buf = nullptr;
         constinit u8       *g_vic_cmd_buf = nullptr;
         constinit u8       *g_vic_dst_buf = nullptr;
         constinit u8       *g_vic_src_buf = nullptr;
-        constinit u8       *g_ind_buf     = g_ind_static;
+        constinit u8       *g_ind_buf     = nullptr;
 
         bool AllocVicHeap() {
             if (g_vic_heap != 0) { return true; }
@@ -103,14 +107,16 @@ namespace ams::mitm::applet {
                 return false;
             }
             g_vic_heap_size = want;
+            g_ind_size      = want - VicBufsEnd;
             g_vic_heap    = addr;
             g_vic_cfg_buf = reinterpret_cast<u8 *>(addr + 0x0000);
             g_vic_cmd_buf = reinterpret_cast<u8 *>(addr + 0x4000);
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
             g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x20000);
+            g_ind_buf     = reinterpret_cast<u8 *>(addr + VicBufsEnd);
 
             std::memset(reinterpret_cast<void *>(addr), 0, want);
-            LogLine("   VIC heap %zu MB at 0x%lx (capture buffer %zu KB in .bss): cfg=%p cmd=%p dst=%p src=%p",
+            LogLine("   VIC heap %zu MB at 0x%lx (capture buffer %zu KB on heap): cfg=%p cmd=%p dst=%p src=%p",
                     want / (1024 * 1024), static_cast<unsigned long>(addr), g_ind_size / 1024,
                     static_cast<void *>(g_vic_cfg_buf),
                     static_cast<void *>(g_vic_cmd_buf),
