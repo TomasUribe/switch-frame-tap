@@ -133,6 +133,15 @@ namespace ams {
             R_ABORT_UNLESS(sm::Initialize());
             fs::InitializeForSystem();
             fs::SetEnabledAutoAbort(false);
+
+            /* pm:dmnt does NOT self-initialise: libstratosphere's
+             * pm::dmnt::GetApplicationProcessId calls straight through to libnx's
+             * pmdmntGetApplicationProcessId, and dmnt / dmnt.gen2 / ams_mitm all
+             * call pmdmntInitialize() here. Deliberately NOT R_ABORT_UNLESS as
+             * they do - a boot-time fatal is the one failure mode this module
+             * must never have. Record it and let the debug route skip instead. */
+            mitm::applet::g_pmdmnt_rc = ::pmdmntInitialize();
+
             ams::CheckApiVersion();
         }
 
@@ -148,7 +157,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M32: up. Debugger route - svcReadDebugProcessMemory.");
+        mitm::applet::LogLine("applet-mitm M33: up. Debugger route, fixed: pmdmntInitialize + DeviceShared scan.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
@@ -156,8 +165,9 @@ namespace ams {
         mitm::applet::LogLine("arm file (sdmc:/applet-mitm.armed): vic=%s exec=%s",
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
-        mitm::applet::LogLine("debug-capture route: %s",
-                              mitm::applet::g_dbg_armed ? "ARMED" : "off (add \"dbg\" to the arm file)");
+        mitm::applet::LogLine("debug-capture route: %s   pmdmntInitialize rc=0x%x",
+                              mitm::applet::g_dbg_armed ? "ARMED" : "off (add \"dbg\" to the arm file)",
+                              mitm::applet::g_pmdmnt_rc);
 
         /* start the heartbeat before anything that can block */
         R_ABORT_UNLESS(os::CreateThread(std::addressof(g_hb_thread), HeartbeatThread, nullptr,

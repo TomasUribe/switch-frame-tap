@@ -43,6 +43,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<const char *> g_vic_stage{"idle"};
     constinit u64 g_game_aruid = 0;
     constinit bool g_dbg_armed = false;
+    constinit u32  g_pmdmnt_rc = 0xFFFFFFFF;
 
     namespace {
 
@@ -1076,12 +1077,17 @@ namespace ams::mitm::applet {
          * is collected silently while attached and logged only after detaching.
          * Closing the debug handle resumes the process. Read-only: the NPDM
          * deliberately omits WriteDebugProcessMemory and TerminateDebugProcess. */
-        struct RegionHit { u64 base; u64 size; u32 state; u32 perm; };
+        struct RegionHit { u64 base; u64 size; u32 state; u32 perm; u32 attr; u32 devices; };
 
         void TryDebugCapture() {
             if (!g_dbg_armed) { return; }
 
             VicStage("dbg:1_find_pid");
+            if (g_pmdmnt_rc != 0) {
+                LogLine("   pmdmntInitialize() failed at boot (rc=0x%x) - skipping", g_pmdmnt_rc);
+                VicStage("dbg:1_no_pmdmnt");
+                return;
+            }
             ::ams::os::ProcessId pid{};
             {
                 const Result r = ::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid));
@@ -1091,45 +1097,62 @@ namespace ams::mitm::applet {
             }
 
             /* ---- from here the game is STOPPED. No logging, no SD, no waits. */
-            RegionHit hits[20] = {};
+            RegionHit hits[24] = {};
             u32  nhits = 0, steps = 0;
-            u64  sample_from = 0;
-            u8   sample[64]  = {};
+            u64  fb_base = 0, fb_size = 0;
+            u8   sample[3][32] = {};
+            bool sampled[3] = {};
             ::ams::Result r_attach{}, r_read = ::ams::svc::ResultInvalidHandle();
-            bool attached = false, sampled = false;
+            bool attached = false;
 
             ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
             r_attach = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value);
             if (R_SUCCEEDED(r_attach)) {
                 attached = true;
                 u64 addr = 0;
-                for (; steps < 400; ++steps) {
+                for (; steps < 1500; ++steps) {
                     ::ams::svc::MemoryInfo mi = {};
                     ::ams::svc::PageInfo   pi = {};
                     if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr))) { break; }
                     if (mi.size == 0) { break; }
 
-                    /* The swapchain is 3 x 8,847,360 = 26,542,080 B of game-owned
-                     * pages, so it sits inside a mapping at least that large. */
-                    if (mi.size >= 8 * 1024 * 1024 && mi.state != ::ams::svc::MemoryState_Free && nhits < 20) {
+                    /* The kernel splits memory blocks whenever state, permission
+                     * or ATTRIBUTE changes, so an nvmap-pinned range appears as
+                     * its own entry even though it sits inside the game's heap -
+                     * carrying MemoryAttribute_DeviceShared and device_count > 0.
+                     * That is an exact discriminator for framebuffer memory, far
+                     * better than "biggest region", which would just find the
+                     * heap and sample its metadata. */
+                    const u32 attr = static_cast<u32>(mi.attribute);
+                    const bool dev = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
+
+                    if ((dev || mi.size >= 8 * 1024 * 1024) && nhits < 24) {
                         hits[nhits++] = { mi.base_address, mi.size,
-                                          static_cast<u32>(mi.state), static_cast<u32>(mi.permission) };
+                                          static_cast<u32>(mi.state), static_cast<u32>(mi.permission),
+                                          attr, mi.device_count };
+                    }
+                    /* the swapchain is exactly 3 x 8,847,360 */
+                    if (dev && fb_base == 0 && mi.size >= 8847360ull) {
+                        fb_base = mi.base_address;
+                        fb_size = mi.size;
+                        if (mi.size == 26542080ull) { break; }   /* exact - stop early, game is frozen */
                     }
                     const u64 next = mi.base_address + mi.size;
                     if (next <= addr) { break; }
                     addr = next;
                 }
 
-                /* sample the largest candidate that is readable */
-                u64 best = 0, best_size = 0;
-                for (u32 i = 0; i < nhits; ++i) {
-                    if (hits[i].size > best_size) { best_size = hits[i].size; best = hits[i].base; }
-                }
-                if (best != 0) {
-                    sample_from = best;
-                    r_read  = ::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(sample), dbg,
-                                                          best, sizeof(sample));
-                    sampled = R_SUCCEEDED(r_read);
+                /* Sample all three swapchain slots. If this really is the
+                 * swapchain, each slot holds a different rendered frame. */
+                if (fb_base != 0) {
+                    static const u64 slot_off[3] = { 0x0, 0x870000, 0x10E0000 };
+                    for (u32 i = 0; i < 3; ++i) {
+                        if (slot_off[i] + 32 > fb_size) { continue; }
+                        const auto r = ::ams::svc::ReadDebugProcessMemory(
+                            reinterpret_cast<uintptr_t>(sample[i]), dbg, fb_base + slot_off[i], 32);
+                        sampled[i] = R_SUCCEEDED(r);
+                        if (i == 0) { r_read = r; }
+                    }
                 }
                 ::ams::svc::CloseHandle(dbg);   /* resumes the game */
             }
@@ -1141,28 +1164,47 @@ namespace ams::mitm::applet {
                     attached ? "ATTACHED (and already detached)" : "failed");
             if (!attached) { VicStage("dbg:2_FAILED"); return; }
 
-            LogLine("   walked %u regions, %u candidates >= 8 MB:", steps, nhits);
+            LogLine("   walked %u regions; %u of interest (device-shared, or >= 8 MB):", steps, nhits);
             for (u32 i = 0; i < nhits; ++i) {
-                LogLine("     [%u] base=0x%010llx size=%llu (%llu MB) state=0x%x perm=0x%x",
+                LogLine("     [%2u] base=0x%010llx size=%10llu state=0x%02x perm=0x%x attr=0x%x devs=%u%s",
                         i, static_cast<unsigned long long>(hits[i].base),
                         static_cast<unsigned long long>(hits[i].size),
-                        static_cast<unsigned long long>(hits[i].size / (1024 * 1024)),
-                        hits[i].state, hits[i].perm);
+                        hits[i].state, hits[i].perm, hits[i].attr, hits[i].devices,
+                        (hits[i].size == 26542080ull) ? "  <== EXACT SWAPCHAIN SIZE" : "");
             }
 
-            if (sampled) {
-                u32 nz = 0;
-                for (u32 i = 0; i < sizeof(sample); ++i) { if (sample[i] != 0) { nz++; } }
-                char hex[3 * 32 + 1];
-                int k = 0;
-                for (u32 i = 0; i < 32; ++i) { k += std::snprintf(hex + k, sizeof(hex) - k, "%02x ", sample[i]); }
-                LogLine("   *** READ THE GAME'S MEMORY *** from 0x%010llx nonzero=%u/64",
-                        static_cast<unsigned long long>(sample_from), nz);
-                LogLine("   sample[0..32]: %s", hex);
-                VicStage("dbg:READ_OK");
-            } else {
-                LogLine("   ReadDebugProcessMemory rc=0x%x", r_read.GetValue());
-                VicStage("dbg:read_FAILED");
+            if (fb_base == 0) {
+                LogLine("   no device-shared region >= 8,847,360 B found");
+                VicStage("dbg:no_fb_region");
+                return;
+            }
+
+            LogLine("   framebuffer candidate: base=0x%010llx size=%llu (%s)",
+                    static_cast<unsigned long long>(fb_base),
+                    static_cast<unsigned long long>(fb_size),
+                    (fb_size == 26542080ull) ? "EXACT 3-slot swapchain" : "larger than one slot");
+
+            {
+                static const char *nm[3] = { "slot0 +0x0", "slot1 +0x870000", "slot2 +0x10E0000" };
+                u32 total_nz = 0;
+                for (u32 i = 0; i < 3; ++i) {
+                    if (!sampled[i]) { LogLine("   %s: read failed", nm[i]); continue; }
+                    u32 nz = 0;
+                    char hex[3 * 16 + 1];
+                    int k = 0;
+                    for (u32 b = 0; b < 16; ++b) { k += std::snprintf(hex + k, sizeof(hex) - k, "%02x ", sample[i][b]); }
+                    for (u32 b = 0; b < 32; ++b) { if (sample[i][b] != 0) { nz++; } }
+                    total_nz += nz;
+                    LogLine("   %-17s nonzero=%2u/32  %s", nm[i], nz, hex);
+                }
+                if (total_nz > 0) {
+                    LogLine("   *** READ THE GAME'S FRAMEBUFFER *** (%u nonzero bytes across 3 slots)", total_nz);
+                    VicStage("dbg:READ_OK");
+                } else {
+                    LogLine("   all three slots read as zero - region found but not the pixels");
+                    VicStage("dbg:read_all_zero");
+                }
+                AMS_UNUSED(r_read);
             }
             VicStage("dbg:done");
         }

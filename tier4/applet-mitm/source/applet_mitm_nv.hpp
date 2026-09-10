@@ -45,6 +45,8 @@ namespace ams::mitm::applet {
     extern bool g_vic_execute;
     /* "dbg" in the arm file: attach as a debugger and read the game's memory. */
     extern bool g_dbg_armed;
+    /* result of pmdmntInitialize() at startup; 0 means the pid lookup is usable */
+    extern u32  g_pmdmnt_rc;
 
     /* Current probe step, for the heartbeat to snapshot into .last. A run that
      * wedges therefore names the exact ioctl it wedged on. */
