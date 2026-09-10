@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M30: up. CreateIndirectLayer probe - 0x60A said only the handle was wrong.");
+        mitm::applet::LogLine("applet-mitm M31: up. Indirect layer created; now wiring its endpoints.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

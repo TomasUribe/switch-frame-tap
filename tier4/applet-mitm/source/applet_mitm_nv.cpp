@@ -970,6 +970,33 @@ namespace ams::mitm::applet {
                     if (R_SUCCEEDED(r)) { consumer = out; }
                 }
                 LogLine("   consumer handle = %llu", static_cast<unsigned long long>(consumer));
+
+                /* A bare indirect layer has no producer, so there is no image to
+                 * return - hence the same PreconditionViolation. The command
+                 * names spell out the intended sequence: layer, then a producer
+                 * endpoint, then a consumer endpoint. 2050's ABI was guessable
+                 * from its documented sibling, so try the same shape here. */
+                if (consumer != 0) {
+                    VicStage("ind:3c_endpoints");
+                    for (const auto &e : { std::pair<u32, const char *>{ 2052, "CreateIndirectProducerEndPoint" },
+                                           std::pair<u32, const char *>{ 2054, "CreateIndirectConsumerEndPoint" } }) {
+                        {   /* shape {u64 handle; u64 aruid} */
+                            const struct { u64 h; u64 aruid; } in = { consumer, g_game_aruid };
+                            u64 out = 0;
+                            const ::Result r = serviceDispatchInOut(std::addressof(mgr_keep), e.first, in, out);
+                            LogLine("   %u %-32s {h,aruid} rc=0x%x -> %llu", e.first, e.second, r,
+                                    static_cast<unsigned long long>(out));
+                            if (R_SUCCEEDED(r)) { continue; }
+                        }
+                        {   /* shape {u64 handle} */
+                            const u64 in = consumer;
+                            u64 out = 0;
+                            const ::Result r = serviceDispatchInOut(std::addressof(mgr_keep), e.first, in, out);
+                            LogLine("   %u %-32s {h}       rc=0x%x -> %llu", e.first, e.second, r,
+                                    static_cast<unsigned long long>(out));
+                        }
+                    }
+                }
             }
 
             /* 2450 itself. 0x60A on every made-up handle told us the request
