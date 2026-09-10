@@ -148,13 +148,16 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M31: up. Indirect layer created; now wiring its endpoints.");
+        mitm::applet::LogLine("applet-mitm M32: up. Debugger route - svcReadDebugProcessMemory.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
+        mitm::applet::g_dbg_armed   = ArmFileContains("dbg");
         mitm::applet::LogLine("arm file (sdmc:/applet-mitm.armed): vic=%s exec=%s",
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
+        mitm::applet::LogLine("debug-capture route: %s",
+                              mitm::applet::g_dbg_armed ? "ARMED" : "off (add \"dbg\" to the arm file)");
 
         /* start the heartbeat before anything that can block */
         R_ABORT_UNLESS(os::CreateThread(std::addressof(g_hb_thread), HeartbeatThread, nullptr,

@@ -42,6 +42,7 @@ namespace ams::mitm::applet {
     constinit bool g_vic_execute = false;
     constinit std::atomic<const char *> g_vic_stage{"idle"};
     constinit u64 g_game_aruid = 0;
+    constinit bool g_dbg_armed = false;
 
     namespace {
 
@@ -426,6 +427,7 @@ namespace ams::mitm::applet {
         }
 
         void TryIndirectCapture();
+        void TryDebugCapture();
 
         struct JobCtx {
             u32 vfd, cmd_handle, syncpt;
@@ -843,6 +845,7 @@ namespace ams::mitm::applet {
         VicStage("vb:ALL_JOBS_DONE");
 
         TryIndirectCapture();
+        TryDebugCapture();
 
     close_vic:
         if (cfg_addr != 0) { UnmapCmdBuffer(vfd, cfg_handle); }
@@ -1057,6 +1060,111 @@ namespace ams::mitm::applet {
             serviceClose(std::addressof(disp));
             serviceClose(std::addressof(vi_root));
             VicStage("ind:done");
+        }
+
+        /* ---- the debugger route -------------------------------------------
+         * nvservices will not map another process's pages for us, and vi will
+         * not populate an indirect layer without AM. But the kernel has one
+         * mechanism designed for exactly this, and Atmosphere's own cheat
+         * engine dmnt uses it against running games at 60 Hz:
+         *
+         *     svcDebugActiveProcess -> svcQueryDebugProcessMemory
+         *                           -> svcReadDebugProcessMemory
+         *
+         * DebugActiveProcess STOPS the target. Our logger does an SD write per
+         * line, which would freeze the game for hundreds of ms, so everything
+         * is collected silently while attached and logged only after detaching.
+         * Closing the debug handle resumes the process. Read-only: the NPDM
+         * deliberately omits WriteDebugProcessMemory and TerminateDebugProcess. */
+        struct RegionHit { u64 base; u64 size; u32 state; u32 perm; };
+
+        void TryDebugCapture() {
+            if (!g_dbg_armed) { return; }
+
+            VicStage("dbg:1_find_pid");
+            ::ams::os::ProcessId pid{};
+            {
+                const Result r = ::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid));
+                LogLine("   pm:dmnt GetApplicationProcessId rc=0x%x -> pid=%llu",
+                        r.GetValue(), static_cast<unsigned long long>(pid.value));
+                if (R_FAILED(r)) { VicStage("dbg:1_FAILED"); return; }
+            }
+
+            /* ---- from here the game is STOPPED. No logging, no SD, no waits. */
+            RegionHit hits[20] = {};
+            u32  nhits = 0, steps = 0;
+            u64  sample_from = 0;
+            u8   sample[64]  = {};
+            ::ams::Result r_attach{}, r_read = ::ams::svc::ResultInvalidHandle();
+            bool attached = false, sampled = false;
+
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            r_attach = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value);
+            if (R_SUCCEEDED(r_attach)) {
+                attached = true;
+                u64 addr = 0;
+                for (; steps < 400; ++steps) {
+                    ::ams::svc::MemoryInfo mi = {};
+                    ::ams::svc::PageInfo   pi = {};
+                    if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr))) { break; }
+                    if (mi.size == 0) { break; }
+
+                    /* The swapchain is 3 x 8,847,360 = 26,542,080 B of game-owned
+                     * pages, so it sits inside a mapping at least that large. */
+                    if (mi.size >= 8 * 1024 * 1024 && mi.state != ::ams::svc::MemoryState_Free && nhits < 20) {
+                        hits[nhits++] = { mi.base_address, mi.size,
+                                          static_cast<u32>(mi.state), static_cast<u32>(mi.permission) };
+                    }
+                    const u64 next = mi.base_address + mi.size;
+                    if (next <= addr) { break; }
+                    addr = next;
+                }
+
+                /* sample the largest candidate that is readable */
+                u64 best = 0, best_size = 0;
+                for (u32 i = 0; i < nhits; ++i) {
+                    if (hits[i].size > best_size) { best_size = hits[i].size; best = hits[i].base; }
+                }
+                if (best != 0) {
+                    sample_from = best;
+                    r_read  = ::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(sample), dbg,
+                                                          best, sizeof(sample));
+                    sampled = R_SUCCEEDED(r_read);
+                }
+                ::ams::svc::CloseHandle(dbg);   /* resumes the game */
+            }
+            /* ---- game is running again; safe to log ------------------------ */
+
+            VicStage("dbg:2_attached");
+            LogLine("   DebugActiveProcess(pid=%llu) rc=0x%x %s",
+                    static_cast<unsigned long long>(pid.value), r_attach.GetValue(),
+                    attached ? "ATTACHED (and already detached)" : "failed");
+            if (!attached) { VicStage("dbg:2_FAILED"); return; }
+
+            LogLine("   walked %u regions, %u candidates >= 8 MB:", steps, nhits);
+            for (u32 i = 0; i < nhits; ++i) {
+                LogLine("     [%u] base=0x%010llx size=%llu (%llu MB) state=0x%x perm=0x%x",
+                        i, static_cast<unsigned long long>(hits[i].base),
+                        static_cast<unsigned long long>(hits[i].size),
+                        static_cast<unsigned long long>(hits[i].size / (1024 * 1024)),
+                        hits[i].state, hits[i].perm);
+            }
+
+            if (sampled) {
+                u32 nz = 0;
+                for (u32 i = 0; i < sizeof(sample); ++i) { if (sample[i] != 0) { nz++; } }
+                char hex[3 * 32 + 1];
+                int k = 0;
+                for (u32 i = 0; i < 32; ++i) { k += std::snprintf(hex + k, sizeof(hex) - k, "%02x ", sample[i]); }
+                LogLine("   *** READ THE GAME'S MEMORY *** from 0x%010llx nonzero=%u/64",
+                        static_cast<unsigned long long>(sample_from), nz);
+                LogLine("   sample[0..32]: %s", hex);
+                VicStage("dbg:READ_OK");
+            } else {
+                LogLine("   ReadDebugProcessMemory rc=0x%x", r_read.GetValue());
+                VicStage("dbg:read_FAILED");
+            }
+            VicStage("dbg:done");
         }
 
         void VicWorkerThread(void *) {

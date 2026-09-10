@@ -43,6 +43,8 @@ namespace ams::mitm::applet {
      * Default (no file) = pure observer, byte-for-byte M7d behaviour. */
     extern bool g_vic_armed;
     extern bool g_vic_execute;
+    /* "dbg" in the arm file: attach as a debugger and read the game's memory. */
+    extern bool g_dbg_armed;
 
     /* Current probe step, for the heartbeat to snapshot into .last. A run that
      * wedges therefore names the exact ioctl it wedged on. */
