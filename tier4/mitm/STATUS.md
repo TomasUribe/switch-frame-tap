@@ -1,9 +1,83 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`.
+`0100000000000C20`. 47 hardware test cycles.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
+
+---
+
+# CURRENT STATE (read this first)
+
+## What works, verified on hardware
+
+1. **A transparent `vi:u` mitm** wrapping `GetDisplayService` →
+   `IApplicationDisplayService` → `GetRelayService` → `IHOSBinderDriver`.
+   Sustained **60.0 fps**, invisible to the game. Needs the
+   `patch_libstrat.py` fix for non-domain mitm sub-object forwarding.
+2. **Complete frame-pipeline visibility** — every `NvGraphicBuffer` parsed from
+   the binder traffic; `queueBuffer` slot index decoded past Android's
+   `writeInterfaceToken`.
+3. **A full VIC pipeline in a sysmodule, byte-exact.** heap alloc →
+   `svcSetMemoryAttribute(uncached)` → nvmap `CREATE`/`ALLOC` → `MAP_CMD_BUFFER`
+   pin → host1x cmdbuf (`SETCL` + methods + `INCR_SYNCPT`) → `CHANNEL_SUBMIT` →
+   syncpoint wait → cache invalidate → read back. A fill and a real blit both
+   reproduce their expected output **byte for byte**. Output is `AV_PIX_FMT_ARGB`.
+   NVENC (`/dev/nvhost-msenc`) is open.
+4. **`nvdrv:t` gives the full `0xFFFFFFFF` permission mask** — every engine node
+   except TSEC, and IOVAs outside the restricted window.
+5. **The whole indirect-layer object graph is constructible from `vi:m`**:
+   `CreateIndirectLayer` → `CreateIndirectProducerEndPoint` →
+   `CreateIndirectConsumerEndPoint`, three undocumented ABIs guessed correctly
+   by analogy with `viCreateManagedLayer`.
+
+## What is blocked, and why — BOTH ROUTES CLOSED
+
+**We can process frames. We cannot legally obtain one.**
+
+| route | verdict |
+|---|---|
+| **Read the game's swapchain** (`FROM_ID` + `MAP_CMD_BUFFER`) | `phys=0`, silently. Survives `is_compr`, `MAP_CMD_BUFFER_EX`, relocs, the **full permission mask**, and the game's **exact aruid adopted before any `Open`**. At `Initialize` nvservices is handed `CUR_PROCESS_HANDLE` and maps client memory through *that*; the game's pages are in the game's process, so `FROM_ID` yields only a refcounted reference and the IOVA allocator never advances. **Structural.** |
+| **`vi` indirect layers** (`GetIndirectLayerImageMap`) | `0x60A ams::sf::PreconditionViolation`. The PID descriptor, type-0x46 buffer and aruid are all *accepted* — the layer is simply **empty**. We can build layer + producer endpoint + consumer endpoint, but nothing attaches to the producer. Wiring an *application's* layer to an indirect layer is **AM's** job (`GetIndirectLayerConsumerHandle`, `PartialForegroundWithIndirectDisplay` — swkbd's inline keyboard is the only documented user), and a sysmodule cannot drive AM. |
+
+Also ruled out along the way:
+- **Relocs are inert** on Horizon — the command buffer is never patched, so
+  addresses must be inlined from `MAP_CMD_BUFFER`.
+- **The display controller has no readback** — `nvdisp-disp0` is `FLIP` /
+  `SET_MODE` / `GET_WINDOW`; `nvdcutil` is DSI/EDID test plumbing. Grepping the
+  entire nvdrv doc for `READBACK|CAPTURE|GET_FRAME|SCANOUT` returns nothing.
+- **`caps` `CaptureRawImage` is `[1.0.0]`** — removed long before 22.5.0.
+
+**This is very likely why SysDVR is stuck at 720p30 via `grc:d`.** It is not
+that nobody tried; the platform does not let a sysmodule reach another
+process's framebuffer.
+
+## Hard-won constraints (do not relearn these)
+
+- **Never take large static memory.** A sysmodule's `.bss` comes from the shared
+  system pool (`pool_partition 2`). A 4 MB array fataled *another* sysmodule with
+  `0x10801 LimitReached` at boot. `.bss` lives at ~1.45 MB; the heap ceiling is
+  **2 MB**.
+- **`handle_table_size` must be 512**, not the default 16 — `ams_mitm` uses 512.
+  16 exhausted mid-run and made `smGetService("vi:m")` return `0xD201
+  OutOfHandles`, which reads exactly like a permission refusal and is not one.
+- **Nothing blocking may run on the binder thread.** It blocks `queueBuffer`,
+  which wedges `vi`, which freezes the console, which forces a power-off, which
+  truncates the log. All engine work runs on a worker thread.
+- **A zero address handed to the VIC hangs the engine**, and a hung VIC takes the
+  compositor down with it. Every address is checked before submit.
+- **Read the SD in a card reader**, not over MTP.
+
+## The one avenue left untried
+
+The `8200`-series shared-buffer commands on `IManagerDisplayService`:
+`CreateSharedBufferStaticStorage` (8200), `BindSharedLowLevelLayerToIndirectLayer`
+(8204), `ConnectSharedLowLevelLayerToSharedBuffer` (8208). If the game's layer
+can be bound to our indirect layer this way, 2450 would populate. It is a chain
+of five undocumented ABIs with no documentation to check against, and each
+attempt costs a reboot — genuinely speculative, unlike everything above.
+
+---
 
 ## Build & test loop
 
