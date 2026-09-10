@@ -1,8 +1,15 @@
-# switch-stream-project
+# switch-frame-tap
 
-Research into capturing the Nintendo Switch screen at **native resolution and
-60 fps** from an Atmosphère sysmodule — and the working code that came out of
-it. Homebrew, developed on and for the author's own console.
+Building a Nintendo Switch → PC screen streamer that runs at **native
+resolution and 60 fps**, and the research needed to get there. Homebrew,
+developed on and for the author's own console.
+
+> **This is a work in progress, not a finished tool.** The goal is the full
+> streamer — capture, hardware encode, transport, PC client. The encode and
+> transport halves exist; the capture half is the hard part, and it is where
+> the work currently is. What is finished is finished properly and verified on
+> hardware; what is not is marked as such throughout. See
+> [Roadmap](#roadmap) for what is left.
 
 **Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
 47 hardware test cycles.
@@ -20,12 +27,13 @@ The obvious question is whether a sysmodule can do better by taking the frame
 the Tegra X1's own fixed-function blocks. This repository is the answer, worked
 all the way down.
 
-## The short answer
+## Where the difficulty is
 
-**A sysmodule can process frames at full speed. It cannot legally obtain one.**
+**A sysmodule can process frames at full speed. Getting hold of one is the
+problem.**
 
-Three independent routes to another process's pixels were each taken to the
-point of a definite verdict:
+Three independent routes to another process's pixels have each been taken to
+the point of a definite verdict:
 
 | route | verdict |
 |---|---|
@@ -45,8 +53,9 @@ the kernel's debug SVCs. See [Where it stands](#where-it-stands).
 
 ## What is here that you might want
 
-Even with capture blocked, several pieces are finished, verified on hardware,
-and — as far as I can tell — not published anywhere else.
+Several pieces are finished, verified on hardware, and — as far as I can tell —
+not published anywhere else. They are useful on their own, whether or not the
+capture problem is solved, so take any of them.
 
 ### 1. Non-domain mitm sub-object forwarding for libstratosphere
 
@@ -166,6 +175,21 @@ transport.
 The full research log, in reverse chronological order with every dead end and
 its evidence, is [`tier4/mitm/STATUS.md`](tier4/mitm/STATUS.md). The narrative
 version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
+
+## Roadmap
+
+| stage | state |
+|---|---|
+| `vi:u` mitm frame tap at 60 fps | **done, on hardware** |
+| Swapchain geometry from binder traffic | **done, on hardware** |
+| VIC: block-linear → linear, scale, format convert | **done, byte-exact on hardware** |
+| **Get the game's pixels into our address space** | **in progress** — three routes closed, the debug-SVC route is built and awaiting its first hardware run |
+| NVENC H.264 encode | channel opens; encode not written yet |
+| Transport (USB / TCP) | protocol and PC receiver exist from the earlier `switch-stream/` work; not yet wired to this module |
+| Capture the home menu and system overlays | wanted, and not possible through any route found so far |
+
+The gate is the one marked in progress. Everything downstream of it is
+implementation against known ABIs; everything upstream of it is done.
 
 ## Layout
 
