@@ -110,7 +110,7 @@
 		},
 		{
 			"type": "handle_table_size",
-			"value": 16
+			"value": 512
 		}
 	]
 }

@@ -69,14 +69,22 @@ namespace ams::mitm::applet {
          * to whatever we get. 2 MB granularity is the AllocateMemoryBlock unit. */
         constexpr size_t VicBufsEnd  = 0x30000;   /* cfg+cmd+dst+src all live below this */
         constinit size_t g_vic_heap_size = 0;
-        constinit size_t g_ind_size      = 0;
+
+        /* The heap tops out at 2 MB for a sysmodule, and 720p needs 3,801,088 B.
+         * But 2450's destination is an ordinary type-0x46 MapAlias buffer that
+         * the KERNEL maps into vi's address space - no nvmap, no pinning, no
+         * uncached attribute - so unlike the VIC buffers it can simply live in
+         * .bss and sidestep the heap cap entirely. */
+        constexpr size_t IndBufSize = 4_MB;
+        alignas(0x1000) constinit u8 g_ind_static[IndBufSize] = {};
+        constexpr size_t g_ind_size = IndBufSize;
 
         constinit uintptr_t g_vic_heap    = 0;
         constinit u8       *g_vic_cfg_buf = nullptr;
         constinit u8       *g_vic_cmd_buf = nullptr;
         constinit u8       *g_vic_dst_buf = nullptr;
         constinit u8       *g_vic_src_buf = nullptr;
-        constinit u8       *g_ind_buf     = nullptr;
+        constinit u8       *g_ind_buf     = g_ind_static;
 
         bool AllocVicHeap() {
             if (g_vic_heap != 0) { return true; }
@@ -95,15 +103,14 @@ namespace ams::mitm::applet {
                 return false;
             }
             g_vic_heap_size = want;
-            g_ind_size      = want - VicBufsEnd;
             g_vic_heap    = addr;
             g_vic_cfg_buf = reinterpret_cast<u8 *>(addr + 0x0000);
             g_vic_cmd_buf = reinterpret_cast<u8 *>(addr + 0x4000);
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
             g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x20000);
-            g_ind_buf     = reinterpret_cast<u8 *>(addr + VicBufsEnd);
+
             std::memset(reinterpret_cast<void *>(addr), 0, want);
-            LogLine("   VIC heap %zu MB at 0x%lx (capture buffer %zu KB): cfg=%p cmd=%p dst=%p src=%p",
+            LogLine("   VIC heap %zu MB at 0x%lx (capture buffer %zu KB in .bss): cfg=%p cmd=%p dst=%p src=%p",
                     want / (1024 * 1024), static_cast<unsigned long>(addr), g_ind_size / 1024,
                     static_cast<void *>(g_vic_cfg_buf),
                     static_cast<void *>(g_vic_cmd_buf),

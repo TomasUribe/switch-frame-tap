@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M26: up. Adaptive heap; vi:m + GetIndirectLayerImageMap.");
+        mitm::applet::LogLine("applet-mitm M27: up. handle_table 16->512; capture buffer in .bss.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
