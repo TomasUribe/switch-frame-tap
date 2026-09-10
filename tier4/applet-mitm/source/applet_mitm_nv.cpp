@@ -63,13 +63,16 @@ namespace ams::mitm::applet {
         constexpr size_t VicCmdSize = 0x1000;    /* host1x pushbuf           */
         constexpr size_t VicDstSize = 0x10000;   /* linear output            */
         constexpr size_t VicSrcSize = 0x10000;   /* a SOURCE WE OWN, for the self-blit */
-        constexpr size_t VicHeapSize = 2_MB;     /* os::AllocateMemoryBlock granularity */
+        constexpr size_t VicHeapSize = 8_MB;     /* 2 MB granularity; 720p indirect capture needs 3.8 MB */
+        constexpr size_t IndirectOff  = 0x100000; /* capture buffer starts 1 MB in */
+        constexpr size_t IndirectSize = 6_MB;
 
         constinit uintptr_t g_vic_heap    = 0;
         constinit u8       *g_vic_cfg_buf = nullptr;
         constinit u8       *g_vic_cmd_buf = nullptr;
         constinit u8       *g_vic_dst_buf = nullptr;
         constinit u8       *g_vic_src_buf = nullptr;
+        constinit u8       *g_ind_buf     = nullptr;
 
         bool AllocVicHeap() {
             if (g_vic_heap != 0) { return true; }
@@ -87,6 +90,7 @@ namespace ams::mitm::applet {
             g_vic_cmd_buf = reinterpret_cast<u8 *>(addr + 0x4000);
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
             g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x20000);
+            g_ind_buf     = reinterpret_cast<u8 *>(addr + IndirectOff);
             std::memset(reinterpret_cast<void *>(addr), 0, VicHeapSize);
             LogLine("   VIC heap at 0x%lx: cfg=%p cmd=%p dst=%p src=%p",
                     static_cast<unsigned long>(addr),
@@ -396,6 +400,8 @@ namespace ams::mitm::applet {
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::EXECUTE >> 2; w[n++] = 1u << 8;
             return n;
         }
+
+        void TryIndirectCapture();
 
         struct JobCtx {
             u32 vfd, cmd_handle, syncpt;
@@ -812,6 +818,8 @@ namespace ams::mitm::applet {
         }
         VicStage("vb:ALL_JOBS_DONE");
 
+        TryIndirectCapture();
+
     close_vic:
         if (cfg_addr != 0) { UnmapCmdBuffer(vfd, cfg_handle); }
         if (dst_addr != 0) { UnmapCmdBuffer(vfd, dst_handle); }
@@ -823,6 +831,95 @@ namespace ams::mitm::applet {
         tmemClose(std::addressof(g_nv_tmem));
         VicStage("vb:released");
     }
+
+        /* ---- vi indirect-layer capture ------------------------------------
+         * The only mechanism that can satisfy our constraint: 2450 writes the
+         * layer image into a type-0x46 buffer, i.e. memory WE supply. Exact
+         * marshalling taken from libnx viGetIndirectLayerImageMap, and our 2460
+         * call already matched libnx byte-for-byte and returned rc=0.
+         *
+         * 102 was denied earlier only because the game's session is vi:u with
+         * mode 0. Per switchbrew, "passing 1 to vi:s/vi:m results in the
+         * IApplicationDisplayService having greater privileges" - so we open
+         * vi:m ourselves and ask for mode 1. */
+        void TryIndirectCapture() {
+            VicStage("ind:1_open_vi_m");
+            ::Service vi_root = {};
+            ::Result rc = smGetService(std::addressof(vi_root), "vi:m");
+            LogLine("   smGetService(vi:m) rc=0x%x", rc);
+            if (R_FAILED(rc)) { VicStage("ind:1_FAILED"); return; }
+
+            VicStage("ind:2_GetDisplayService");
+            ::Service disp = {};
+            {
+                const u32 mode = 1;   /* privileged */
+                rc = serviceDispatchIn(std::addressof(vi_root), 0, mode,
+                    .out_num_objects = 1, .out_objects = std::addressof(disp));
+                LogLine("   vi:m GetDisplayService(mode=1) rc=0x%x", rc);
+                if (R_FAILED(rc)) { serviceClose(std::addressof(vi_root)); VicStage("ind:2_FAILED"); return; }
+            }
+
+            /* what does the privileged session unlock? */
+            for (const auto &p : { std::pair<u32, const char *>{ 101, "GetSystemDisplayService" },
+                                   std::pair<u32, const char *>{ 102, "GetManagerDisplayService" } }) {
+                ::Service sub = {};
+                const ::Result r = serviceDispatch(std::addressof(disp), p.first,
+                    .out_num_objects = 1, .out_objects = std::addressof(sub));
+                LogLine("   %u %-26s rc=0x%x %s", p.first, p.second, r,
+                        R_SUCCEEDED(r) ? "GOT IT" : "denied");
+                if (R_SUCCEEDED(r)) { serviceClose(std::addressof(sub)); }
+            }
+
+            VicStage("ind:3_required_memory");
+            for (const auto &d : { std::pair<s32, s32>{ 1280, 720 }, std::pair<s32, s32>{ 1920, 1080 } }) {
+                const struct { s64 w; s64 h; } in = { d.first, d.second };
+                struct { s64 size; s64 align; } out = {};
+                const ::Result r = serviceDispatchInOut(std::addressof(disp), 2460, in, out);
+                LogLine("   2460(%dx%d) rc=0x%x -> size=%lld align=%lld",
+                        d.first, d.second, r,
+                        static_cast<long long>(out.size), static_cast<long long>(out.align));
+            }
+
+            /* 2450 itself. The consumer handle normally comes from AM, which a
+             * sysmodule cannot reach - so try the plausible values and let the
+             * error codes tell us which part it objects to. Each call only
+             * writes into our own buffer, so a rejection costs nothing. */
+            VicStage("ind:4_image_map");
+            std::memset(g_ind_buf, 0xAB, 0x1000);
+            armDCacheFlush(g_ind_buf, IndirectSize);
+            const u64 handles[] = { 0, 1, 2, g_game_aruid };
+            for (u64 h : handles) {
+                const struct { s64 w; s64 h; u64 handle; u64 aruid; } in =
+                    { 1280, 720, h, g_game_aruid };
+                struct { s64 size; s64 stride; } out = {};
+                const ::Result r = serviceDispatchInOut(std::addressof(disp), 2450, in, out,
+                    .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias |
+                                      SfBufferAttr_HipcMapTransferAllowsNonSecure },
+                    .buffers      = { { g_ind_buf, 3801088 } },
+                    .in_send_pid  = true);
+                LogLine("   2450(1280x720, handle=%llu, aruid=%llu) rc=0x%x -> size=%lld stride=%lld",
+                        static_cast<unsigned long long>(h),
+                        static_cast<unsigned long long>(g_game_aruid), r,
+                        static_cast<long long>(out.size), static_cast<long long>(out.stride));
+                if (R_SUCCEEDED(r)) {
+                    armDCacheFlush(g_ind_buf, IndirectSize);
+                    u32 changed = 0;
+                    for (u32 i = 0; i < 0x1000; i++) { if (g_ind_buf[i] != 0xAB) { changed++; } }
+                    LogLine("   *** 2450 SUCCEEDED *** changed=%u/4096  first16: "
+                            "%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                            changed, g_ind_buf[0], g_ind_buf[1], g_ind_buf[2], g_ind_buf[3],
+                            g_ind_buf[4], g_ind_buf[5], g_ind_buf[6], g_ind_buf[7],
+                            g_ind_buf[8], g_ind_buf[9], g_ind_buf[10], g_ind_buf[11],
+                            g_ind_buf[12], g_ind_buf[13], g_ind_buf[14], g_ind_buf[15]);
+                    VicStage("ind:CAPTURED");
+                    break;
+                }
+            }
+
+            serviceClose(std::addressof(disp));
+            serviceClose(std::addressof(vi_root));
+            VicStage("ind:done");
+        }
 
         void VicWorkerThread(void *) {
             for (;;) {

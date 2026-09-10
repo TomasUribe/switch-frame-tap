@@ -22,7 +22,9 @@
 		"nvdrv:s",
 		"nvdrv",
 		"nvdrv:a",
-		"nvdrv:t"
+		"nvdrv:t",
+		"vi:m",
+		"vi:s"
 	],
 	"service_host": [
 		"vi:u"
