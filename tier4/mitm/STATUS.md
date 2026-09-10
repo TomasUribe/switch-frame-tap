@@ -408,7 +408,7 @@ the engine. That is no longer left to per-call-site reasoning.
 
 ### Testing note
 A freeze forces a power-off, which truncates the `.log`, and MTP then tends to
-return I/O errors on it. **Read the SD in a card reader** (`/media/tomas/SWITCH SD`)
+return I/O errors on it. **Read the SD in a card reader** (mount it directly)
 rather than over MTP — every clean log so far came from the card reader.
 
 ## M18 — separate "can we blit at all" from "can we reach the game's memory"

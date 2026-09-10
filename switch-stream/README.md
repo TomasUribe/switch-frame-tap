@@ -105,7 +105,7 @@ USB:
 ```
 TCP:
 ```bash
-./receiver/build/switch-stream-recv --tcp 192.168.1.50        # console IP
+./receiver/build/switch-stream-recv --tcp <console-ip>       # e.g. 192.168.x.x
 ```
 Useful flags: `--vsync` (smoother, +~1 frame), `--hw` (try hardware decode),
 `--buffer N` (N-frame jitter buffer, default 0), `--no-audio`, `--fullscreen`.

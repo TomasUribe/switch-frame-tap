@@ -1,7 +1,7 @@
 /* switch-stream-recv - decode and display the Switch stream with minimal buffering.
  *
  *   ./switch-stream-recv --usb
- *   ./switch-stream-recv --tcp 192.168.1.50 [--port 9899]
+ *   ./switch-stream-recv --tcp <console-ip> [--port 9899]
  *
  * options: --vsync --hw --buffer N --no-audio --fullscreen
  */
