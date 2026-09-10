@@ -1,79 +1,241 @@
 # switch-stream-project
 
-Low-latency Nintendo Switch → PC screen streaming, and the research to push it
-past what existing tools can do. Homebrew, for the author's own console, on
-Atmosphère CFW.
+Research into capturing the Nintendo Switch screen at **native resolution and
+60 fps** from an Atmosphère sysmodule — and the working code that came out of
+it. Homebrew, developed on and for the author's own console.
 
-## The short version
+**Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
+47 hardware test cycles.
 
-**SysDVR** already streams the Switch screen to a PC. It is capped at **720p30,
-game layer only**, because it reads the `grc:d` game-recording encoder, whose
-config is fixed in firmware.
+---
 
-This project set out to do better — native resolution, higher frame rate — and
-worked down through every layer the Switch exposes. The result:
+## Why
 
-- A **plain sysmodule cannot beat SysDVR.** `nvdrv`, `apm`, and `caps:sc` live
-  capture are all off-limits from that context on firmware 22.5.0. (`tier4/recon`)
-- An **Atmosphère mitm module can.** By interposing on `vi:u` → the graphics
-  binder, a module sees **every frame the game presents at 60 fps** and gets the
-  exact memory layout of each one. It can then open the game's framebuffers
-  (25 MB, native 1080p for Mario Kart 8) and reach the **VIC** (hardware
-  block-linear→linear converter) and **NVENC** (hardware H.264 encoder) —
-  a complete GPU-free video pipeline. (`tier4/applet-mitm`)
-- Making that mitm work required **patching a capability into libstratosphere**
-  that upstream does not have: forwarding for sub-objects returned from a mitm
-  command on a **non-domain** session. (`tier4/applet-mitm/patch_libstrat.py`)
+[SysDVR](https://github.com/exelix11/SysDVR) streams the Switch screen to a PC,
+capped at **720p30, game layer only**. That cap is not SysDVR's: it reads
+`grc:d`, the game-recording encoder, whose configuration is fixed in firmware.
 
-Full story: **[tier4/mitm/WRITEUP.md](tier4/mitm/WRITEUP.md)**.
-Current state and the plan from here: **[tier4/mitm/STATUS.md](tier4/mitm/STATUS.md)**.
+The obvious question is whether a sysmodule can do better by taking the frame
+*before* the encoder — reading the game's own swapchain and running it through
+the Tegra X1's own fixed-function blocks. This repository is the answer, worked
+all the way down.
 
-## What's in here
+## The short answer
 
-| Path | What it is | State |
+**A sysmodule can process frames at full speed. It cannot legally obtain one.**
+
+Three independent routes to another process's pixels were each taken to the
+point of a definite verdict:
+
+| route | verdict |
+|---|---|
+| Import the game's swapchain `nvmap` handle (`FROM_ID` + `MAP_CMD_BUFFER`) | Pins to `phys=0`, silently. Survives `is_compr`, `MAP_CMD_BUFFER_EX`, relocs, the full `0xFFFFFFFF` `nvdrv:t` permission mask, and the game's exact aruid adopted before any `Open`. **Structural:** at `Initialize` nvservices is handed `CUR_PROCESS_HANDLE` and maps client memory through *that*. The game's pages live in the game's process. |
+| `vi` indirect layers (`GetIndirectLayerImageMap`) | `0x60A PreconditionViolation`. The whole object graph builds — `CreateIndirectLayer` → producer endpoint → consumer endpoint — and the layer is simply **empty**. Wiring an application's layer to an indirect layer is **AM's** job, and a sysmodule cannot drive AM. |
+| Read back the display controller | **No such ioctl exists.** `nvdisp-disp0` is `FLIP` / `SET_MODE` / `GET_WINDOW`; `nvdcutil` is DSI/EDID test plumbing. Grepping all of nvdrv for `READBACK\|CAPTURE\|GET_FRAME\|SCANOUT` returns nothing. |
+
+`caps` `CaptureRawImage`, the other obvious candidate, is `[1.0.0]` — removed
+long before 22.5.0.
+
+**This is very likely why SysDVR is stuck at 720p30.** It is not that nobody
+tried; the platform does not let a sysmodule reach another process's
+framebuffer through the graphics stack.
+
+The one route that is *not* closed goes around the graphics stack entirely —
+the kernel's debug SVCs. See [Where it stands](#where-it-stands).
+
+## What is here that you might want
+
+Even with capture blocked, several pieces are finished, verified on hardware,
+and — as far as I can tell — not published anywhere else.
+
+### 1. Non-domain mitm sub-object forwarding for libstratosphere
+
+[`tier4/applet-mitm/patch_libstrat.py`](tier4/applet-mitm/patch_libstrat.py) —
+55 lines, idempotent.
+
+Atmosphère's mitm framework can forward commands it does not implement, but
+only for objects on a **domain** session. `vi:u` hands out
+`IApplicationDisplayService` and `IHOSBinderDriver` as sub-objects on a
+**non-domain** session, and upstream libstratosphere has nowhere to put the
+forward service for those — so every undeclared command on a wrapped sub-object
+fails instead of passing through. The patch adds that path.
+
+**If you have ever tried to mitm `vi` and given up, this is the missing piece.**
+
+### 2. A transparent `vi:u` mitm that sees every frame
+
+Wraps `GetDisplayService` → `IApplicationDisplayService` → `GetRelayService` →
+`IHOSBinderDriver`, and intercepts `TransactParcelAuto`. Measured **60.0 fps
+sustained**, invisible to the game.
+
+From the binder traffic it recovers the exact layout of every frame:
+`setPreallocatedBuffer` (code 14) carries a flattened `NvGraphicBuffer`, and
+`queueBuffer` (code 7) names the swapchain slot — the latter behind Android's
+`writeInterfaceToken`, which is parsed rather than guessed. For Mario Kart 8:
+one nvmap object, 3 × 1920×1080 A8B8G8R8, block-linear kind `0xFE`,
+`block_height_log2 = 4`, pitch 7680, slots at `0` / `0x870000` / `0x10E0000`.
+
+### 3. A complete VIC pipeline driven from a sysmodule, byte-exact
+
+The Video Image Compositor is the Tegra block that converts block-linear to
+linear, scales, and changes pixel format — no GPU involved.
+[`applet_mitm_nv.cpp`](tier4/applet-mitm/source/applet_mitm_nv.cpp) +
+[`vic40_config.hpp`](tier4/applet-mitm/source/vic40_config.hpp) drive it end to
+end over raw `nvdrv` ioctls:
+
+```
+heap alloc -> svcSetMemoryAttribute(Uncached) -> nvmap CREATE/ALLOC
+  -> MAP_CMD_BUFFER pin -> host1x cmdbuf (SETCL + methods + INCR_SYNCPT)
+  -> CHANNEL_SUBMIT -> syncpoint wait -> cache invalidate -> read back
+```
+
+A fill and a real blit both reproduce their expected output **byte for byte**.
+Output byte order is A,R,G,B (`AV_PIX_FMT_ARGB`). NVENC
+(`/dev/nvhost-msenc`) opens too, so the rest of a GPU-free encode pipeline is
+reachable.
+
+Four things cost days each and are worth knowing before you start:
+
+- **`SETCL` is mandatory.** `METHOD_OFFSET` (0x10) and `METHOD_DATA` (0x11) are
+  registers *of the current host1x class*. libdrm never emits `SETCL` because
+  the DRM kernel driver sets the class itself; nvservices' `CHANNEL_SUBMIT`
+  does **not**. Without `SETCL(0, 0x5D, 0)` every method write lands on
+  meaningless registers — while `INCR_SYNCPT` (register 0x00, present in every
+  class) still fires, so the job looks like it completed. This cost six runs.
+- **Relocs are inert on Horizon.** The command buffer is never patched. Pin
+  with `MAP_CMD_BUFFER` and inline the returned address; submit with
+  `num_relocs = 0`.
+- **The syncpoint increment must be in the command stream.** `syncpt_incrs` in
+  the submit only raises the syncpoint's *max*. Omit the
+  `NONINCR(UCLASS_INCR_SYNCPT, 1)` and nvnflinger — which composites on the
+  same VIC syncpoint — waits forever, and the console freezes.
+- **A zero address does not fail politely.** The VIC hangs, and a hung VIC takes
+  the compositor and the whole console with it. Froze this console twice.
+
+### 4. Undocumented `vi` ABIs
+
+`CreateIndirectLayer` (2050), `CreateIndirectProducerEndPoint` (2052),
+`CreateIndirectConsumerEndPoint` (2054) — all `{u64, u64} -> u64`, guessed by
+analogy with `viCreateManagedLayer` and confirmed on hardware. Also:
+`GetDisplayService`'s **command id is the service type**, not 0 — `vi:u` = 0,
+`vi:s` = 1, `vi:m` = 2.
+
+### 5. A low-latency PC receiver
+
+[`switch-stream/receiver/`](switch-stream/receiver) — FFmpeg + SDL2 over
+USB or TCP, hardware decode, near-zero buffering. Written before settling on
+this research direction; builds and runs, and is reusable as the client for
+anything here.
+
+## Where it stands
+
+The kernel debug SVCs are the remaining avenue, and unlike the graphics stack
+they are not obviously closed: Atmosphère's own cheat engine reads a running
+game's memory at 60 Hz through them.
+
+```
+pm:dmnt GetApplicationProcessId -> svcDebugActiveProcess
+  -> svcQueryDebugProcessMemory (find the framebuffer)
+  -> svcReadDebugProcessMemory  (read it)
+```
+
+Reading mesosphere settles most of it in advance:
+
+- **The framebuffer's attributes do not block the read.**
+  `kern_k_page_table_base.cpp:2743` checks state and permission with an
+  attribute mask of `None`, so `MemoryAttribute_DeviceShared` — which every
+  nvmap-pinned page carries — does not disqualify the range. This is exactly
+  what defeated the nvmap route, and it does not apply here.
+- **The NPDM must declare a debug flag.** `kern_svc_debug.cpp:38` requires
+  `target->IsPermittedDebug() || CanForceDebug() || CanForceDebugProd()`. This
+  module now declares `"force_debug": true`, the same flag `creport` and
+  `dmnt.gen2` use.
+- **`svcMapProcessMemory` is not an alternative**, tempting as it looks.
+  `kern_svc_process_memory.cpp:92` requires the source range to have *no*
+  attributes set at all, which permanently excludes nvmap-pinned memory.
+- **Staying attached is possible.** `ContinueDebugEvent(ExceptionHandled |
+  ContinueAll)` resumes the target while the debug handle is held — that is how
+  dmnt reads at 60 Hz, and it is what a streaming implementation would need.
+
+**Not yet run on hardware.** If the read works, what follows is
+implementation with no open unknowns: strip-wise capture (one block-row is
+120 blocks × 8192 B = 983,040 B and covers the full 1920 px width × 128 rows,
+contiguous; nine of them are exactly one 8,847,360-byte slot), VIC blit, NVENC,
+transport.
+
+The full research log, in reverse chronological order with every dead end and
+its evidence, is [`tier4/mitm/STATUS.md`](tier4/mitm/STATUS.md). The narrative
+version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
+
+## Layout
+
+| path | what | state |
 |---|---|---|
-| `switch-stream/` | A from-scratch low-latency USB/TCP streamer (sysmodule + PC receiver), written before settling on SysDVR as the base. The **PC receiver** (FFmpeg + SDL2, hardware decode, near-zero buffering) is reusable as the client for anything here. | receiver builds & runs; sysmodule untested |
-| `tier4/recon/` | `tier4-recon` — a read-only, opt-in diagnostic sysmodule that mapped exactly what a plain sysmodule can and cannot reach. | done, its job is finished |
-| `tier4/stream-oc/` | `stream-oc` — a charger-gated overclock companion sysmodule (docked clocks while on the official 39 W adapter). Runs alongside stock SysDVR. | builds; untested on hardware |
-| `tier4/applet-mitm/` | The mitm module. Wraps `vi:u` → `IApplicationDisplayService` → `IHOSBinderDriver`, parses `NvGraphicBuffer`, opens the game's nvmap, surveys the nv engines. | **access layer verified on hardware; VIC/NVENC pipeline not yet built** |
-| `tier4/DESIGN.md`, `tier4/FINDINGS.md` | Historical working notes from the research phase. Superseded by WRITEUP.md + STATUS.md but kept for the trail. | historical |
-| `ref/` | git-ignored. SysDVR clone, Atmosphère tree (for the mitm build), switchbrew wikitext. | not committed |
+| `tier4/applet-mitm/` | The mitm module. `vi:u` interposition, binder intercept, hand-rolled nvdrv, the VIC pipeline, and the debug-SVC probe. | mitm + VIC **verified on hardware**; debug probe untested |
+| `tier4/recon/` | `tier4-recon` — a read-only, opt-in diagnostic sysmodule that mapped what a *plain* (non-mitm) sysmodule can reach. `nvdrv`, `apm` and `caps:sc` live capture are all off-limits from there. | done; its job is finished |
+| `tier4/stream-oc/` | `stream-oc` — a charger-gated overclock companion (docked clocks while on the official 39 W adapter). Runs alongside stock SysDVR. | builds; untested |
+| `switch-stream/` | A from-scratch low-latency USB/TCP streamer. The **PC receiver** is the reusable half. | receiver builds and runs; its sysmodule half is untested |
+| `tier4/DESIGN.md`, `tier4/FINDINGS.md` | Working notes from the early research phase. | historical |
+| `ref/` | Not committed. Third-party reference trees — see [`ref/README.md`](ref/README.md). | — |
 
 ## Building
 
-Everything Switch-side builds in the `devkitpro/devkita64` Docker image — no
+Everything Switch-side builds in the `devkitpro/devkita64` Docker image; no
 local toolchain needed.
 
 ```bash
-# recon / stream-oc: plain libnx sysmodules
+# plain libnx sysmodules
 cd tier4/recon && docker run --rm -v "$PWD":/proj -w /proj devkitpro/devkita64:latest make
+```
 
-# applet-mitm: libstratosphere module, built inside an Atmosphère tree checkout
-#   (build.sh clones/uses ref/Atmosphere, applies patch_libstrat.py, builds,
-#    copies the .nsp back). First build recompiles libstratosphere (~15 min).
-cd tier4/applet-mitm && bash build.sh
+```bash
+# applet-mitm: needs an Atmosphere checkout in ref/Atmosphere (see ref/README.md).
+# build.sh rsyncs the module in, applies patch_libstrat.py, builds, copies the
+# .nsp back. The first build recompiles libstratosphere - about 15 minutes.
+git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
+bash tier4/applet-mitm/build.sh
+```
 
+```bash
 # PC receiver: FFmpeg + SDL2 + libusb
 cd switch-stream/receiver && cmake -B build && cmake --build build -j
 ```
 
-## Installing a sysmodule
+## Installing
 
 ```
-sdmc:/atmosphere/contents/<TITLE_ID>/exefs.nsp        <- the built .nsp, renamed
-sdmc:/atmosphere/contents/<TITLE_ID>/flags/boot2.flag <- empty file
+sdmc:/atmosphere/contents/<TITLE_ID>/exefs.nsp         <- the built .nsp, renamed
+sdmc:/atmosphere/contents/<TITLE_ID>/flags/boot2.flag  <- an EMPTY file
 ```
 
-Title IDs: `tier4-recon` = `0100000000000C00`, `stream-oc` = `0100000000000C10`,
-`applet-mitm` = `0100000000000C20`.
+| module | title id |
+|---|---|
+| `tier4-recon` | `0100000000000C00` |
+| `stream-oc` | `0100000000000C10` |
+| `applet-mitm` | `0100000000000C20` |
 
-Recovery from a bad module: boot holding **Volume Up** (Atmosphère skips
-`contents` sysmodules), or delete the folder from the SD card on a PC. Nothing
-here touches NAND; a Hekate NAND backup covers the worst case regardless.
+`applet-mitm` is a **pure observer** unless `sdmc:/applet-mitm.armed` exists.
+Keywords in that file opt in to each stage: `vic` runs the nvdrv/VIC probe,
+`exec` runs the real blit rather than a no-op command buffer, `dbg` runs the
+debug-SVC probe. Logs land at `sdmc:/applet-mitm.log`, with a last-step
+breadcrumb in `sdmc:/applet-mitm.last` that survives a hard power-off.
 
-## Status: research milestone, not a finished tool
+**Read the SD card in a card reader, not over MTP** — MTP returns I/O errors on
+a log whose tail was cut by a forced power-off.
 
-The mitm path has proven every access question needed for native-resolution
-capture. What remains — driving the VIC and NVENC via host1x channel submission,
-and wiring the transport — is substantial implementation work but contains no
-open unknowns. See STATUS.md.
+## If something goes wrong
+
+Delete `atmosphere/contents/<TITLE_ID>/` from the SD card on a PC, or boot
+holding **Volume Up**, which makes Atmosphère skip `contents` sysmodules.
+Nothing here touches NAND or the bootloader. Have a NAND backup anyway.
+
+These modules interpose on the graphics stack and drive hardware engines
+directly. Bugs in them freeze the console — that happened twice here, both
+times from an address of zero reaching the VIC. Run this on a console you are
+willing to have crash.
+
+## License
+
+GPL-2.0. `tier4/applet-mitm` links libstratosphere and ships a patch against
+it, so it is a derivative of Atmosphère and could not be anything else. See
+[LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -157,7 +157,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M33: up. Debugger route, fixed: pmdmntInitialize + DeviceShared scan.");
+        mitm::applet::LogLine("applet-mitm M34: up. Debugger route + NPDM force_debug (M33 could not have attached).");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

@@ -115,6 +115,14 @@
             "value": "0x0030"
         },
         {
+            "type": "debug_flags",
+            "value": {
+                "allow_debug": false,
+                "force_debug_prod": false,
+                "force_debug": true
+            }
+        },
+        {
             "type": "handle_table_size",
             "value": 512
         }

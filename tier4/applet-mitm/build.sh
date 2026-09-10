@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the standalone mitm module inside a copy of the Atmosphere tree.
 set -e
-REPO=/home/tomas/switch-stream-project
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AMS=$REPO/ref/Atmosphere
 SRC=$REPO/tier4/applet-mitm
 DST=$AMS/stratosphere/applet-mitm

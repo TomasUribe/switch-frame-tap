@@ -1,0 +1,34 @@
+switch-stream-project
+Copyright (C) 2026 Tomas Uribe
+
+This program is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License version 2, as published by the Free
+Software Foundation. See LICENSE for the full text.
+
+GPL-2.0 is not an arbitrary choice: tier4/applet-mitm is a libstratosphere
+sysmodule. It is compiled inside an Atmosphère checkout, links libstratosphere,
+and ships a patch against it (tier4/applet-mitm/patch_libstrat.py). Atmosphère
+is GPL-2.0, so anything built this way is too.
+
+
+Third-party material this project depends on but does not redistribute
+----------------------------------------------------------------------
+
+Nothing under ref/ is committed to this repository; see ref/README.md for what
+belongs there and where to fetch it.
+
+  Atmosphère        GPL-2.0   https://github.com/Atmosphere-NX/Atmosphere
+  SysDVR            GPL-2.0   https://github.com/exelix11/SysDVR
+  libdrm (tegra)    MIT       https://gitlab.freedesktop.org/mesa/drm
+  libnx             ISC       https://github.com/switchbrew/libnx
+  switchbrew wiki             https://switchbrew.org/wiki/
+
+
+Derived work
+------------
+
+tier4/applet-mitm/source/vic40_config.hpp transcribes the VIC 4.0 register
+methods and configuration-struct layout from libdrm's Tegra backend
+(vic.h / vic40.h, Copyright (c) 2018 NVIDIA Corporation, MIT). Every one of the
+nine config structs in it was diffed field-for-field and bit-for-bit against
+those headers.

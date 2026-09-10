@@ -5,5 +5,8 @@ build/
 *.elf
 *.map
 *.lst
-ref/SysDVR/Client/bin/
-ref/Atmosphere/
+
+# ref/ is third-party reference material - see ref/README.md.
+# Each tree has its own license and upstream; none of it is redistributed here.
+ref/*
+!ref/README.md

@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M34**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -67,8 +67,81 @@ process's framebuffer.
 - **A zero address handed to the VIC hangs the engine**, and a hung VIC takes the
   compositor down with it. Every address is checked before submit.
 - **Read the SD in a card reader**, not over MTP.
+- **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
+  Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
+  `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## The one avenue left untried
+## The live avenue: kernel debug SVCs (M32 -> M34, not yet run)
+
+Both graphics routes are closed, so go around the graphics stack. Atmosphere's
+own cheat engine reads a running game's memory at 60 Hz this way:
+
+```
+pm:dmnt GetApplicationProcessId -> svcDebugActiveProcess
+  -> svcQueryDebugProcessMemory  (find the framebuffer region)
+  -> svcReadDebugProcessMemory   (read the pixels)
+```
+
+`TryDebugCapture()` in `applet_mitm_nv.cpp`. Attaches, walks the game's memory
+map, selects the region by `MemoryAttribute_DeviceShared` / `device_count > 0`
+(not by size - "biggest region" finds the heap), samples 32 bytes at each of the
+three known slot offsets, detaches, and only *then* logs. Nothing writes to the
+SD while the game is stopped.
+
+### Read straight out of mesosphere - what this route does and does not hit
+
+| question | file:line | answer |
+|---|---|---|
+| Does `DeviceShared` block the read, the way it blocked nvmap? | `kern_k_page_table_base.cpp:2743` | **No.** `ReadDebugMemory`'s primary gate checks state and permission with an attribute mask of `None`. Any user-readable mapped range qualifies. This is the whole reason the route is viable. |
+| What does `DebugActiveProcess` require? | `kern_svc_debug.cpp:28,38` | `IsDebugMode() \|\| CanForceDebugProd()`, **and** `target->IsPermittedDebug() \|\| CanForceDebug() \|\| CanForceDebugProd()`. |
+| What do Query/Read require? | `kern_svc_debug.cpp:232,276` | `IsDebugMode() \|\| CanForceDebugProd()`. |
+| Could `svcMapProcessMemory` map the swapchain in directly instead? | `kern_svc_process_memory.cpp:92` | **No, permanently.** The source range must have `KMemoryAttribute_None` - *no* attributes set. nvmap-pinned pages always carry `DeviceShared`. Do not spend a build on this. |
+| Can we stay attached without freezing the game? | `dmnt_cheat_debug_events_manager.cpp:87` | **Yes.** `ContinueDebugEvent(ExceptionHandled \| ContinueAll, nullptr, 0)` resumes all threads with the debug handle still held. Required for streaming; the one-shot probe does not use it. |
+| Will dmnt already hold the debug handle? | `dmnt_cheat_api.cpp:783` | Only if cheats are enabled *and* a cheat file loads for the title. With no cheats installed it never attaches, so no contention. If the user has cheats on for the game, expect our attach to fail. |
+
+### M34 - the bug M33 shipped with
+
+**M33 could not have attached.** `applet-mitm.json` declared no `debug_flags`
+capability at all, so gate 2 above reduced to `target->IsPermittedDebug()`,
+which is not ours to control. M34 adds the flag `creport` and `dmnt.gen2` both
+declare:
+
+```json
+{ "type": "debug_flags",
+  "value": { "allow_debug": false, "force_debug_prod": false, "force_debug": true } }
+```
+
+Verified in the built NPDM by decoding its KAC: capability `0x0008FFFF`
+(id_bits 16, payload bit 2 = ForceDebug), alongside 65 granted SVCs including
+`0x60/0x63/0x64/0x69/0x6a` and **not** `0x6b WriteDebugProcessMemory`,
+`0x62 TerminateDebugProcess`, `0x61 BreakDebugProcess`.
+
+`force_debug` rather than `force_debug_prod` on purpose: `force_debug_prod`
+would also satisfy gate 1 without relying on `IsDebugMode()`, but it sets
+`IsForceDebugProd()` on the debug object, which narrows what
+`CanReadWriteDebugMemory` will allow. Since Atmosphere runs with debug mode on
+(dmnt's cheat engine declares no debug flags at all and still works on retail),
+gate 1 is already satisfied, and `force_debug` is the less restrictive choice.
+
+### What to read in the M34 log
+
+```
+pmdmntInitialize rc=0x0                          <- boot line; 0 means the pid lookup works
+DebugActiveProcess(pid=...) rc=0x0 ATTACHED
+  [ n] base=0x... size=  26542080 ... attr=0x4 devs=1   <== EXACT SWAPCHAIN SIZE
+  *** READ THE GAME'S FRAMEBUFFER ***
+```
+
+`attr=0x4` is `MemoryAttribute_DeviceShared`. If the swapchain shows up as three
+adjacent 8,847,360-byte regions instead of one 26,542,080-byte region, that is
+fine - the hit table lists up to 24 regions, so the split is visible.
+
+If it fails, the rc says which gate:
+`ResultNotImplemented` = gate 1 (debug mode), `ResultInvalidState` = gate 2
+(the flag did not take, or dmnt holds the handle), `ResultInvalidProcessId` =
+no application running.
+
+## The remaining speculative avenue
 
 The `8200`-series shared-buffer commands on `IManagerDisplayService`:
 `CreateSharedBufferStaticStorage` (8200), `BindSharedLowLevelLayerToIndirectLayer`
@@ -729,11 +802,17 @@ exactly how nvnflinger consumes these buffers. Steps:
 applet-mitm/
   build.sh              rsync into ref/Atmosphere, apply patch, docker build, copy .nsp back
   patch_libstrat.py     the non-domain mitm sub-object forwarding patch (idempotent)
-  applet-mitm.json      NPDM: service_host vi:u, service_access nvdrv:s + fsp-srv/lm/fatal:u
+  applet-mitm.json      NPDM: service_host vi:u; service_access fatal:u lm fsp-srv
+                        nvdrv{,:a,:s,:t} vi:m vi:s pm:dmnt; handle_table_size 512;
+                        pool_partition 2; debug_flags force_debug; read-only debug SVCs
   source/
     applet_mitm_main.cpp     ServerManager, RegisterMitmServer("vi:u"), nv weak-global overrides
     applet_mitm_service.*    the wrapper chain + binder intercept
     applet_mitm_gbuf.*       NvGraphicBuffer / NvSurface layout + parser (offset static_asserts)
-    applet_mitm_nv.*         hand-rolled nvdrv: import, engine survey, own-buffer alloc
+    applet_mitm_nv.*         hand-rolled nvdrv, the VIC pipeline (RunOneJob /
+                             BuildCmdbuf / AppendIncrSyncpt), TryIndirectCapture,
+                             TryDebugCapture
+    vic40_config.hpp         VIC 4.0 methods + the 9 config structs, diffed
+                             field-for-field against libdrm
     applet_mitm_log.*        SD logger + LogMark breadcrumb
 ```

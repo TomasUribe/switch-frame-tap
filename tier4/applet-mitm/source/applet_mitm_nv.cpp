@@ -1076,7 +1076,35 @@ namespace ams::mitm::applet {
          * line, which would freeze the game for hundreds of ms, so everything
          * is collected silently while attached and logged only after detaching.
          * Closing the debug handle resumes the process. Read-only: the NPDM
-         * deliberately omits WriteDebugProcessMemory and TerminateDebugProcess. */
+         * deliberately omits WriteDebugProcessMemory and TerminateDebugProcess.
+         *
+         * The three kernel gates, read straight out of mesosphere (M34):
+         *
+         *   kern_svc_debug.cpp:28   DebugActiveProcess needs
+         *                             IsDebugMode() || CanForceDebugProd()
+         *   kern_svc_debug.cpp:38   ...and
+         *                             target->IsPermittedDebug()
+         *                             || CanForceDebug() || CanForceDebugProd()
+         *   kern_svc_debug.cpp:232/276  Query/ReadDebugProcessMemory need
+         *                             IsDebugMode() || CanForceDebugProd()
+         *
+         * M33 declared none of those NPDM debug flags, so its attach could only
+         * ever have worked if the game itself were marked permitted-debug.
+         * M34 adds "force_debug": true - the same flag creport and dmnt.gen2
+         * declare - which satisfies the second gate unconditionally.
+         *
+         * And the read itself is NOT blocked by the framebuffer's attributes:
+         * kern_k_page_table_base.cpp:2743 checks state/permission with an
+         * attribute mask of None, so MemoryAttribute_DeviceShared - which every
+         * nvmap-pinned page carries - does not disqualify the range. That is the
+         * whole reason this route can work where nvmap FROM_ID could not.
+         *
+         * Not done here, deliberately: after attaching, draining GetDebugEvent
+         * and calling ContinueDebugEvent(ExceptionHandled | ContinueAll) would
+         * let the game keep running while we stay attached - which is how dmnt
+         * reads cheat addresses at 60 Hz, and is what a streaming capture would
+         * need. Both SVCs are already in our NPDM. This one-shot probe keeps the
+         * game stopped instead, because a frozen frame is the cleaner sample. */
         struct RegionHit { u64 base; u64 size; u32 state; u32 perm; u32 attr; u32 devices; };
 
         void TryDebugCapture() {
