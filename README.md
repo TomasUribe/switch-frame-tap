@@ -258,6 +258,20 @@ directly. Bugs in them freeze the console — that happened twice here, both
 times from an address of zero reaching the VIC. Run this on a console you are
 willing to have crash.
 
+## Contact
+
+Questions, corrections, or if you want to take a piece of this further — I'd
+genuinely like to hear about it, especially if you can tell me I'm wrong about
+why nvservices refuses foreign handles.
+
+- **Email:** Some_Potato_1@protonmail.com
+- **Reddit:** [u/Papux200](https://www.reddit.com/user/Papux200)
+- **Issues:** [GitHub issues](https://github.com/TomasUribe/switch-frame-tap/issues)
+
+Forks are welcome and no permission is needed. If you get further than this
+repo does, please say so publicly — the whole point of writing the dead ends
+down was to save somebody else the 47 test cycles.
+
 ## License
 
 GPL-2.0. `tier4/applet-mitm` links libstratosphere and ships a patch against
