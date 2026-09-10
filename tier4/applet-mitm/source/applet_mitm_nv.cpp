@@ -63,9 +63,13 @@ namespace ams::mitm::applet {
         constexpr size_t VicCmdSize = 0x1000;    /* host1x pushbuf           */
         constexpr size_t VicDstSize = 0x10000;   /* linear output            */
         constexpr size_t VicSrcSize = 0x10000;   /* a SOURCE WE OWN, for the self-blit */
-        constexpr size_t VicHeapSize = 8_MB;     /* 2 MB granularity; 720p indirect capture needs 3.8 MB */
-        constexpr size_t IndirectOff  = 0x100000; /* capture buffer starts 1 MB in */
-        constexpr size_t IndirectSize = 6_MB;
+        /* A fixed 8 MB request was refused with os::ResultOutOfMemory (0x1003):
+         * a sysmodule's heap is capped well below that. Ask for the largest the
+         * process will actually grant rather than guessing, and size the capture
+         * to whatever we get. 2 MB granularity is the AllocateMemoryBlock unit. */
+        constexpr size_t VicBufsEnd  = 0x30000;   /* cfg+cmd+dst+src all live below this */
+        constinit size_t g_vic_heap_size = 0;
+        constinit size_t g_ind_size      = 0;
 
         constinit uintptr_t g_vic_heap    = 0;
         constinit u8       *g_vic_cfg_buf = nullptr;
@@ -76,24 +80,31 @@ namespace ams::mitm::applet {
 
         bool AllocVicHeap() {
             if (g_vic_heap != 0) { return true; }
-            if (const auto rc = os::SetMemoryHeapSize(VicHeapSize); R_FAILED(rc)) {
-                LogLine("   SetMemoryHeapSize(2MB) FAILED rc=0x%x", rc.GetValue());
-                return false;
+
+            size_t want = 0;
+            for (const size_t sz : { 8_MB, 6_MB, 4_MB, 2_MB }) {
+                const auto rc = os::SetMemoryHeapSize(sz);
+                LogLine("   SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
+                if (R_SUCCEEDED(rc)) { want = sz; break; }
             }
+            if (want == 0) { LogLine("   no heap size accepted"); return false; }
+
             uintptr_t addr = 0;
-            if (const auto rc = os::AllocateMemoryBlock(std::addressof(addr), VicHeapSize); R_FAILED(rc)) {
-                LogLine("   AllocateMemoryBlock(2MB) FAILED rc=0x%x", rc.GetValue());
+            if (const auto rc = os::AllocateMemoryBlock(std::addressof(addr), want); R_FAILED(rc)) {
+                LogLine("   AllocateMemoryBlock(%zu MB) FAILED rc=0x%x", want / (1024 * 1024), rc.GetValue());
                 return false;
             }
+            g_vic_heap_size = want;
+            g_ind_size      = want - VicBufsEnd;
             g_vic_heap    = addr;
             g_vic_cfg_buf = reinterpret_cast<u8 *>(addr + 0x0000);
             g_vic_cmd_buf = reinterpret_cast<u8 *>(addr + 0x4000);
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
             g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x20000);
-            g_ind_buf     = reinterpret_cast<u8 *>(addr + IndirectOff);
-            std::memset(reinterpret_cast<void *>(addr), 0, VicHeapSize);
-            LogLine("   VIC heap at 0x%lx: cfg=%p cmd=%p dst=%p src=%p",
-                    static_cast<unsigned long>(addr),
+            g_ind_buf     = reinterpret_cast<u8 *>(addr + VicBufsEnd);
+            std::memset(reinterpret_cast<void *>(addr), 0, want);
+            LogLine("   VIC heap %zu MB at 0x%lx (capture buffer %zu KB): cfg=%p cmd=%p dst=%p src=%p",
+                    want / (1024 * 1024), static_cast<unsigned long>(addr), g_ind_size / 1024,
                     static_cast<void *>(g_vic_cfg_buf),
                     static_cast<void *>(g_vic_cmd_buf),
                     static_cast<void *>(g_vic_dst_buf),
@@ -885,24 +896,42 @@ namespace ams::mitm::applet {
              * error codes tell us which part it objects to. Each call only
              * writes into our own buffer, so a rejection costs nothing. */
             VicStage("ind:4_image_map");
+            /* Pick the largest resolution whose required size fits the heap we
+             * were actually granted, rather than assuming 720p fits. */
+            s32 cw = 0, ch = 0;
+            for (const auto &d : { std::pair<s32, s32>{ 1920, 1080 }, std::pair<s32, s32>{ 1280, 720 },
+                                   std::pair<s32, s32>{ 960, 540 },  std::pair<s32, s32>{ 640, 360 } }) {
+                const struct { s64 w; s64 h; } q = { d.first, d.second };
+                struct { s64 size; s64 align; } a = {};
+                if (R_SUCCEEDED(serviceDispatchInOut(std::addressof(disp), 2460, q, a)) &&
+                    a.size > 0 && static_cast<size_t>(a.size) <= g_ind_size) {
+                    cw = d.first; ch = d.second;
+                    LogLine("   capture size %dx%d needs %lld B, buffer is %zu B - OK",
+                            cw, ch, static_cast<long long>(a.size), g_ind_size);
+                    break;
+                }
+            }
+            if (cw == 0) { LogLine("   no resolution fits the %zu B buffer", g_ind_size); }
+
             std::memset(g_ind_buf, 0xAB, 0x1000);
-            armDCacheFlush(g_ind_buf, IndirectSize);
+            armDCacheFlush(g_ind_buf, g_ind_size);
             const u64 handles[] = { 0, 1, 2, g_game_aruid };
             for (u64 h : handles) {
+                if (cw == 0) { break; }
                 const struct { s64 w; s64 h; u64 handle; u64 aruid; } in =
-                    { 1280, 720, h, g_game_aruid };
+                    { cw, ch, h, g_game_aruid };
                 struct { s64 size; s64 stride; } out = {};
                 const ::Result r = serviceDispatchInOut(std::addressof(disp), 2450, in, out,
                     .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias |
                                       SfBufferAttr_HipcMapTransferAllowsNonSecure },
-                    .buffers      = { { g_ind_buf, 3801088 } },
+                    .buffers      = { { g_ind_buf, g_ind_size } },
                     .in_send_pid  = true);
-                LogLine("   2450(1280x720, handle=%llu, aruid=%llu) rc=0x%x -> size=%lld stride=%lld",
+                LogLine("   2450(%dx%d, handle=%llu, aruid=%llu) rc=0x%x -> size=%lld stride=%lld", cw, ch,
                         static_cast<unsigned long long>(h),
                         static_cast<unsigned long long>(g_game_aruid), r,
                         static_cast<long long>(out.size), static_cast<long long>(out.stride));
                 if (R_SUCCEEDED(r)) {
-                    armDCacheFlush(g_ind_buf, IndirectSize);
+                    armDCacheFlush(g_ind_buf, g_ind_size);
                     u32 changed = 0;
                     for (u32 i = 0; i < 0x1000; i++) { if (g_ind_buf[i] != 0xAB) { changed++; } }
                     LogLine("   *** 2450 SUCCEEDED *** changed=%u/4096  first16: "
