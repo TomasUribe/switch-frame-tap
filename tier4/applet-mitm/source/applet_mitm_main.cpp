@@ -148,7 +148,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M28: up. Capture buffer back on the heap (.bss starved the system pool).");
+        mitm::applet::LogLine("applet-mitm M29: up. vi:m GetDisplayService is cmd 2, not cmd 0.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

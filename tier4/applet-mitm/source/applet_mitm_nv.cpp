@@ -867,21 +867,34 @@ namespace ams::mitm::applet {
          * IApplicationDisplayService having greater privileges" - so we open
          * vi:m ourselves and ask for mode 1. */
         void TryIndirectCapture() {
-            VicStage("ind:1_open_vi_m");
+            /* GetDisplayService's COMMAND ID is the service type, not 0.
+             * libnx: _viCmdGetSession(root, out, inval, g_viServiceType) - the
+             * service type is passed as the cmd_id, so vi:u=0, vi:s=1, vi:m=2,
+             * with inval 1 for system/manager. Sending cmd 0 to
+             * IManagerRootService is an unknown command, which is why vi closed
+             * the session on us (0xF601 SessionClosed). A closed session cannot
+             * be reused, so each attempt re-opens the root service. */
+            VicStage("ind:1_open_vi_root");
             ::Service vi_root = {};
-            ::Result rc = smGetService(std::addressof(vi_root), "vi:m");
-            LogLine("   smGetService(vi:m) rc=0x%x", rc);
-            if (R_FAILED(rc)) { VicStage("ind:1_FAILED"); return; }
+            ::Service disp    = {};
+            bool got_disp = false;
+            for (const auto &v : { std::tuple<const char *, u32, u32>{ "vi:m", 2, 1 },
+                                   std::tuple<const char *, u32, u32>{ "vi:s", 1, 1 } }) {
+                const char *name = std::get<0>(v);
+                const u32 cmd = std::get<1>(v), mode = std::get<2>(v);
 
-            VicStage("ind:2_GetDisplayService");
-            ::Service disp = {};
-            {
-                const u32 mode = 1;   /* privileged */
-                rc = serviceDispatchIn(std::addressof(vi_root), 0, mode,
+                ::Result r = smGetService(std::addressof(vi_root), name);
+                if (R_FAILED(r)) { LogLine("   smGetService(%s) rc=0x%x", name, r); continue; }
+
+                r = serviceDispatchIn(std::addressof(vi_root), cmd, mode,
                     .out_num_objects = 1, .out_objects = std::addressof(disp));
-                LogLine("   vi:m GetDisplayService(mode=1) rc=0x%x", rc);
-                if (R_FAILED(rc)) { serviceClose(std::addressof(vi_root)); VicStage("ind:2_FAILED"); return; }
+                LogLine("   %s GetDisplayService cmd=%u mode=%u rc=0x%x", name, cmd, mode, r);
+                if (R_SUCCEEDED(r)) { got_disp = true; break; }
+                serviceClose(std::addressof(vi_root));
             }
+            if (!got_disp) { VicStage("ind:2_FAILED"); return; }
+            ::Result rc = 0;
+            AMS_UNUSED(rc);
 
             /* what does the privileged session unlock? */
             for (const auto &p : { std::pair<u32, const char *>{ 101, "GetSystemDisplayService" },
