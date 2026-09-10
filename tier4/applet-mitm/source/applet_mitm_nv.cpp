@@ -897,6 +897,7 @@ namespace ams::mitm::applet {
             AMS_UNUSED(rc);
 
             /* what does the privileged session unlock? */
+            ::Service mgr_keep = {};
             for (const auto &p : { std::pair<u32, const char *>{ 101, "GetSystemDisplayService" },
                                    std::pair<u32, const char *>{ 102, "GetManagerDisplayService" } }) {
                 ::Service sub = {};
@@ -917,10 +918,64 @@ namespace ams::mitm::applet {
                         static_cast<long long>(out.size), static_cast<long long>(out.align));
             }
 
-            /* 2450 itself. The consumer handle normally comes from AM, which a
-             * sysmodule cannot reach - so try the plausible values and let the
-             * error codes tell us which part it objects to. Each call only
-             * writes into our own buffer, so a rejection costs nothing. */
+            /* Open a display on OUR privileged session, then make a real
+             * indirect layer. 0x60A is ams::sf::PreconditionViolation - the
+             * marshalling was accepted and only the consumer handle was bogus,
+             * so a genuine handle is the whole remaining gap.
+             *
+             * 2050 CreateIndirectLayer is undocumented, but its sibling
+             * viCreateManagedLayer(2010) is { u32 flags; u32 pad; u64 display_id;
+             * u64 aruid; } -> u64. Probing shapes is safe: a wrong raw size
+             * answers InvalidCmifHeaderSize(0x1940A) and a missing command
+             * answers UnknownMethodId(0x1BA0A), so the errors discriminate. */
+            u64 display_id = 0;
+            {
+                struct { char data[0x40]; } name = {};
+                std::strncpy(name.data, "Default", sizeof(name.data) - 1);
+                const ::Result r = serviceDispatchInOut(std::addressof(disp), 1010, name, display_id);
+                LogLine("   1010 OpenDisplay(\"Default\") rc=0x%x -> display_id=%llu",
+                        r, static_cast<unsigned long long>(display_id));
+            }
+
+            u64 consumer = 0;
+            if (R_SUCCEEDED(serviceDispatch(std::addressof(disp), 102,
+                                            .out_num_objects = 1, .out_objects = std::addressof(mgr_keep)))) {
+                VicStage("ind:3b_create_indirect_layer");
+                /* shape A: { u64 display_id; u64 aruid } -> u64 */
+                {
+                    const struct { u64 display_id; u64 aruid; } in = { display_id, g_game_aruid };
+                    u64 out = 0;
+                    const ::Result r = serviceDispatchInOut(std::addressof(mgr_keep), 2050, in, out);
+                    LogLine("   2050 shapeA{disp,aruid} rc=0x%x -> handle=%llu", r,
+                            static_cast<unsigned long long>(out));
+                    if (R_SUCCEEDED(r)) { consumer = out; }
+                }
+                /* shape B: { u32 flags; u32 pad; u64 display_id; u64 aruid } -> u64 */
+                if (consumer == 0) {
+                    const struct { u32 flags; u32 pad; u64 display_id; u64 aruid; } in =
+                        { 0, 0, display_id, g_game_aruid };
+                    u64 out = 0;
+                    const ::Result r = serviceDispatchInOut(std::addressof(mgr_keep), 2050, in, out);
+                    LogLine("   2050 shapeB{flags,disp,aruid} rc=0x%x -> handle=%llu", r,
+                            static_cast<unsigned long long>(out));
+                    if (R_SUCCEEDED(r)) { consumer = out; }
+                }
+                /* shape C: { u64 aruid } -> u64 */
+                if (consumer == 0) {
+                    const u64 in = g_game_aruid;
+                    u64 out = 0;
+                    const ::Result r = serviceDispatchInOut(std::addressof(mgr_keep), 2050, in, out);
+                    LogLine("   2050 shapeC{aruid} rc=0x%x -> handle=%llu", r,
+                            static_cast<unsigned long long>(out));
+                    if (R_SUCCEEDED(r)) { consumer = out; }
+                }
+                LogLine("   consumer handle = %llu", static_cast<unsigned long long>(consumer));
+            }
+
+            /* 2450 itself. 0x60A on every made-up handle told us the request
+             * shape is right and only the handle was wrong, so try the real one
+             * first and keep the guesses as a fallback. Each call only writes
+             * into our own buffer, so a rejection costs nothing. */
             VicStage("ind:4_image_map");
             /* Pick the largest resolution whose required size fits the heap we
              * were actually granted, rather than assuming 720p fits. */
@@ -941,7 +996,7 @@ namespace ams::mitm::applet {
 
             std::memset(g_ind_buf, 0xAB, 0x1000);
             armDCacheFlush(g_ind_buf, g_ind_size);
-            const u64 handles[] = { 0, 1, 2, g_game_aruid };
+            const u64 handles[] = { consumer, 0, 1, 2, g_game_aruid };
             for (u64 h : handles) {
                 if (cw == 0) { break; }
                 const struct { s64 w; s64 h; u64 handle; u64 aruid; } in =
@@ -971,6 +1026,7 @@ namespace ams::mitm::applet {
                 }
             }
 
+            if (serviceIsActive(std::addressof(mgr_keep))) { serviceClose(std::addressof(mgr_keep)); }
             serviceClose(std::addressof(disp));
             serviceClose(std::addressof(vi_root));
             VicStage("ind:done");
