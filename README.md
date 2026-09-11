@@ -14,6 +14,36 @@ developed on and for the author's own console.
 **Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
 47 hardware test cycles.
 
+## How this was built — with an AI, openly
+
+I built this together with **Claude** (Anthropic's AI model, Opus 5, through
+Claude Code). I want to be straightforward about that, because it should change
+how you read and trust what's here.
+
+- **Claude** wrote nearly all of the code and the documentation, did the
+  source-reading (Atmosphère and its kernel mesosphere, libdrm, switchbrew),
+  designed each hardware probe, and interpreted the logs that came back.
+- **I** set the goal and the direction, ran every one of the 47 hardware tests
+  on my own console, read the logs back off the SD card, decided which routes to
+  keep pushing and when to drop one, and decided what to publish.
+
+What that means for you:
+
+- **"Verified on hardware" means exactly that** — a real run on a real console,
+  with the log. Conclusions drawn from reading source rather than running it are
+  labelled as such.
+- **The AI got things wrong, and some mistakes were not cheap.** Since Claude
+  wrote nearly all the code, the bugs are its bugs: including the ones that
+  froze my console, one that fataled another sysmodule at boot, and a build
+  (M33) that shipped without the NPDM flag it needed to work at all. Every one
+  is recorded in [`tier4/mitm/STATUS.md`](tier4/mitm/STATUS.md). That log is
+  written in the first person because Claude wrote it as the work happened.
+- **The history shows it too.** Most commits carry a
+  `Co-Authored-By: Claude` trailer.
+
+Review it as you would a contribution from someone you haven't worked with
+before — which is good advice for homebrew that drives hardware engines anyway.
+
 ---
 
 ## Why
