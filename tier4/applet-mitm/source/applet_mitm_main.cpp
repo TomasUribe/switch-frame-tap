@@ -131,6 +131,42 @@ namespace ams {
             return any ? v : def;
         }
 
+        /* Ask the kernel how big each physical memory pool is, rather than
+         * inferring our budget from a failed allocation.
+         *
+         * M47 measured this process at total=4720 KB, used=3744 KB - the whole
+         * allocation is smaller than ONE 1080p frame (7913 KB). masagrator's
+         * objection on GBAtemp was right, and by a wider margin than he argued.
+         * The open question is whether pool_partition is the lever: we are on 2
+         * (System), and if Applet or Application has meaningful headroom then a
+         * one-line NPDM change might buy the room NVENC needs.
+         *
+         * Deliberately logged at BOOT. Every memory question then costs a ~20 s
+         * boot instead of a three-minute race to reach the probe. */
+        void LogMemoryPools() {
+            static const char *const names[4] = { "Application", "Applet", "System", "SystemUnsafe" };
+            mitm::applet::LogLine("---- physical memory pools (svcGetSystemInfo) ----");
+            for (u64 pool = 0; pool < 4; ++pool) {
+                u64 tot = 0, used = 0;
+                const auto r1 = svc::GetSystemInfo(std::addressof(tot),  svc::SystemInfoType_TotalPhysicalMemorySize, svc::InvalidHandle, pool);
+                const auto r2 = svc::GetSystemInfo(std::addressof(used), svc::SystemInfoType_UsedPhysicalMemorySize,  svc::InvalidHandle, pool);
+                mitm::applet::LogLine("   pool %llu %-12s total=%8llu KB  used=%8llu KB  free=%9lld KB   rc=%x/%x",
+                                      static_cast<unsigned long long>(pool), names[pool],
+                                      static_cast<unsigned long long>(tot / 1024),
+                                      static_cast<unsigned long long>(used / 1024),
+                                      static_cast<long long>((static_cast<s64>(tot) - static_cast<s64>(used)) / 1024),
+                                      r1.GetValue(), r2.GetValue());
+            }
+            u64 ptot = 0, pused = 0;
+            svc::GetInfo(std::addressof(ptot),  svc::InfoType_TotalMemorySize, svc::PseudoHandle::CurrentProcess, 0);
+            svc::GetInfo(std::addressof(pused), svc::InfoType_UsedMemorySize,  svc::PseudoHandle::CurrentProcess, 0);
+            mitm::applet::LogLine("   THIS PROCESS (pool_partition 2, at boot): total=%llu KB used=%llu KB free=%lld KB",
+                                  static_cast<unsigned long long>(ptot / 1024),
+                                  static_cast<unsigned long long>(pused / 1024),
+                                  static_cast<long long>((static_cast<s64>(ptot) - static_cast<s64>(pused)) / 1024));
+            mitm::applet::LogLine("   for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB");
+        }
+
         Result ServerManager::OnNeedsToAccept(int port_index, Server *server) {
             std::shared_ptr<::Service> fsrv;
             sm::MitmProcessInfo client_info;
@@ -185,7 +221,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M47: up. NVENC probe + measuring the memory budget we actually have.");
+        mitm::applet::LogLine("applet-mitm M48: up. NVENC channel works. Surveying every memory pool at boot.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
@@ -195,6 +231,8 @@ namespace ams {
         mitm::applet::LogLine("arm file (sdmc:/applet-mitm.armed): vic=%s exec=%s",
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
+        LogMemoryPools();
+
         mitm::applet::LogLine("probe fires at t=%u s; frame dump to SD: %s",
                               mitm::applet::g_probe_delay_s,
                               mitm::applet::g_dump_armed ? "ARMED (freezes the game ~0.3-2.5 s)" : "off");

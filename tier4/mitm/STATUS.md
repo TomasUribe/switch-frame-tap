@@ -75,6 +75,78 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M47 RUN: NVENC CHANNEL WORKS, and the memory budget is brutal ***
+
+Handheld, so 1280x720 of content inside the usual 1920x1080 surface. The layout
+is unchanged - `nvmap 1268, 1920x1080, pitch 7680, block_h_log2 4`, swapchain
+still matched at exactly 26,542,080 B - so handheld costs content width, not
+correctness.
+
+### NVENC phase A passed
+
+```
+/dev/nvhost-msenc open fd=23461890
+GET_SYNCPOINT rc=0x0 nverr=0 -> syncpt=14   (VIC uses 12)
+SET_NVMAP_FD rc=0x0 nverr=0
+CHANNEL_SUBMIT req=0xc0340001 sz=52 words=2 rc=0x0 nverr=0 -> fence=4691
+WAIT nverr=0 syncpt=4691  *** NVENC CHANNEL USABLE ***
+```
+
+The encoder channel opens, carries its own syncpoint, accepts the same submit
+ABI as the VIC, and the fence advances. No hang - the console ran on to txn
+34,859. **Only the encode configuration is unknown now**, not the plumbing.
+
+### The stutter fix worked
+
+**4780 ms -> 67 ms.** Resuming immediately after the block-row read, instead of
+after the blits and SD writes, removed 98.6% of the frozen window.
+
+### The memory budget, measured
+
+```
+MEMORY BUDGET: total=4720 KB used=3744 KB free=976 KB | sysresource 0/0 KB
+```
+
+**The entire process gets 4.6 MB** - less than a single 1080p frame at 7913 KB.
+masagrator argued a raw buffer would consume half the available sysmodule space;
+in fact it does not fit at all, and NVENC's whole working set would have to live
+in the ~976 KB that remains.
+
+The ladder also explains its own shape: `0xca01` on 5 MB and 3 MB is kernel
+`InvalidSize`, not out-of-memory - `svcSetHeapSize` requires 2 MB granularity, so
+those requests were never valid. `0x1003` (`OutOfMemory`) on 8/6/4 MB is the real
+signal. **The ceiling is exactly 2 MB because 4 MB is the next legal step.**
+
+### A correction to M45's headline
+
+M45 was reported here and to the user as "err 0.00 on all four lanes", implying
+the blit matched outright. It did not. That 0.00 was the **per-lane** figure
+after allowing a permutation; the harness score for ONE2ONE in M45 was 70.44.
+The blit is bit-exact *under an R/B swap*, which is a materially weaker claim
+than the one made.
+
+M47 confirms the same thing honestly. ONE2ONE scores 53.63 overall, but per lane:
+
+```
+out0(A)=srcA 0.53   out1(R)=srcB 0.00
+out2(G)=srcG 0.00   out3(B)=srcR 0.00   -> ABGR
+```
+
+Three lanes at exactly 0.00 and the same `ABGR` mapping. **Nothing regressed** -
+the headline number is just the permutation being scored honestly.
+
+### M48
+
+Query **every** physical memory pool at boot via `svcGetSystemInfo`
+(`Application=0, Applet=1, System=2, SystemUnsafe=3`), rather than inferring the
+budget from a failed allocation. `0x6F GetSystemInfo` is verified granted in the
+compiled KAC, so it cannot fail silently.
+
+This answers whether `pool_partition` is a real lever - we are on 2 (System), and
+if Applet or Application has headroom, a one-line NPDM change might buy the room
+NVENC needs. Logged at **boot**, so every future memory question costs a ~20 s
+boot instead of a three-minute race to reach the probe.
+
 ## External review: the downstream budget is tighter than assumed
 
 masagrator raised two objections on the GBAtemp thread. Both are worth recording
@@ -684,7 +756,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M47)
+## The route itself: kernel debug SVCs (M32 -> M48)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:
