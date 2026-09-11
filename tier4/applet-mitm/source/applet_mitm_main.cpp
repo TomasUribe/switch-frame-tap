@@ -157,7 +157,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M35: up. Debug read WORKS - now searching inside the region for the surface.");
+        mitm::applet::LogLine("applet-mitm M36: up. Swapchain located - reading it live, with the game running.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

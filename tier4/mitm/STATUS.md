@@ -75,7 +75,64 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M34 RUN: THE DEBUG READ WORKS *** — and the region picker does not
+## *** M35 RUN: THE SWAPCHAIN IS LOCATED ***
+
+```
+searchable region 1: base=0x10851e6000 size=26542080 (slack 0 B)
+*** CANDIDATE 0: addr=0x10851e6000  alpha lane=0  varied=1 ***
+    slot0 +0x0000000: ff fb ff ff  ff fb ff ff  ff fb ff ff  ff fc ff ff
+    slot1 +0x0870000: ff f7 ff ff  ff f8 ff ff  ff f8 ff ff  ff f8 ff ff
+    slot2 +0x10e0000: ff f4 ff ff  ff f4 ff ff  ff f4 ff ff  ff f5 ff ff
+```
+
+Four independent things agree, so this is not a guess:
+
+1. The region is **exactly 26,542,080 B** — three 8,847,360 B slots, and the same
+   size `NVMAP_IOC_PARAM(Size)` reported for handle 1268 back in M13.
+2. It is device-shared, as nvmap-pinned memory must be.
+3. The candidate is at **offset 0** of that region, so the region *is* the
+   surface, not something containing it.
+4. All three slots carry the opaque lane, and the varying lane differs per slot
+   (`fb` / `f7` / `f4`) — three successive frames of a near-white corner.
+
+**Exactly one candidate survived ~24,000 probed offsets.** The signature is as
+selective as hoped.
+
+### Two things to carry forward
+
+- **Addresses are not stable.** The same 41.5 MB region sat at `0x14f5e6d000` on
+  one boot and `0x107346d000` on the next. The swapchain must be located at
+  runtime, every run. Never cache an address across boots.
+- **A region's base is not an allocation's base.** M34 failed precisely here:
+  it picked the first device-shared region >= 8,847,360 B, got the 41.5 MB one,
+  and applied slot offsets from the wrong origin — reading heap bookkeeping
+  (`0x14f5e00000`, a pointer back into that region) and calling it a framebuffer.
+
+Also fixed in M36: M35 printed the candidate's offset against `big[0]` instead of
+the region it was found in, so a true offset of 0 was reported as `0x11d79000`.
+
+### M36 — read it live, with the game running
+
+The remaining architectural question is not whether we can read, but whether we
+can read *without freezing the target*. `DebugActiveProcess` stops the process;
+`ContinueDebugEvent(ExceptionHandled | ContinueAll)` restarts it **with the debug
+handle still held**, which is exactly how dmnt reads cheat addresses at 60 Hz.
+
+M36 therefore: drains the queued attach events, calls Continue, and only then
+does its measurements —
+
+- samples the live slot twice 120 ms apart; **changing pixels prove the game is
+  presenting while we stay attached**;
+- reads one full block-row (983,040 B — the full 1920 px width by 128 rows) into
+  the capture buffer, timed, and projects whether a whole 8,847,360 B slot fits
+  in the 16,667 us that 60 fps allows;
+- computes whether a whole block-row looks like an image: nonzero density,
+  distinct byte values, and what fraction of pixels carry the opaque lane.
+
+It also checks exactly-26,542,080-byte regions first, which turns the search from
+24,000 reads into one and drops the frozen window from ~340 ms to ~1 ms.
+
+## M34 run: the debug read works — and the region picker does not
 
 The NPDM fix was right. On hardware:
 
@@ -129,7 +186,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M35)
+## The route itself: kernel debug SVCs (M32 -> M36)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:

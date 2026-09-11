@@ -1113,23 +1113,32 @@ namespace ams::mitm::applet {
         constexpr u64 FbSwapSize   = 3ull * FbSlotSize;               /* 26,542,080 */
         constexpr u64 FbSlotOff[3] = { 0ull, 0x870000ull, 0x10E0000ull };
 
-        struct FbCandidate { u64 addr; u32 lane; u32 varied; u8 head[3][16]; };
+        struct FbCandidate { u64 addr; u64 region_base; u32 lane; u32 varied; u8 head[3][16]; };
 
-        /* M34 attached and read successfully - and read allocator metadata.
-         * The region it picked is 41.5 MB, not 26,542,080: the swapchain lives
-         * SOMEWHERE INSIDE it, so the region's base is not the surface's origin.
-         * The two 64-bit words it sampled were 0x73d96ae078 and 0x14f5e00000 -
-         * the second a pointer back into that same region. Heap bookkeeping.
+        /* One block-row: 120 blocks x 8192 B, covering the full 1920 px width by
+         * 128 rows, contiguous. Nine of them are exactly one 8,847,360 B slot. */
+        constexpr u64 FbBlockRow = 983040ull;
+
+        /* M35 found it. Region base 0x10851e6000, size EXACTLY 26,542,080 - three
+         * slots, and the same size nvmap PARAM reported for handle 1268 - with the
+         * opaque-pixel signature at all three slot offsets:
          *
-         * So scan for the surface instead of assuming where it starts. The
-         * signature: the surface is A8B8G8R8 and a presented frame is opaque, so
-         * one of the four byte lanes is 0xFF in every pixel. The first 64 bytes
-         * of a block-linear surface are the first GOB's first row - 16
-         * consecutive pixels - so the 4-byte period does hold there.
+         *   slot0 ff fb ff ff | slot1 ff f7 ff ff | slot2 ff f4 ff ff
          *
-         * Sixteen 0xFF in one lane is a weak signal by itself. Requiring it at
-         * all THREE slot offsets simultaneously is not: allocator data does not
-         * repeat that pattern at exactly 8,847,360-byte spacing, twice over. */
+         * Same lane constant, the varying lane differing per slot: three
+         * successive frames of a near-white top-left corner. That is the
+         * swapchain. Exactly one candidate survived ~24,000 probed offsets.
+         *
+         * Two things M35 got wrong, fixed here:
+         *   - it reported the offset against big[0] rather than the region the
+         *     candidate was actually found in (cosmetic, but it read as 0x11d79000
+         *     when the true answer is offset 0 of an exactly-sized region);
+         *   - it scanned 24,000 offsets and burned its whole read budget when an
+         *     exactly-26,542,080-byte region is a dead giveaway. Check those
+         *     first: the freeze drops from ~340 ms to ~1 ms.
+         *
+         * ADDRESSES ARE NOT STABLE. The same region was at 0x14f5e6d000 one boot
+         * and 0x107346d000 the next. It must be located at runtime, every time. */
         s32 FbPixelLane(const u8 *p, u32 *out_varied) {
             for (u32 lane = 0; lane < 4; ++lane) {
                 bool opaque = true;
@@ -1169,24 +1178,29 @@ namespace ams::mitm::applet {
                 if (R_FAILED(r)) { VicStage("dbg:1_FAILED"); return; }
             }
 
-            /* ---- from here the game is STOPPED. No logging, no SD, no waits. */
-            RegionHit   hits[24] = {};   u32 nhits = 0;
-            RegionHit   big[6]   = {};   u32 nbig  = 0;
-            FbCandidate cand[6]  = {};   u32 ncand = 0;
-            u32  steps = 0, reads = 0, budget = 24000;
+            /* ---- attached from here. The game is STOPPED until we Continue. -- */
+            RegionHit   big[8]  = {};   u32 nbig  = 0;
+            FbCandidate cand    = {};   bool found = false;
+            u32  steps = 0, reads = 0, budget = 24000, nexact = 0;
             bool walk_complete = false;
-            ::ams::Result r_attach{};
-            bool attached = false;
+
+            u32  nev = 0;
+            ::ams::Result r_attach{}, r_cont = ::ams::svc::ResultInvalidHandle();
+            bool attached = false, resumed = false;
+
+            /* measurements taken while the game RUNS */
+            u64  strip_ns = 0; u32 strip_chunks_ok = 0;
+            u32  nonzero = 0, distinct = 0, opaque_px = 0, total_px = 0;
+            u8   live_a[16] = {}, live_b[16] = {};
+            bool live_ok = false, live_changed = false;
 
             ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
             r_attach = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value);
             if (R_SUCCEEDED(r_attach)) {
                 attached = true;
 
-                /* pass 1: map the address space, keeping every device-shared
-                 * region large enough to contain the whole swapchain. M34 capped
-                 * at 1500 steps and hit the cap, so the map it logged was
-                 * truncated - 4000 with an explicit completion flag now. */
+                /* pass 1: map the address space, keeping device-shared regions
+                 * large enough to hold the swapchain. Exact-size ones go first. */
                 u64 addr = 0;
                 for (; steps < 4000; ++steps) {
                     ::ams::svc::MemoryInfo mi = {};
@@ -1197,25 +1211,29 @@ namespace ams::mitm::applet {
                     const u32  attr = static_cast<u32>(mi.attribute);
                     const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
 
-                    if (dev && mi.size >= FbSwapSize && nbig < 6) {
-                        big[nbig++] = { mi.base_address, mi.size, static_cast<u32>(mi.state),
-                                        static_cast<u32>(mi.permission), attr, mi.device_count };
-                    }
-                    if ((dev || mi.size >= 8 * 1024 * 1024) && nhits < 24) {
-                        hits[nhits++] = { mi.base_address, mi.size, static_cast<u32>(mi.state),
-                                          static_cast<u32>(mi.permission), attr, mi.device_count };
+                    if (dev && mi.size >= FbSwapSize && nbig < 8) {
+                        const RegionHit r = { mi.base_address, mi.size, static_cast<u32>(mi.state),
+                                              static_cast<u32>(mi.permission), attr, mi.device_count };
+                        if (mi.size == FbSwapSize) {
+                            /* exact size: push to the front, these are checked first */
+                            for (u32 k = nbig; k > nexact; --k) { big[k] = big[k - 1]; }
+                            big[nexact++] = r;
+                        } else {
+                            big[nbig] = r;
+                        }
+                        ++nbig;
                     }
                     const u64 next = mi.base_address + mi.size;
                     if (next <= addr) { walk_complete = true; break; }
                     addr = next;
                 }
 
-                /* pass 2: inside each candidate region, look for an offset whose
-                 * three slot positions all carry the opaque-pixel signature. */
+                /* pass 2: find the offset whose three slots all carry the
+                 * opaque-pixel signature. Exact-size regions hit on read one. */
                 u8 s[3][64];
-                for (u32 r = 0; r < nbig && ncand < 6 && budget > 0; ++r) {
+                for (u32 r = 0; r < nbig && !found && budget > 0; ++r) {
                     const u64 last = big[r].size - FbSwapSize;
-                    for (u64 off = 0; off <= last && ncand < 6 && budget > 0; off += 0x1000) {
+                    for (u64 off = 0; off <= last && !found && budget > 0; off += 0x1000) {
                         --budget; ++reads;
                         if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(s[0]), dbg, big[r].base + off, 64))) { continue; }
                         u32 varied = 0;
@@ -1230,69 +1248,150 @@ namespace ams::mitm::applet {
                         }
                         if (!all_slots) { continue; }
 
-                        cand[ncand].addr   = big[r].base + off;
-                        cand[ncand].lane   = static_cast<u32>(lane);
-                        cand[ncand].varied = varied;
-                        for (u32 k = 0; k < 3; ++k) { std::memcpy(cand[ncand].head[k], s[k], 16); }
-                        ++ncand;
+                        cand.addr        = big[r].base + off;
+                        cand.region_base = big[r].base;
+                        cand.lane        = static_cast<u32>(lane);
+                        cand.varied      = varied;
+                        for (u32 k = 0; k < 3; ++k) { std::memcpy(cand.head[k], s[k], 16); }
+                        found = true;
                     }
                 }
 
-                ::ams::svc::CloseHandle(dbg);   /* resumes the game */
+                /* ---- let the game run again, WITHOUT detaching -----------------
+                 * This is the whole architectural question for streaming: reading
+                 * at 60 Hz is useless if the target is frozen for every read.
+                 * Drain the queued attach events, then ContinueDebugEvent with
+                 * ContinueAll - exactly what dmnt's cheat engine does to read a
+                 * live game. The debug handle stays valid afterwards. */
+                {
+                    ::ams::svc::DebugEventInfo ev;
+                    while (nev < 64 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg))) { ++nev; }
+                    r_cont = ::ams::svc::ContinueDebugEvent(dbg,
+                                ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll,
+                                nullptr, 0);
+                    resumed = R_SUCCEEDED(r_cont);
+                }
+
+                if (found) {
+                    /* Is the game actually presenting while we hold the handle?
+                     * Sample the live slot, wait, sample again. Moving pixels mean
+                     * the game is rendering, not merely that our thread ran. */
+                    if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(live_a), dbg, cand.addr, 16))) {
+                        os::SleepThread(TimeSpan::FromMilliSeconds(120));
+                        if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(live_b), dbg, cand.addr, 16))) {
+                            live_ok = true;
+                            live_changed = std::memcmp(live_a, live_b, 16) != 0;
+                        }
+                    }
+
+                    /* Timed bulk read of one block-row - full 1920 px width by 128
+                     * rows - into the capture buffer. This is the number that says
+                     * whether 60 fps is reachable at all. */
+                    if (g_ind_buf != nullptr && g_ind_size >= FbBlockRow) {
+                        const u64 t0 = armTicksToNs(armGetSystemTick());
+                        for (u64 done = 0; done < FbBlockRow; done += 0x10000) {
+                            const u64 n = (FbBlockRow - done < 0x10000) ? (FbBlockRow - done) : 0x10000;
+                            if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf + done), dbg, cand.addr + done, n))) { break; }
+                            ++strip_chunks_ok;
+                        }
+                        strip_ns = armTicksToNs(armGetSystemTick()) - t0;
+
+                        /* Does a whole block-row look like an image? */
+                        u32 hist[256] = {};
+                        const u64 got = static_cast<u64>(strip_chunks_ok) * 0x10000;
+                        const u64 lim = (got > FbBlockRow) ? FbBlockRow : got;
+                        for (u64 i = 0; i < lim; ++i) {
+                            const u8 v = g_ind_buf[i];
+                            if (v != 0) { ++nonzero; }
+                            ++hist[v];
+                        }
+                        for (u32 i = 0; i < 256; ++i) { if (hist[i] != 0) { ++distinct; } }
+                        for (u64 i = 0; i + 3 < lim; i += 4) {
+                            ++total_px;
+                            if (g_ind_buf[i + cand.lane] == 0xFF) { ++opaque_px; }
+                        }
+                    }
+                }
+
+                ::ams::svc::CloseHandle(dbg);
             }
-            /* ---- game is running again; safe to log ------------------------ */
+            /* ---- detached; log everything --------------------------------- */
 
             VicStage("dbg:2_attached");
             LogLine("   DebugActiveProcess(pid=%llu) rc=0x%x %s",
                     static_cast<unsigned long long>(pid.value), r_attach.GetValue(),
-                    attached ? "ATTACHED (and already detached)" : "failed");
+                    attached ? "ATTACHED" : "failed");
             if (!attached) { VicStage("dbg:2_FAILED"); return; }
 
-            LogLine("   walked %u regions (%s); %u of interest; %u big enough for the swapchain; %u probe reads",
-                    steps, walk_complete ? "complete" : "HIT THE STEP CAP", nhits, nbig, reads);
-            for (u32 i = 0; i < nhits; ++i) {
-                LogLine("     [%2u] base=0x%010llx size=%10llu state=0x%02x perm=0x%x attr=0x%x devs=%u%s",
-                        i, static_cast<unsigned long long>(hits[i].base),
-                        static_cast<unsigned long long>(hits[i].size),
-                        hits[i].state, hits[i].perm, hits[i].attr, hits[i].devices,
-                        (hits[i].size == FbSwapSize) ? "  <== EXACT SWAPCHAIN SIZE" : "");
-            }
-
-            if (nbig == 0) {
-                LogLine("   no device-shared region >= %llu B - the swapchain is not where we are looking",
-                        static_cast<unsigned long long>(FbSwapSize));
-                VicStage("dbg:no_big_region");
-                return;
-            }
+            LogLine("   walked %u regions (%s); %u big enough (%u exactly %llu B); %u probe reads",
+                    steps, walk_complete ? "complete" : "HIT THE STEP CAP", nbig, nexact,
+                    static_cast<unsigned long long>(FbSwapSize), reads);
             for (u32 i = 0; i < nbig; ++i) {
-                LogLine("   searchable region %u: base=0x%010llx size=%llu (slack %lld B)",
-                        i, static_cast<unsigned long long>(big[i].base),
+                LogLine("     region %u: base=0x%010llx size=%llu%s", i,
+                        static_cast<unsigned long long>(big[i].base),
                         static_cast<unsigned long long>(big[i].size),
-                        static_cast<long long>(big[i].size - FbSwapSize));
+                        (big[i].size == FbSwapSize) ? "   <== EXACT SWAPCHAIN SIZE" : "");
             }
 
-            if (ncand == 0) {
+            if (!found) {
                 LogLine("   no offset matched the opaque-pixel signature at all three slots");
-                LogLine("   (the surface may not be opaque, or it is outside the scanned regions)");
                 VicStage("dbg:no_signature");
                 return;
             }
 
-            for (u32 i = 0; i < ncand; ++i) {
-                LogLine("   *** CANDIDATE %u: addr=0x%010llx  alpha lane=%u  varied=%u ***",
-                        i, static_cast<unsigned long long>(cand[i].addr), cand[i].lane, cand[i].varied);
-                for (u32 k = 0; k < 3; ++k) {
-                    const u8 *h = cand[i].head[k];
-                    LogLine("       slot%u +0x%07llx: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x",
-                            k, static_cast<unsigned long long>(FbSlotOff[k]),
-                            h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
-                            h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]);
-                }
+            LogLine("   *** SWAPCHAIN AT 0x%010llx (offset %llu into its region, lane=%u varied=%u) ***",
+                    static_cast<unsigned long long>(cand.addr),
+                    static_cast<unsigned long long>(cand.addr - cand.region_base),
+                    cand.lane, cand.varied);
+            for (u32 k = 0; k < 3; ++k) {
+                const u8 *h = cand.head[k];
+                LogLine("       slot%u +0x%07llx: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x",
+                        k, static_cast<unsigned long long>(FbSlotOff[k]),
+                        h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
+                        h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]);
             }
-            LogLine("   *** FRAMEBUFFER LOCATED: 0x%010llx (offset 0x%llx into its region) ***",
-                    static_cast<unsigned long long>(cand[0].addr),
-                    static_cast<unsigned long long>(cand[0].addr - big[0].base));
-            VicStage("dbg:FB_FOUND");
+
+            LogLine("   drained %u debug events; ContinueDebugEvent rc=0x%x -> %s",
+                    nev, r_cont.GetValue(),
+                    resumed ? "GAME RUNNING WHILE WE STAY ATTACHED" : "still frozen");
+
+            if (live_ok) {
+                LogLine("   live sample over 120 ms: %s", live_changed
+                        ? "*** PIXELS CHANGED - the game is presenting while attached ***"
+                        : "identical (game may be paused, or the corner is static)");
+                LogLine("       t0: %02x %02x %02x %02x %02x %02x %02x %02x",
+                        live_a[0], live_a[1], live_a[2], live_a[3], live_a[4], live_a[5], live_a[6], live_a[7]);
+                LogLine("       t1: %02x %02x %02x %02x %02x %02x %02x %02x",
+                        live_b[0], live_b[1], live_b[2], live_b[3], live_b[4], live_b[5], live_b[6], live_b[7]);
+            }
+
+            if (strip_chunks_ok > 0 && strip_ns > 0) {
+                const u64 got   = static_cast<u64>(strip_chunks_ok) * 0x10000;
+                const u64 kbps  = (got * UINT64_C(1000000)) / strip_ns;          /* KB/s */
+                const u64 slot_us = (strip_ns * (FbSlotSize / 1024)) / (got / 1024) / 1000;
+                LogLine("   read %llu B of block-row in %llu us -> %llu MB/s",
+                        static_cast<unsigned long long>(got),
+                        static_cast<unsigned long long>(strip_ns / 1000),
+                        static_cast<unsigned long long>(kbps / 1000));
+                LogLine("   => one full 8,847,360 B slot would take ~%llu us; 60 fps needs <= 16667 us  [%s]",
+                        static_cast<unsigned long long>(slot_us),
+                        (slot_us <= 16667) ? "FEASIBLE" : "too slow for 60 fps at full res");
+                LogLine("   block-row stats: nonzero=%u/%llu  distinct byte values=%u  opaque pixels=%u/%u",
+                        nonzero, static_cast<unsigned long long>(got), distinct, opaque_px, total_px);
+                LogLine("   first 16 B: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                        g_ind_buf[0], g_ind_buf[1], g_ind_buf[2], g_ind_buf[3],
+                        g_ind_buf[4], g_ind_buf[5], g_ind_buf[6], g_ind_buf[7],
+                        g_ind_buf[8], g_ind_buf[9], g_ind_buf[10], g_ind_buf[11],
+                        g_ind_buf[12], g_ind_buf[13], g_ind_buf[14], g_ind_buf[15]);
+                const u8 *mid = g_ind_buf + FbBlockRow / 2;
+                LogLine("   mid  16 B: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                        mid[0], mid[1], mid[2], mid[3], mid[4], mid[5], mid[6], mid[7],
+                        mid[8], mid[9], mid[10], mid[11], mid[12], mid[13], mid[14], mid[15]);
+            } else {
+                LogLine("   bulk strip read did not run (buffer %p size %zu, need %llu)",
+                        g_ind_buf, g_ind_size, static_cast<unsigned long long>(FbBlockRow));
+            }
+            VicStage("dbg:FB_CAPTURED");
         }
 
         void VicWorkerThread(void *) {
