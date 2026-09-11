@@ -14,6 +14,12 @@ developed on and for the author's own console.
 **Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
 47 hardware test cycles.
 
+![Mario Kart 8 Deluxe captured at native 1920x1080 from the game's own swapchain](docs/frame-1080p.png)
+
+*A real capture: read out of the game's swapchain by the sysmodule, de-swizzled
+from Tegra block-linear on the PC. Native 1920x1080, docked.*
+
+
 ## How this was built — with an AI, openly
 
 I built this together with **Claude** (Anthropic's AI model, Opus 5, through
@@ -196,7 +202,7 @@ Reading mesosphere settles most of it in advance:
   ContinueAll)` resumes the target while the debug handle is held — that is how
   dmnt reads at 60 Hz, and it is what a streaming implementation would need.
 
-**Not yet run on hardware.** If the read works, what follows is
+**Run on hardware: it works.** The swapchain is located at runtime by exact-size match, `ContinueDebugEvent` keeps the game running while we stay attached, and whole frames read at 1100-1800 MB/s. What follows is
 implementation with no open unknowns: strip-wise capture (one block-row is
 120 blocks × 8192 B = 983,040 B and covers the full 1920 px width × 128 rows,
 contiguous; nine of them are exactly one 8,847,360-byte slot), VIC blit, NVENC,
@@ -213,7 +219,7 @@ version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
 | `vi:u` mitm frame tap at 60 fps | **done, on hardware** |
 | Swapchain geometry from binder traffic | **done, on hardware** |
 | VIC: block-linear → linear, scale, format convert | **done, byte-exact on hardware** |
-| **Get the game's pixels into our address space** | **in progress** — three routes closed, the debug-SVC route is built and awaiting its first hardware run |
+| **Get the game's pixels into our address space** | **done, on hardware** — three graphics routes closed; the kernel debug-SVC route works. 120 consecutive native 1080p frames, 0 missed, 59 fps, ~9 ms of a 16.67 ms budget |
 | NVENC H.264 encode | channel opens; encode not written yet |
 | Transport (USB / TCP) | protocol and PC receiver exist from the earlier `switch-stream/` work; not yet wired to this module |
 | Capture the home menu and system overlays | wanted, and not possible through any route found so far |
