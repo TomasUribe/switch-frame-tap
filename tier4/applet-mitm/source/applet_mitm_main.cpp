@@ -167,47 +167,52 @@ namespace ams {
             mitm::applet::LogLine("   for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB");
         }
 
-        /* M48 turned up a contradiction worth resolving before touching
-         * pool_partition: at BOOT this process reports total=13076 KB with
-         * 11380 KB free, but by the time the probe runs M47 measured
-         * total=4720 KB with 976 KB free. The budget appears to SHRINK once a
-         * game is resident. If 11 MB is genuinely available at the right moment,
-         * a whole 1080p frame (7913 KB) fits and the NPDM change is unnecessary.
+        /* M49 answered it: SetMemoryHeapSize(8 MB) succeeds at BOOT, first try,
+         * leaving ~3.2 MB spare of a 13,076 KB process. The 2 MB ceiling was
+         * never a hard limit - it was an artefact of asking LATE, once a game
+         * was resident and the transfer memory committed. So the fix is timing,
+         * not pool_partition: take the heap at startup and hold it.
          *
-         * So: measure at boot, try the ladder, then RELEASE immediately. M27
-         * already proved that holding several MB from the System pool during
-         * boot fatals a different sysmodule with LimitReached, and System has
-         * only 14 MB free in total. Learning the ceiling is worth a run;
-         * risking an unbootable console to hold it is not. */
-        void ProbeHeapCeilingAtBoot() {
-            u64 t = 0, u = 0;
-            svc::GetInfo(std::addressof(t), svc::InfoType_TotalMemorySize, svc::PseudoHandle::CurrentProcess, 0);
-            svc::GetInfo(std::addressof(u), svc::InfoType_UsedMemorySize,  svc::PseudoHandle::CurrentProcess, 0);
-            mitm::applet::LogLine("   [boot] process total=%llu KB used=%llu KB free=%lld KB",
-                                  static_cast<unsigned long long>(t / 1024),
-                                  static_cast<unsigned long long>(u / 1024),
-                                  static_cast<long long>((static_cast<s64>(t) - static_cast<s64>(u)) / 1024));
+         * A whole 1080p frame is 7913 KB and now fits, which makes the
+         * strip-wise design a choice rather than a constraint and gives NVENC
+         * room for an input surface and a bitstream buffer.
+         *
+         * THE RISK THIS RUN RETIRES: M49 grabbed 8 MB and released it
+         * immediately. HOLDING it through a game launch is a different
+         * proposition - the System pool has only 14 MB free in total, and M27
+         * proved that starving it fatals a DIFFERENT sysmodule with
+         * LimitReached. If the console fails to launch MK8 after this, that is
+         * the cause, and recovery is deleting
+         * atmosphere/contents/0100000000000C20 or booting with Volume Up. */
+        void GrabHeapAtBoot() {
+            if (!mitm::applet::g_vic_armed) {
+                mitm::applet::LogLine("   [boot] not armed - heap not taken");
+                return;
+            }
+            u64 t0 = 0, u0 = 0;
+            svc::GetInfo(std::addressof(t0), svc::InfoType_TotalMemorySize, svc::PseudoHandle::CurrentProcess, 0);
+            svc::GetInfo(std::addressof(u0), svc::InfoType_UsedMemorySize,  svc::PseudoHandle::CurrentProcess, 0);
+            mitm::applet::LogLine("   [boot] before grab: total=%llu KB used=%llu KB",
+                                  static_cast<unsigned long long>(t0 / 1024),
+                                  static_cast<unsigned long long>(u0 / 1024));
 
-            size_t best = 0;
-            for (const size_t sz : { size_t(8_MB), size_t(6_MB), size_t(4_MB), size_t(2_MB) }) {
-                const auto rc = os::SetMemoryHeapSize(sz);
-                mitm::applet::LogLine("   [boot] SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
-                if (R_SUCCEEDED(rc)) { best = sz; break; }
-            }
-            if (best > 0) {
-                u64 t2 = 0, u2 = 0;
-                svc::GetInfo(std::addressof(t2), svc::InfoType_TotalMemorySize, svc::PseudoHandle::CurrentProcess, 0);
-                svc::GetInfo(std::addressof(u2), svc::InfoType_UsedMemorySize,  svc::PseudoHandle::CurrentProcess, 0);
-                mitm::applet::LogLine("   [boot] holding %zu MB: total=%llu KB used=%llu KB",
-                                      best / (1024 * 1024),
-                                      static_cast<unsigned long long>(t2 / 1024),
-                                      static_cast<unsigned long long>(u2 / 1024));
-                const auto rel = os::SetMemoryHeapSize(0);
-                mitm::applet::LogLine("   [boot] RELEASED rc=0x%x - not held through boot, M27's 4 MB starved another sysmodule",
-                                      rel.GetValue());
-            }
-            mitm::applet::LogLine("   *** LARGEST GRANTABLE HEAP AT BOOT: %zu MB *** (a 1080p frame needs 8 MB)",
-                                  best / (1024 * 1024));
+            const bool ok = mitm::applet::AllocVicHeapAtBoot();
+
+            u64 t1 = 0, u1 = 0, st = 0, su = 0;
+            svc::GetInfo(std::addressof(t1), svc::InfoType_TotalMemorySize, svc::PseudoHandle::CurrentProcess, 0);
+            svc::GetInfo(std::addressof(u1), svc::InfoType_UsedMemorySize,  svc::PseudoHandle::CurrentProcess, 0);
+            svc::GetSystemInfo(std::addressof(st), svc::SystemInfoType_TotalPhysicalMemorySize, svc::InvalidHandle, 2);
+            svc::GetSystemInfo(std::addressof(su), svc::SystemInfoType_UsedPhysicalMemorySize,  svc::InvalidHandle, 2);
+            mitm::applet::LogLine("   [boot] after grab : total=%llu KB used=%llu KB  -> %s",
+                                  static_cast<unsigned long long>(t1 / 1024),
+                                  static_cast<unsigned long long>(u1 / 1024),
+                                  ok ? "*** HEAP HELD FROM BOOT ***" : "FAILED - probe will retry late");
+            mitm::applet::LogLine("   [boot] System pool now: used=%llu KB free=%lld KB  (we took %llu KB of it)",
+                                  static_cast<unsigned long long>(su / 1024),
+                                  static_cast<long long>((static_cast<s64>(st) - static_cast<s64>(su)) / 1024),
+                                  static_cast<unsigned long long>((u1 - u0) / 1024));
+            mitm::applet::LogLine("   [boot] a 1080p frame is 7913 KB - %s",
+                                  ok ? "a WHOLE FRAME now fits in one piece" : "still strip-wise only");
         }
 
         Result ServerManager::OnNeedsToAccept(int port_index, Server *server) {
@@ -264,7 +269,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M49: up. Is 11 MB free at boot real? Measuring the budget 3 ways.");
+        mitm::applet::LogLine("applet-mitm M50: up. 8 MB heap taken at boot - a whole 1080p frame now fits.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
@@ -275,7 +280,7 @@ namespace ams {
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
         LogMemoryPools();
-        ProbeHeapCeilingAtBoot();
+        GrabHeapAtBoot();
 
         mitm::applet::LogLine("probe fires at t=%u s; frame dump to SD: %s",
                               mitm::applet::g_probe_delay_s,

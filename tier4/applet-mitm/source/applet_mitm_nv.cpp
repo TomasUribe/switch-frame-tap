@@ -735,6 +735,8 @@ namespace ams::mitm::applet {
 
     }
 
+    bool AllocVicHeapAtBoot() { return AllocVicHeap(); }
+
     constinit bool g_dump_armed    = false;
     constinit u32  g_probe_delay_s = 120;
 

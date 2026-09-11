@@ -61,6 +61,13 @@ namespace ams::mitm::applet {
      * the game for the duration of the write - 0.3 s on an idle card, 2.5 s when
      * the game is loading and competing for it - so it is off by default.
      * "wait=N": seconds of uptime before the probe fires (default 120). */
+    /* M49: SetMemoryHeapSize(8 MB) succeeds at BOOT and fails at probe time.
+     * The 2 MB ceiling was never a hard limit - it was an artefact of asking
+     * late, with a game resident and the transfer memory already committed.
+     * Allocating at startup and holding it is the fix, so the allocator needs to
+     * be reachable from Main(). The probe-time call then short-circuits. */
+    bool AllocVicHeapAtBoot();
+
     extern bool g_dump_armed;
     extern u32  g_probe_delay_s;
 

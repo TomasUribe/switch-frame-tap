@@ -75,6 +75,54 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M49 RUN: 8 MB IS GRANTABLE - the ceiling was a timing artefact ***
+
+```
+[boot] process total=13076 KB used=1696 KB free=11380 KB
+[boot] SetMemoryHeapSize(8 MB) rc=0x0
+[boot] holding 8 MB: total=13076 KB used=9888 KB
+[boot] RELEASED rc=0x0
+*** LARGEST GRANTABLE HEAP AT BOOT: 8 MB ***
+```
+
+First try, no ladder needed, with ~3.2 MB still spare afterwards. The release
+succeeded too, so nothing was held through boot and no other sysmodule was
+starved.
+
+**A whole 1080p frame is 7913 KB and now fits.** The strip-wise design becomes a
+choice rather than a constraint, and NVENC gets room for an input surface and a
+bitstream buffer.
+
+### The 2 MB ceiling was never a hard limit
+
+It was an artefact of *when* we asked. At probe time - game resident, transfer
+memory committed - 4 MB returns `OutOfMemory`. At boot, 8 MB succeeds
+immediately. **The fix is timing, not `pool_partition`**, which does not need to
+be touched at all.
+
+That also means the conclusion posted to GBAtemp needs correcting rather than
+merely conceding. masagrator was right about the constraint we were operating
+under, and our own failed allocations confirmed it - but "a sysmodule cannot hold
+a 1080p buffer on 22.5.0" is **false**. It can, if it asks at boot.
+
+### M50, and the risk it retires
+
+M50 takes the 8 MB at startup and **holds** it, with the existing
+`AllocVicHeap` early-out meaning the probe simply reuses it.
+
+M49 grabbed and released immediately. Holding through a game launch is a
+different proposition: the System pool has only 14 MB free in total, and M27
+proved that starving it fatals a *different* sysmodule with `LimitReached`. So
+this run's real question is not "does 8 MB allocate" - that is answered - but
+**"does the console still launch a game while we hold it"**.
+
+If MK8 fails to start, that is the cause. Recovery is deleting
+`atmosphere/contents/0100000000000C20` from a PC, or booting with Volume Up.
+Nothing touches NAND.
+
+The run logs the System pool before and after the grab, so what we took from a
+14 MB shared budget is visible rather than inferred.
+
 ## *** M48 RUN: we are in the one pool that is full ***
 
 Boot-only test - no game, no dock, 20 seconds:
@@ -811,7 +859,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M49)
+## The route itself: kernel debug SVCs (M32 -> M50)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:
