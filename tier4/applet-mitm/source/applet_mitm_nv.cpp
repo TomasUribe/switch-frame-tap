@@ -410,13 +410,23 @@ namespace ams::mitm::applet {
          * VIC's polyphase scaler differing from a box filter, or a small
          * sampling offset. An unscaled 480x32 crop cannot have a filter error,
          * so if it lands near zero the residual is filtering and harmless. */
+        /* M45 settled the VIC completely. ONE2ONE - the unscaled 480x32 crop -
+         * matched a software de-swizzle with err 0.00 on ALL FOUR LANES. Not
+         * approximately: bit for bit. So block-linear addressing, GOB tiling,
+         * stride and block height are exact, and the 2-3 LSB seen on scaled
+         * variants is just the VIC's polyphase scaler differing from a box
+         * filter - not an error.
+         *
+         * Channel order: S32O33 maps out=ABGR, a pure R<->B swap from identity.
+         * Every variant is a LOSSLESS permutation, so this costs nothing to undo
+         * on the PC, or by choosing NVENC's input format - which has to be
+         * configured anyway. Not worth another docked run.
+         *
+         * Two variants kept as regression only. */
         struct StripVariant { const char *name; u32 src_fmt; u32 out_fmt; u32 rect_w, rect_h; };
         constexpr StripVariant StripVariants[] = {
-            { "S32O32",  vic::PIXFMT_A8R8G8B8, vic::PIXFMT_A8R8G8B8, StripW, StripH },
-            { "S32O33",  vic::PIXFMT_A8R8G8B8, vic::PIXFMT_A8B8G8R8, StripW, StripH },
-            { "S33O32",  vic::PIXFMT_A8B8G8R8, vic::PIXFMT_A8R8G8B8, StripW, StripH },
-            { "S33O33",  vic::PIXFMT_A8B8G8R8, vic::PIXFMT_A8B8G8R8, StripW, StripH },
-            { "ONE2ONE", vic::PIXFMT_A8R8G8B8, vic::PIXFMT_A8R8G8B8, 480,    32     },
+            { "BEST",    vic::PIXFMT_A8R8G8B8, vic::PIXFMT_A8B8G8R8, StripW, StripH },
+            { "ONE2ONE", vic::PIXFMT_A8R8G8B8, vic::PIXFMT_A8B8G8R8, 480,    32     },
         };
         constexpr u32 StripVariantCount = sizeof(StripVariants) / sizeof(StripVariants[0]);
 
@@ -530,6 +540,15 @@ namespace ams::mitm::applet {
 
         void TryIndirectCapture();
         void TryDebugCapture(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 dst_addr);
+
+        /* NVENC, phase A: exactly what M11 did for the VIC before trusting it
+         * with real work - open the channel, take its syncpoint, bind the nvmap
+         * fd, and submit a command buffer that does nothing but increment that
+         * syncpoint. No SETCL, no method writes, so the engine cannot be pointed
+         * at a bad address and cannot hang. If the fence advances, the msenc
+         * channel and submit ABI are usable and the encode config is the only
+         * thing left unknown. */
+        void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle);
 
         struct JobCtx {
             u32 vfd, cmd_handle, syncpt;
@@ -957,6 +976,7 @@ namespace ams::mitm::applet {
 
         TryIndirectCapture();
         TryDebugCapture(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, dst_addr);
+        TryNvencPhaseA(nvmap_fd, cmd_handle);
 
     close_vic:
         if (cfg_addr != 0) { UnmapCmdBuffer(vfd, cfg_handle); }
@@ -1356,6 +1376,7 @@ namespace ams::mitm::applet {
             u32  fps_before = 0, fps_during = 0, fps_after = 0;
             u32  cap_over = 0, slot_hits[4] = {};
             u32  strip_own_rc = 0, strip_pin = 0;
+            u64  frozen_ns = 0;
             bool strip_read_ok = false, strip_blit_ok = false, strip_dumped = false, vic_dumped = false;
             u32  strip_ok_count = 0, strip_dump_count = 0, variant_sum[8] = {};
             bool dumped = false;
@@ -1440,6 +1461,20 @@ namespace ams::mitm::applet {
                     }
                 }
 
+                /* Resuming is now done as early as possible, so it is a guarded
+                 * lambda rather than a fixed point in the sequence. */
+                const u64 t_frozen0 = armTicksToNs(armGetSystemTick());
+                auto resume_game = [&]() {
+                    if (resumed) { return; }
+                    ::ams::svc::DebugEventInfo ev;
+                    while (nev < 64 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg))) { ++nev; }
+                    r_cont  = ::ams::svc::ContinueDebugEvent(dbg,
+                                 ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll,
+                                 nullptr, 0);
+                    resumed = R_SUCCEEDED(r_cont);
+                    frozen_ns = armTicksToNs(armGetSystemTick()) - t_frozen0;
+                };
+
                 /* ---- THE VIC, ON REAL GAME PIXELS -------------------------
                  * Everything here happens while the game is stopped, so the raw
                  * strip and the VIC's output are the SAME pixels and can be
@@ -1466,6 +1501,14 @@ namespace ams::mitm::applet {
                                 /* the engine reads this through the SMMU; our
                                  * cached writes must reach memory first */
                                 armDCacheFlush(g_ind_buf, FbBlockRow);
+
+                                /* THE STUTTER FIX. Only the 983 KB read above needs
+                                 * the game stopped - everything below works on our
+                                 * own buffer. M45 kept the game frozen for 4.78 s
+                                 * (181.195 -> 185.971) doing blits and 1.3 MB of SD
+                                 * writes with the target halted, which is the
+                                 * stutter felt on the console. Resume here. */
+                                resume_game();
 
                                 VicStage("vs:4_dump_strip");
                                 strip_dumped = WriteBufToSd(StripBinPath, g_ind_buf, FbBlockRow);
@@ -1527,15 +1570,8 @@ namespace ams::mitm::applet {
                     dumped = DumpSlotToSd(dbg, cand.addr, std::addressof(dump_ns), std::addressof(dump_chunks));
                 }
 
-                /* resume the game, keeping the debug handle */
-                {
-                    ::ams::svc::DebugEventInfo ev;
-                    while (nev < 64 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg))) { ++nev; }
-                    r_cont = ::ams::svc::ContinueDebugEvent(dbg,
-                                ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll,
-                                nullptr, 0);
-                    resumed = R_SUCCEEDED(r_cont);
-                }
+                /* fallback: if the strip section was skipped, resume here */
+                resume_game();
 
                 if (found) {
                     if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(live_a), dbg, cand.addr, 16))) {
@@ -1694,6 +1730,8 @@ namespace ams::mitm::applet {
                         h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]);
             }
 
+            LogLine("   GAME FROZEN FOR %llu ms (M45 was 4780 ms - only the strip read needs a halt)",
+                    static_cast<unsigned long long>(frozen_ns / 1000000));
             LogLine("   drained %u debug events; ContinueDebugEvent rc=0x%x -> %s",
                     nev, r_cont.GetValue(),
                     resumed ? "GAME RUNNING WHILE WE STAY ATTACHED" : "still frozen");
@@ -1807,6 +1845,77 @@ namespace ams::mitm::applet {
                 LogLine("   frame dump did not complete (%u chunks)", dump_chunks);
                 VicStage("dbg:dump_failed");
             }
+        }
+
+        void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle) {
+            VicStage("nv:1_open_msenc");
+            u32 efd = 0, nverr = 0;
+            if (R_FAILED(NvOpen("/dev/nvhost-msenc", std::addressof(efd), std::addressof(nverr))) || nverr != 0) {
+                LogLine("   NVENC: /dev/nvhost-msenc open FAILED nverr=%u", nverr);
+                VicStage("nv:1_FAILED");
+                return;
+            }
+            LogLine("   ---- NVENC phase A ----");
+            LogLine("   /dev/nvhost-msenc open fd=%u", efd);
+
+            u32 esyncpt = 0;
+            {
+                struct { u32 module_id; u32 syncpt; } gs = { 0, 0 };
+                nverr = 0;
+                const auto rc = NvIoctl(efd, NvHostIocChannelGetSyncpoint, std::addressof(gs), sizeof(gs), std::addressof(nverr));
+                esyncpt = gs.syncpt;
+                LogLine("   GET_SYNCPOINT rc=0x%x nverr=%u -> syncpt=%u  (VIC uses 12)", rc, nverr, esyncpt);
+                if (R_FAILED(rc) || nverr != 0) { NvClose(efd); VicStage("nv:2_FAILED"); return; }
+            }
+            {
+                struct { u32 fd; } sn = { nvmap_fd };
+                nverr = 0;
+                const auto rc = NvIoctl(efd, NvHostIocChannelSetNvmapFd, std::addressof(sn), sizeof(sn), std::addressof(nverr));
+                LogLine("   SET_NVMAP_FD(%u) rc=0x%x nverr=%u", nvmap_fd, rc, nverr);
+            }
+
+            VicStage("nv:3_submit");
+            auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
+            u32 words = AppendIncrSyncpt(w, 0, esyncpt, false);   /* IMMEDIATE, no engine op */
+            armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
+
+            alignas(8) u8 sb[16 + 12 + 20 + 4] = {};
+            u32 off = 0;
+            auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
+            put(1); put(0); put(1); put(1);
+            put(cmd_handle); put(0); put(words);
+            put(esyncpt); put(1); put(0); put(0); put(0);
+            const u32 fence_off = off; put(0);
+            const u32 sz = off;
+
+            const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
+            u32 fence_val = 0;
+            nverr = 0;
+            const auto rc = NvIoctl(efd, req, sb, sz, std::addressof(nverr));
+            std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
+            LogLine("   CHANNEL_SUBMIT req=0x%08x sz=%u words=%u rc=0x%x nverr=%u -> fence=%u",
+                    req, sz, words, rc, nverr, fence_val);
+
+            if (R_SUCCEEDED(rc) && nverr == 0) {
+                u32 cfd = 0, ce = 0;
+                if (R_SUCCEEDED(NvOpen("/dev/nvhost-ctrl", std::addressof(cfd), std::addressof(ce))) && ce == 0) {
+                    struct { u32 id; u32 thresh; u32 timeout; } a = { esyncpt, fence_val, 100 };
+                    u32 we = 0;
+                    NvIoctl(cfd, NvHostIocCtrlSyncptWait, std::addressof(a), sizeof(a), std::addressof(we));
+                    struct { u32 id; u32 value; } r = { esyncpt, 0 };
+                    u32 re = 0;
+                    NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(re));
+                    const bool ok = r.value >= fence_val;
+                    LogLine("   WAIT nverr=%u syncpt=%u (want >= %u)  %s", we, r.value, fence_val,
+                            ok ? "*** NVENC CHANNEL USABLE ***" : "fence did not advance");
+                    NvClose(cfd);
+                    VicStage(ok ? "nv:PHASE_A_OK" : "nv:fence_stuck");
+                }
+            } else {
+                LogLine("   submit rejected - the msenc channel does not take this ABI");
+                VicStage("nv:submit_rejected");
+            }
+            NvClose(efd);
         }
 
         void VicWorkerThread(void *) {

@@ -75,6 +75,52 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M45 RUN: THE VIC IS EXACT - err 0.00 on all four lanes ***
+
+```
+ONE2ONE:  out0(A)=srcR 0.00   out1(R)=srcG 0.00
+          out2(G)=srcB 0.00   out3(B)=srcA 0.00
+```
+
+The unscaled 480x32 blit reproduces a software de-swizzle **bit for bit**. Not
+"within a few LSB" - exactly. That settles three things at once:
+
+- block-linear addressing, GOB tiling, stride and block height are **exact**;
+- the 2-3 LSB residual on scaled variants is the VIC's polyphase scaler
+  differing from a box filter, which is not an error;
+- `tools/compare_vic.py` is correct, since it agrees perfectly with hardware.
+
+**The VIC pipeline is finished.** It had been finished for several milestones;
+what remained was only channel order, and I spent three docked runs on it.
+
+**Channel order needs no further hardware.** Every format pair is a lossless
+permutation - `S32O33` gives `ABGR`, a pure R<->B swap from identity. That is a
+free fix on the PC, or by choosing NVENC's input format, which has to be
+configured anyway. Spending a dock/undock cycle to untwist two constants would
+be spending the expensive resource to save the cheap one.
+
+### The stutter, measured
+
+`dbg:1_find_pid` at 181.195, `ContinueDebugEvent` at 185.971: **the game was
+frozen for 4.78 seconds.** That is the stutter felt on the console, and it is
+entirely self-inflicted - the strip read, five VIC blits and 1.3 MB of SD writes
+all happened before resuming. Only the 983 KB read needs the target halted;
+everything after works on our own buffer.
+
+M46 resumes immediately after the read and logs the frozen window, which should
+drop to roughly 50 ms.
+
+### M46
+
+1. Stutter fix as above.
+2. Format pair fixed at the best known (`S32O33`), sweep cut to two regression
+   variants.
+3. **NVENC phase A** - the M11 treatment: open `/dev/nvhost-msenc`, take its
+   syncpoint, bind the nvmap fd, submit a command buffer that does nothing but
+   increment that syncpoint. No SETCL, no method writes, so the engine cannot be
+   aimed at a bad address and cannot hang. If the fence advances, the channel and
+   submit ABI are usable and only the encode configuration remains unknown.
+
 ## *** M44 RUN: the blit is LOSSLESS - only R and B are transposed ***
 
 My prediction failed and the failure was informative. `P34_rgba` scored 50.80,
@@ -589,7 +635,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M45)
+## The route itself: kernel debug SVCs (M32 -> M46)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:
