@@ -115,7 +115,13 @@ namespace ams::mitm::applet {
                         static_cast<unsigned long long>(u / 1024),
                         static_cast<long long>((static_cast<s64>(t) - static_cast<s64>(u)) / 1024));
             }
-            for (const size_t sz : { 8_MB, 6_MB, 4_MB, 2_MB }) {
+            /* CAPPED AT 2 MB ON PURPOSE. The ladder used to try 8 MB first,
+             * and M50 proved what happens if a larger request is ever granted:
+             * we drain a System pool with ~14 MB free and am dies with
+             * LimitReached, taking the console with it. 2 MB has been safe across
+             * ~20 runs. Widening this is a deliberate decision that needs
+             * pool_partition to change first, not an optimisation. */
+            for (const size_t sz : { 2_MB }) {
                 const auto rc = os::SetMemoryHeapSize(sz);
                 LogLine("   SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
                 if (R_SUCCEEDED(rc)) { want = sz; break; }
@@ -734,8 +740,6 @@ namespace ams::mitm::applet {
 
 
     }
-
-    bool AllocVicHeapAtBoot() { return AllocVicHeap(); }
 
     constinit bool g_dump_armed    = false;
     constinit u32  g_probe_delay_s = 120;

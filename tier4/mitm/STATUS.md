@@ -75,6 +75,62 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M50 FATALED THE CONSOLE - and M49's conclusion was wrong ***
+
+```
+Error Code: 2001-0132 (0x10801)
+Program: 0100000000000023        <- am, the applet manager. NOT us.
+```
+
+`0x10801` decodes as kernel module 1, description 132: **`LimitReached`**. A
+*different* sysmodule was killed because we took the memory it needed.
+
+The log shows it plainly:
+
+```
+[boot] System pool now: used=231424 KB free=6304 KB  (we took 8192 KB of it)
+```
+
+8 MB out of a pool with 14,496 KB free left 6,304 KB, and `am` could not start.
+**The allocation always succeeded - holding it is what broke the console.**
+
+### The retraction
+
+M49 concluded "the 2 MB ceiling was never a hard limit, it was an artefact of
+asking late", and that was recorded here and told to the user. **It is false, and
+the reasoning was backwards.**
+
+8 MB was grantable at boot precisely *because* `am` had not allocated yet. M49
+measured a **transient** and read it as headroom. The 2 MB seen at probe time is
+not a measurement taken at the wrong moment - it is the System pool's honest
+steady state once every sysmodule has claimed its share.
+
+masagrator's original objection stands: **on 22.5.0 a sysmodule cannot hold a
+1080p buffer.** The correction that was about to be posted to GBAtemp would have
+been wrong. Worth telling him the test result rather than quietly dropping it.
+
+### Second time for this pool
+
+M27 over-drew the same pool with 4 MB of `.bss` and fataled a sysmodule the same
+way. Two independent failures, same mechanism, ~30 milestones apart. The System
+pool's free space is **shared across every sysmodule on the console**, and it is
+not ours to spend.
+
+### M51
+
+- No heap taken at boot.
+- The probe-time ladder is **capped at 2 MB** rather than starting at 8. Widening
+  it is now a deliberate decision requiring `pool_partition` to change first, not
+  an optimisation to retry.
+- Capture stays strip-wise, which costs nothing structurally: the 983,040 B
+  block-row is the natural unit of the block-linear layout anyway.
+
+The pool survey stays - it is read-only `svcGetSystemInfo` and allocates nothing.
+
+Remaining levers for NVENC's working set: `pool_partition` (Applet has 500 MB
+free, though a sysmodule may not be permitted to use it), all-intra encoding to
+eliminate reference frames, and reduced encode resolution.
+
 ## *** M49 RUN: 8 MB IS GRANTABLE - the ceiling was a timing artefact ***
 
 ```
@@ -859,7 +915,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M50)
+## The route itself: kernel debug SVCs (M32 -> M51)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:

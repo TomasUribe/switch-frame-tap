@@ -167,53 +167,29 @@ namespace ams {
             mitm::applet::LogLine("   for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB");
         }
 
-        /* M49 answered it: SetMemoryHeapSize(8 MB) succeeds at BOOT, first try,
-         * leaving ~3.2 MB spare of a 13,076 KB process. The 2 MB ceiling was
-         * never a hard limit - it was an artefact of asking LATE, once a game
-         * was resident and the transfer memory committed. So the fix is timing,
-         * not pool_partition: take the heap at startup and hold it.
+        /* M50 FATALED THE CONSOLE: 2001-0132 (0x10801, kernel LimitReached) in
+         * program 0100000000000023 - am, the applet manager. Not us: a DIFFERENT
+         * sysmodule, killed because we took the memory it needed.
          *
-         * A whole 1080p frame is 7913 KB and now fits, which makes the
-         * strip-wise design a choice rather than a constraint and gives NVENC
-         * room for an input surface and a bitstream buffer.
+         *     [boot] System pool now: used=231424 KB free=6304 KB (we took 8192 KB)
          *
-         * THE RISK THIS RUN RETIRES: M49 grabbed 8 MB and released it
-         * immediately. HOLDING it through a game launch is a different
-         * proposition - the System pool has only 14 MB free in total, and M27
-         * proved that starving it fatals a DIFFERENT sysmodule with
-         * LimitReached. If the console fails to launch MK8 after this, that is
-         * the cause, and recovery is deleting
-         * atmosphere/contents/0100000000000C20 or booting with Volume Up. */
-        void GrabHeapAtBoot() {
-            if (!mitm::applet::g_vic_armed) {
-                mitm::applet::LogLine("   [boot] not armed - heap not taken");
-                return;
-            }
-            u64 t0 = 0, u0 = 0;
-            svc::GetInfo(std::addressof(t0), svc::InfoType_TotalMemorySize, svc::PseudoHandle::CurrentProcess, 0);
-            svc::GetInfo(std::addressof(u0), svc::InfoType_UsedMemorySize,  svc::PseudoHandle::CurrentProcess, 0);
-            mitm::applet::LogLine("   [boot] before grab: total=%llu KB used=%llu KB",
-                                  static_cast<unsigned long long>(t0 / 1024),
-                                  static_cast<unsigned long long>(u0 / 1024));
-
-            const bool ok = mitm::applet::AllocVicHeapAtBoot();
-
-            u64 t1 = 0, u1 = 0, st = 0, su = 0;
-            svc::GetInfo(std::addressof(t1), svc::InfoType_TotalMemorySize, svc::PseudoHandle::CurrentProcess, 0);
-            svc::GetInfo(std::addressof(u1), svc::InfoType_UsedMemorySize,  svc::PseudoHandle::CurrentProcess, 0);
-            svc::GetSystemInfo(std::addressof(st), svc::SystemInfoType_TotalPhysicalMemorySize, svc::InvalidHandle, 2);
-            svc::GetSystemInfo(std::addressof(su), svc::SystemInfoType_UsedPhysicalMemorySize,  svc::InvalidHandle, 2);
-            mitm::applet::LogLine("   [boot] after grab : total=%llu KB used=%llu KB  -> %s",
-                                  static_cast<unsigned long long>(t1 / 1024),
-                                  static_cast<unsigned long long>(u1 / 1024),
-                                  ok ? "*** HEAP HELD FROM BOOT ***" : "FAILED - probe will retry late");
-            mitm::applet::LogLine("   [boot] System pool now: used=%llu KB free=%lld KB  (we took %llu KB of it)",
-                                  static_cast<unsigned long long>(su / 1024),
-                                  static_cast<long long>((static_cast<s64>(st) - static_cast<s64>(su)) / 1024),
-                                  static_cast<unsigned long long>((u1 - u0) / 1024));
-            mitm::applet::LogLine("   [boot] a 1080p frame is 7913 KB - %s",
-                                  ok ? "a WHOLE FRAME now fits in one piece" : "still strip-wise only");
-        }
+         * 8 MB out of a pool with 14,496 KB free left 6,304 KB, and am could not
+         * start. The allocation itself always succeeded - holding it is what
+         * broke the console.
+         *
+         * So M49's reading was wrong, and so was mine. 8 MB was grantable at boot
+         * precisely BECAUSE am had not allocated yet; that was a transient, not
+         * headroom. The 2 MB seen at probe time is the System pool's honest
+         * steady state once every sysmodule has claimed its share. masagrator's
+         * original objection stands: on 22.5.0 a sysmodule cannot hold a 1080p
+         * buffer.
+         *
+         * This is the second time this pool has been over-drawn - M27 did it with
+         * 4 MB of .bss and fataled a sysmodule the same way. No heap is taken at
+         * boot. The probe allocates 2 MB, which has been safe across ~20 runs,
+         * and capture stays strip-wise - which costs nothing structurally, since
+         * the 983,040 B block-row is the natural unit of the block-linear layout
+         * anyway. */
 
         Result ServerManager::OnNeedsToAccept(int port_index, Server *server) {
             std::shared_ptr<::Service> fsrv;
@@ -269,7 +245,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M50: up. 8 MB heap taken at boot - a whole 1080p frame now fits.");
+        mitm::applet::LogLine("applet-mitm M51: up. M50 fataled am - reverted, no heap held at boot.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
@@ -280,7 +256,6 @@ namespace ams {
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
         LogMemoryPools();
-        GrabHeapAtBoot();
 
         mitm::applet::LogLine("probe fires at t=%u s; frame dump to SD: %s",
                               mitm::applet::g_probe_delay_s,
