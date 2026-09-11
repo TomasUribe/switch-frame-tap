@@ -52,13 +52,27 @@ def deswizzle(data, height):
     return rows
 
 
-def write_png(path, rows):
+def write_png(path, rows, opaque=True, crop_w=None):
+    """Write RGBA rows as a PNG.
+
+    opaque: the Switch render target's alpha channel is NOT a display alpha -
+    only ~54% of pixels carry 0xFF - so compositing it washes the image out.
+    Force it to 255 unless the caller really wants to inspect it.
+    crop_w: keep only the left crop_w pixels of each row.
+    """
+    out = []
+    for r in rows:
+        r = bytearray(r[:crop_w * BPP]) if crop_w else bytearray(r)
+        if opaque:
+            r[3::4] = b"\xff" * (len(r) // 4)
+        out.append(r)
+    rows = out
     raw = b"".join(b"\x00" + bytes(r) for r in rows)
     def chunk(tag, payload):
         c = struct.pack(">I", len(payload)) + tag + payload
         return c + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
     png = (b"\x89PNG\r\n\x1a\n"
-           + chunk(b"IHDR", struct.pack(">IIBBBBB", W, len(rows), 8, 6, 0, 0, 0))
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", len(rows[0]) // BPP, len(rows), 8, 6, 0, 0, 0))
            + chunk(b"IDAT", zlib.compress(raw, 6))
            + chunk(b"IEND", b""))
     open(path, "wb").write(png)
@@ -73,9 +87,13 @@ def main():
     data = open(src, "rb").read()
     print(f"{src}: {len(data):,} bytes ({len(data)/BLOCK_ROW_SZ:.2f} block-rows)")
     rows = deswizzle(data, H)
-    write_png(out, rows)
+    crop = None
+    if "--crop" in sys.argv:
+        cw, ch = sys.argv[sys.argv.index("--crop") + 1].lower().split("x")
+        crop, rows = int(cw), rows[: int(ch)]
+    write_png(out, rows, opaque="--keep-alpha" not in sys.argv, crop_w=crop)
     nz = sum(1 for r in rows for b in r if b)
-    print(f"wrote {out}  ({W}x{H}, {nz:,} nonzero bytes of {W*H*BPP:,})")
+    print(f"wrote {out}  ({crop or W}x{len(rows)}, {nz:,} nonzero bytes)")
     return 0
 
 

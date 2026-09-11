@@ -75,7 +75,61 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M36 RUN: LIVE CAPTURE IS FEASIBLE AT 60 fps ***
+## *** M37 RUN: WE HAVE A FRAME ***
+
+```
+*** SWAPCHAIN AT 0x3f117e6000 (offset 0 into its region) - matched by EXACT SIZE ***
+    slot0 +0x0000000: 33 34 3c ff  35 36 3d ff  39 3a 41 ff  3c 3d 44 ff
+*** WROTE A WHOLE FRAME: sdmc:/applet-mitm-frame.bin (8847360 B, 135 chunks, 358 ms, 24 MB/s) ***
+```
+
+`tools/deswizzle.py` turned that dump into a 1920x1080 PNG on the PC, and it is
+**Mario, his kart, and Rainbow Road** — read out of the game's own swapchain by a
+sysmodule. Every route through the graphics stack refused us; the kernel debug
+path delivered.
+
+### Three things the decoded frame taught us
+
+**1. The console renders 1280x720, not 1920x1080.** The non-black bounding box is
+exactly `x 0..1279, y 0..719`, and nonzero bytes are 44.44% of the buffer —
+precisely `1280x720 / 1920x1080`. MK8 in **handheld mode** renders 720p into a
+1080p surface. Docking should give the full 1920x1080; that is worth a run, since
+native resolution is the point of the project.
+
+**2. The washed-out look is tearing, and the numbers prove it.** Mean luminance
+per 128-row band — and a band is exactly one block-row, exactly our read unit:
+
+| band | rows | mean luma | near-white |
+|---|---|---|---|
+| 0 | 0-127 | 191 | 29% |
+| 1 | 128-255 | 223 | 86% |
+| 2 | 256-383 | 237 | 100% |
+| 3 | 384-511 | 249 | 100% |
+| 4 | 512-639 | 254 | 100% |
+| 5 | 640-719 | 251 | 100% |
+
+A monotonic ramp down the image, in the order we read it. MK8 was mid
+fade-to-white (the transition when a menu is skipped), and the SD dump took
+358 ms — about 21 frames — so each band is a later moment in the fade. Not a
+decode fault: alpha is 255 across 100% of sampled pixels, and the least-faded top
+40 rows average RGB (159, 189, 219), a believable Rainbow Road sky.
+
+**3. Byte order confirmed by content.** `sky (156, 213, 255)` and a red-dominant
+Mario hat confirm **R,G,B,A** — A8B8G8R8 as a little-endian word. PNG's own RGBA
+order, so no channel swap is needed anywhere.
+
+### M38 — take a clean one
+
+Dump the slot **before** `ContinueDebugEvent` rather than after. With the game
+stopped nothing can write to it, so the frame is coherent; it costs ~400 ms
+frozen, once, which is a fine trade for a screenshot. A streaming capture would
+never do this — it would read into RAM at 1129 MB/s and not touch the SD card.
+
+M38 also measures that directly: a whole slot read into RAM in nine block-row
+strips, no SD in the loop, which is the true per-frame cost and the number that
+decides whether 60 fps survives contact with a running game.
+
+## M36 run: live capture is feasible at 60 fps
 
 ```
 drained 44 debug events; ContinueDebugEvent rc=0x0 -> GAME RUNNING WHILE WE STAY ATTACHED
@@ -247,7 +301,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M37)
+## The route itself: kernel debug SVCs (M32 -> M38)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:

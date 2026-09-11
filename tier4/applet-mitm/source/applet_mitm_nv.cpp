@@ -1225,8 +1225,8 @@ namespace ams::mitm::applet {
             ::ams::Result r_attach{}, r_cont = ::ams::svc::ResultInvalidHandle();
             bool attached = false, resumed = false;
 
-            u64  strip_ns = 0, dump_ns = 0;
-            u32  strip_chunks_ok = 0, dump_chunks = 0;
+            u64  strip_ns = 0, dump_ns = 0, full_ns = 0;
+            u32  strip_chunks_ok = 0, dump_chunks = 0, full_strips = 0;
             bool dumped = false;
             u32  nonzero = 0, distinct = 0, lane_ff[4] = {}, total_px = 0;
             u8   live_a[16] = {}, live_b[16] = {};
@@ -1309,6 +1309,22 @@ namespace ams::mitm::applet {
                     }
                 }
 
+                /* Dump the frame BEFORE resuming. M37 continued the game first
+                 * and then streamed 8.8 MB to the SD at 24 MB/s, so the game
+                 * redrew that slot ~21 times across the 358 ms write. The decoded
+                 * PNG showed it exactly: a monotonic brightness ramp, one step per
+                 * 128-row block-row - mean luma 191, 223, 237, 249, 254, 251 - as
+                 * MK8's fade-to-white advanced down the image in the same order we
+                 * read it. Tearing, not a decode fault.
+                 *
+                 * With the game still stopped nothing can write to the slot, so the
+                 * frame comes out coherent. It costs ~400 ms frozen, once, which is
+                 * a fine trade for a screenshot. A streaming capture would instead
+                 * read into RAM at 1129 MB/s and never go near the SD card. */
+                if (found && g_ind_buf != nullptr && g_ind_size >= 0x10000) {
+                    dumped = DumpSlotToSd(dbg, cand.addr, std::addressof(dump_ns), std::addressof(dump_chunks));
+                }
+
                 /* resume the game, keeping the debug handle */
                 {
                     ::ams::svc::DebugEventInfo ev;
@@ -1351,8 +1367,19 @@ namespace ams::mitm::applet {
                             for (u32 l = 0; l < 4; ++l) { if (g_ind_buf[i + l] == 0xFF) { ++lane_ff[l]; } }
                         }
 
-                        /* and the whole frame, out to the SD card */
-                        dumped = DumpSlotToSd(dbg, cand.addr, std::addressof(dump_ns), std::addressof(dump_chunks));
+                        /* The real per-frame cost: read a whole slot into RAM in
+                         * block-row strips with no SD in the loop. This is what a
+                         * streaming capture actually does every frame, so it is the
+                         * number that decides whether 60 fps holds up. */
+                        {
+                            const u64 t1 = armTicksToNs(armGetSystemTick());
+                            for (u64 done = 0; done < FbSlotSize; done += FbBlockRow) {
+                                const u64 n = (FbSlotSize - done < FbBlockRow) ? (FbSlotSize - done) : FbBlockRow;
+                                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, cand.addr + done, n))) { break; }
+                                ++full_strips;
+                            }
+                            full_ns = armTicksToNs(armGetSystemTick()) - t1;
+                        }
                     }
                 }
 
@@ -1430,9 +1457,19 @@ namespace ams::mitm::applet {
                         g_ind_buf[12], g_ind_buf[13], g_ind_buf[14], g_ind_buf[15]);
             }
 
+            if (full_strips > 0 && full_ns > 0) {
+                const u64 mbps = (FbSlotSize * UINT64_C(1000000)) / full_ns / 1000;
+                LogLine("   FULL SLOT into RAM: %u/9 strips, %llu us total, %llu MB/s -> %s",
+                        full_strips,
+                        static_cast<unsigned long long>(full_ns / 1000),
+                        static_cast<unsigned long long>(mbps),
+                        (full_ns / 1000 <= 16667) ? "*** FITS IN A 60 fps FRAME BUDGET ***"
+                                                  : "over budget for 60 fps");
+            }
+
             if (dumped && dump_ns > 0) {
                 const u64 mbps = (FbSlotSize * UINT64_C(1000000)) / dump_ns / 1000;
-                LogLine("   *** WROTE A WHOLE FRAME: %s (%llu B, %u chunks, %llu ms, %llu MB/s incl. SD) ***",
+                LogLine("   *** WROTE A WHOLE FRAME (game stopped - no tearing): %s (%llu B, %u chunks, %llu ms, %llu MB/s incl. SD) ***",
                         FrameBinPath, static_cast<unsigned long long>(FbSlotSize), dump_chunks,
                         static_cast<unsigned long long>(dump_ns / 1000000),
                         static_cast<unsigned long long>(mbps));
