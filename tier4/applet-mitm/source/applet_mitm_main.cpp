@@ -185,7 +185,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M44: up. Not a layout bug - the source pixel format was wrong.");
+        mitm::applet::LogLine("applet-mitm M45: up. Lossless blit, R and B transposed - sweeping format pairs.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

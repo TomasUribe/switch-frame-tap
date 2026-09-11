@@ -75,6 +75,61 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M44 RUN: the blit is LOSSLESS - only R and B are transposed ***
+
+My prediction failed and the failure was informative. `P34_rgba` scored 50.80,
+not the "<5" I expected. But the per-lane mapping table is unambiguous: for every
+format, **each output lane matches some source lane under 5 LSB, alpha
+included.** Nothing is destroyed; the channels are merely shuffled.
+
+`P32_argb`, the closest:
+
+| output lane | matches source | err |
+|---|---|---|
+| out0 (A) | **A** | 1.11 |
+| out1 (R) | B | 4.12 |
+| out2 (G) | **G** | 4.52 |
+| out3 (B) | R | 4.98 |
+
+Alpha tracks source alpha at 1.11 - so it is **not** being forced to 255 by
+`ConstantAlpha` after all - green is already correct, and **R and B are simply
+transposed**. Sampling, scaling, block-linear addressing and alpha are all
+correct.
+
+The source's alpha channel (only 2 distinct values, 170/255) acts as a tracer:
+it lands in L3 for `P33`, L1 for `P34`, and nowhere among L1-L3 for `P32`. That
+is how the permutation per format was read off directly.
+
+### Two claims retracted
+
+- **M43's "`ConstantAlpha` destroys red".** Wrong. Nothing is lost in any
+  format; I mistook "R is not where I expected" for "R is gone".
+- **"identical to A - field inert".** Wrong three times over. All three M44 dumps
+  have different md5s despite two sharing a byte sum - they are permutations. A
+  byte sum is blind to reordering, which is precisely what these variants do.
+  The label is deleted; sameness is now decided on the PC by md5.
+
+### M45
+
+The **output** format has been hardcoded `A8B8G8R8` since M19 and never swept -
+and the 64x64 self-blit could not have revealed an R/B swap, because its painted
+ramp differed in R and B only by a constant. So sweep the pair:
+
+`S32O32`, `S32O33`, `S33O32`, `S33O33` - one must be the identity mapping.
+
+Plus **`ONE2ONE`**: an unscaled 480x32 crop. The residual 4-5 LSB is either the
+VIC's polyphase scaler differing from a box filter, or a small sampling offset.
+An unscaled blit cannot have a filter error, so if it lands near zero the
+residual is filtering and harmless. The harness compares it against a 1:1 crop
+rather than a downscale, and now calls anything under 6 an identity mapping.
+
+Also fixed: `StripSrc` carried only 7 of 9 initialisers after `rect_w`/`rect_h`
+were added. C++ aggregate init zero-fills silently, so `src.rect_w - 1` would
+underflow to `0xFFFFFFFF` into a 30-bit `SourceRectRight`. Unreachable in the
+current flow - the sweep assigns `g_strip_src` before every submit - but a
+garbage rect hangs the VIC and takes the console with it, so it is now
+initialised properly and guarded by a `static_assert`.
+
 ## *** M43 RUN: it was never the layout - the source pixel format was wrong ***
 
 The dump path fix worked: `7 dumped`, zero `0xd401`, and the file checksums now
@@ -534,7 +589,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M44)
+## The route itself: kernel debug SVCs (M32 -> M45)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:

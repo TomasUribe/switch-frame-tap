@@ -339,16 +339,21 @@ namespace ams::mitm::applet {
          * whether the field wants pixels or BYTES: libdrm only ever blits
          * pitch surfaces and marks both SlotBlkHeight and SlotCacheWidth
          * "XXX". So it is swept below rather than guessed. */
-        struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt, cache_w; };
+        /* w/h describe the SURFACE; rect_w/rect_h the region actually sampled.
+         * They differ only for the unscaled 1:1 control. */
+        struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt, cache_w, rect_w, rect_h; };
 
         /* our own pitch-linear 64x64 buffer, stride 256 px like the destination */
-        constexpr SrcDesc SelfSrc { DstW, DstH, DstStridePx, vic::BLK_KIND_PITCH, 0, vic::PIXFMT_A8B8G8R8, vic::CACHE_WIDTH_64Bx4 };
+        constexpr SrcDesc SelfSrc { DstW, DstH, DstStridePx, vic::BLK_KIND_PITCH, 0, vic::PIXFMT_A8B8G8R8, vic::CACHE_WIDTH_64Bx4, DstW, DstH };
 
-        struct OutDesc { u32 w, h, stride_px; };
+        /* The OUTPUT format has been hardcoded A8B8G8R8 since M19 and never
+         * swept. The 64x64 self-blit could not reveal an R<->B swap either: its
+         * painted ramp differed in R and B only by a constant. */
+        struct OutDesc { u32 w, h, stride_px, fmt; };
 
         /* the 64x64 self-blit target, unchanged: it is the byte-exact regression
          * reference and must keep producing identical output */
-        constexpr OutDesc SelfOut { DstW, DstH, DstStridePx };
+        constexpr OutDesc SelfOut { DstW, DstH, DstStridePx, vic::PIXFMT_A8B8G8R8 };
 
         /* One block-row of the GAME's surface: full 1920 px width by 128 rows,
          * block-linear, exactly what the binder parcels describe.
@@ -361,7 +366,9 @@ namespace ams::mitm::applet {
         constexpr u32 StripW = 1920, StripH = 128;
         constexpr SrcDesc StripSrc { StripW, StripH, StripW,
                                      vic::BLK_KIND_GENERIC_16Bx2, 4, vic::PIXFMT_A8B8G8R8,
-                                     vic::CACHE_WIDTH_64Bx4 };
+                                     vic::CACHE_WIDTH_64Bx4, StripW, StripH };
+        static_assert(StripSrc.rect_w > 0 && StripSrc.rect_h > 0,
+                      "a zero rect underflows to 0xFFFFFFFF in FillBlitConfig");
         /* set per variant before each BlitStrip submit */
         constinit SrcDesc g_strip_src = StripSrc;
 
@@ -387,15 +394,34 @@ namespace ams::mitm::applet {
          * The game's surface is R,G,B,A in memory, which the VIC calls
          * R8G8B8A8, not the A8B8G8R8 I declared. Sweep the three candidates
          * rather than assume, keeping the layout that already works. */
-        struct StripVariant { const char *name; u32 src_fmt; };
+        /* M44's mapping table showed every format is a LOSSLESS permutation -
+         * each output lane matched some source lane under 5 LSB, alpha included.
+         * Nothing is destroyed; the channels are merely shuffled. P32_argb came
+         * closest, with only R and B transposed:
+         *
+         *     out0(A)=srcA 1.11   out1(R)=srcB 4.12
+         *     out2(G)=srcG 4.52   out3(B)=srcR 4.98
+         *
+         * So this sweeps SOURCE x OUTPUT format - the output side has been fixed
+         * at A8B8G8R8 since M19 and never tested - and one of the four must be
+         * the identity mapping.
+         *
+         * ONE2ONE is the separate question: the residual 4-5 LSB is either the
+         * VIC's polyphase scaler differing from a box filter, or a small
+         * sampling offset. An unscaled 480x32 crop cannot have a filter error,
+         * so if it lands near zero the residual is filtering and harmless. */
+        struct StripVariant { const char *name; u32 src_fmt; u32 out_fmt; u32 rect_w, rect_h; };
         constexpr StripVariant StripVariants[] = {
-            { "P34_rgba", vic::PIXFMT_R8G8B8A8 },   /* predicted correct */
-            { "P33_abgr", vic::PIXFMT_A8B8G8R8 },   /* M43's control - shifted one lane */
-            { "P32_argb", vic::PIXFMT_A8R8G8B8 },
+            { "S32O32",  vic::PIXFMT_A8R8G8B8, vic::PIXFMT_A8R8G8B8, StripW, StripH },
+            { "S32O33",  vic::PIXFMT_A8R8G8B8, vic::PIXFMT_A8B8G8R8, StripW, StripH },
+            { "S33O32",  vic::PIXFMT_A8B8G8R8, vic::PIXFMT_A8R8G8B8, StripW, StripH },
+            { "S33O33",  vic::PIXFMT_A8B8G8R8, vic::PIXFMT_A8B8G8R8, StripW, StripH },
+            { "ONE2ONE", vic::PIXFMT_A8R8G8B8, vic::PIXFMT_A8R8G8B8, 480,    32     },
         };
         constexpr u32 StripVariantCount = sizeof(StripVariants) / sizeof(StripVariants[0]);
 
-        constexpr OutDesc StripOut { 480, 32, 512 };
+        constexpr OutDesc StripOut { 480, 32, 512, vic::PIXFMT_A8B8G8R8 };
+        constinit OutDesc g_strip_out = StripOut;   /* set per variant */
         constexpr u32 StripOutSize = StripOut.stride_px * 4 * StripOut.h;
         static_assert(StripOutSize <= DstSize);
 
@@ -405,7 +431,7 @@ namespace ams::mitm::applet {
             c->outputConfig.TargetRectRight  = out.w - 1;
             c->outputConfig.TargetRectBottom = out.h - 1;
 
-            c->outputSurfaceConfig.OutPixelFormat   = vic::PIXFMT_A8B8G8R8;
+            c->outputSurfaceConfig.OutPixelFormat   = out.fmt;
             c->outputSurfaceConfig.OutBlkKind       = vic::BLK_KIND_PITCH;
             c->outputSurfaceConfig.OutBlkHeight     = 0;
             c->outputSurfaceConfig.OutSurfaceWidth  = out.w - 1;
@@ -448,9 +474,9 @@ namespace ams::mitm::applet {
             slot->PlanarAlpha         = 1023;
             slot->ConstantAlpha       = 1;
             slot->SourceRectLeft      = 0;
-            slot->SourceRectRight     = static_cast<u64>(src.w - 1) << 16;   /* 16.16 fixed point */
+            slot->SourceRectRight     = static_cast<u64>(src.rect_w - 1) << 16;   /* 16.16 fixed point */
             slot->SourceRectTop       = 0;
-            slot->SourceRectBottom    = static_cast<u64>(src.h - 1) << 16;
+            slot->SourceRectBottom    = static_cast<u64>(src.rect_h - 1) << 16;
             slot->DestRectLeft        = 0;
             slot->DestRectRight       = out.w - 1;
             slot->DestRectTop         = 0;
@@ -550,7 +576,7 @@ namespace ams::mitm::applet {
                 case VicJob::Fill:     FillClearConfig(cfg);            break;
                 case VicJob::BlitSelf:  FillBlitConfig(cfg, SelfSrc,   SelfOut);  break;
                 case VicJob::BlitGame:  FillBlitConfig(cfg, c.game_src, SelfOut); break;
-                case VicJob::BlitStrip: FillBlitConfig(cfg, g_strip_src, StripOut); break;
+                case VicJob::BlitStrip: FillBlitConfig(cfg, g_strip_src, g_strip_out); break;
             }
 
             auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
@@ -899,7 +925,8 @@ namespace ams::mitm::applet {
             const SrcDesc game_src{ g_game_surface.width, g_game_surface.height,
                                     g_game_surface.stride_px, vic::BLK_KIND_GENERIC_16Bx2,
                                     g_game_surface.block_h_log2, g_game_surface.pix_format,
-                                    vic::CACHE_WIDTH_64Bx4 };
+                                    vic::CACHE_WIDTH_64Bx4,
+                                    g_game_surface.width, g_game_surface.height };
             const JobCtx ctx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr,
                               (self_addr != 0) ? self_addr : src_addr, 0,
                               cfg_handle, dst_handle, src_handle, game_src };
@@ -1451,7 +1478,10 @@ namespace ams::mitm::applet {
                                      * only the source pixel format varies */
                                     g_strip_src = SrcDesc{ StripW, StripH, StripW,
                                                            vic::BLK_KIND_GENERIC_16Bx2, 4,
-                                                           sv.src_fmt, vic::CACHE_WIDTH_64Bx4 };
+                                                           sv.src_fmt, vic::CACHE_WIDTH_64Bx4,
+                                                           sv.rect_w, sv.rect_h };
+                                    g_strip_out = OutDesc{ StripOut.w, StripOut.h,
+                                                           StripOut.stride_px, sv.out_fmt };
                                     char stage[48];
                                     std::snprintf(stage, sizeof(stage), "vb:strip_%s", sv.name);
                                     VicStage("vs:5_sweep");
@@ -1716,8 +1746,11 @@ namespace ams::mitm::applet {
                     strip_blit_ok ? "*** COMPLETED ***" : "did not complete");
             LogLine("   swept %u variants: %u completed, %u dumped", StripVariantCount, strip_ok_count, strip_dump_count);
             for (u32 v = 0; v < StripVariantCount && v < 8; ++v) {
-                LogLine("     %-12s bytesum=%u%s", StripVariants[v].name, variant_sum[v],
-                        (v > 0 && variant_sum[v] == variant_sum[0]) ? "   (identical to A - field inert)" : "");
+                /* No "identical - field inert" claim here. A byte sum is blind to
+                 * reordering, which is exactly what these variants do, and that
+                 * label sent three runs chasing a layout bug that did not exist.
+                 * Sameness is decided on the PC by md5, not here by a sum. */
+                LogLine("     %-12s bytesum=%u", StripVariants[v].name, variant_sum[v]);
             }
             LogLine("   dumps: %s %s   (compare with tools/compare_vic.py)",
                     strip_dumped ? "strip.bin OK" : "strip.bin FAILED",

@@ -121,7 +121,10 @@ def main():
 
     full = deswizzle_strip(strip)
     soft = box_downscale(full)
+    # an unscaled variant must be compared against a 1:1 crop, not a downscale
+    crop = [bytearray(full[y][0:OUT_W * BPP]) for y in range(OUT_H)]
     write_png("cmp_soft.png", soft, OUT_W)
+    write_png("cmp_crop.png", crop, OUT_W)
     write_png("cmp_full.png", full, SRC_W)
 
     results = []
@@ -131,19 +134,21 @@ def main():
             print(f"  {os.path.basename(path):<34} SHORT ({len(data):,} B) - skipped")
             continue
         hard = vic_rows(data)
-        mean, mx = score(soft, hard)
         name = os.path.basename(path).replace("applet-mitm-vic-", "").replace(".bin", "")
+        ref = crop if "ONE2ONE" in name else soft
+        mean, mx = score(ref, hard)
         write_png(f"cmp_{name}.png", hard, OUT_W)
         results.append((mean, mx, name))
 
     results.sort()
     print(f"  {'variant':<16} {'mean err':>9} {'max':>5}   verdict")
     for mean, mx, name in results:
-        v = "*** LAYOUT CORRECT ***" if mean < 24 else ("close" if mean < 45 else "wrong")
+        v = ("*** IDENTITY MAPPING ***" if mean < 6 else
+             "channels permuted" if mean < 45 else "wrong")
         print(f"  {name:<16} {mean:9.2f} {mx:5d}   {v}")
 
-    if results and results[0][0] < 24:
-        print(f"\nWINNER: {results[0][2]}")
+    if results and results[0][0] < 6:
+        print(f"\nWINNER: {results[0][2]} - source and output formats agree, blit is correct")
     elif results:
         print(f"\nNone matched. Best was {results[0][2]} at {results[0][0]:.1f} "
               f"- the layout field we need is not in this sweep.")
