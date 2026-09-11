@@ -56,7 +56,8 @@ process's framebuffer.
 
 - **Never take large static memory.** A 4 MB array fataled *another* sysmodule
   with `0x10801 LimitReached` at boot (M27), and 8 MB held from boot did it again
-  (M50). `.bss` lives at ~1.45 MB; the practical heap ceiling is **2 MB**.
+  (M50). `.bss` lives at ~1.45 MB, and the heap ceiling *was* **2 MB** for every
+  run up to M53 — see the correction below for why it no longer is.
   **M54/M55 correction:** there are *two* gates, and they are not the same one.
   `pool_partition` picks the **physical pool** — now `1` (Applet).
   `application_type` picks the **resource-limit group** — now `2`
