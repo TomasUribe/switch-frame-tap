@@ -75,6 +75,73 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M52 RUN: USB TRANSPORT WORKS - but SysDVR owns the bus ***
+
+Every call succeeded, first attempt:
+
+```
+usbDsInitialize rc=0x0
+string descriptors rc=0x0
+device descriptors (Full+High) rc=0x0
+usbDsRegisterInterface rc=0x0
+configuration descriptors rc=0x0
+endpoints IN=0x81 OUT=0x01 rc=0x0
+EnableInterface rc=0x0
+usbDsEnable rc=0x0
+```
+
+Interface registered, bulk endpoints in/out, device enabled. **The transport half
+is written and functioning.**
+
+### But the host does not see us
+
+`lsusb` on the PC shows `18d1:4ee0`, whose product string is **"SysDVR"** and
+manufacturer `https://github.com/exelix11/SysDVR`. Title `00FF0000A53BB665` is
+installed on the card **with a `boot2.flag`**, one of nine auto-starting
+sysmodules, alongside `config/sysdvr` and `switch/SysDVR-conf.nro`.
+
+SysDVR enumerates first and owns the device presentation. Our descriptors are
+simply not what the host is shown.
+
+### Three corrections
+
+1. **`usb:ds` exclusivity is at the BUS level, not the service level.** Both
+   modules got `rc=0x0` from `usbDsInitialize`. The documented "one client"
+   behaviour does not manifest as a failed acquire, so a zero return proves
+   nothing about who the host actually talks to.
+2. **The `*** USB DEVICE ENUMERATED ***` log line asserts more than it can
+   know.** It fires on `usbDsEnable` returning zero, which says nothing about bus
+   ownership. It should verify that the host sees *our* VID/PID.
+3. **An earlier session reported "no SysDVR installed" after checking
+   `contents/`.** That was wrong: SysDVR uses a `00FF…` title ID, which was not
+   recognised while scanning for `0100…` game-style IDs. SysDVR has therefore
+   been holding the bus during *every* run so far, and any earlier transport
+   attempt would have failed the same way.
+
+Also note `lsusb` mislabels it "Google Inc. Nexus/Pixel Device (fastboot)"
+because it consults a VID/PID table rather than the device's own strings - which
+is why an initial grep for `1209:5f1e` returned "not found" and was briefly read
+as "nothing enumerated". `/sys/bus/usb/devices/*/product` tells the truth.
+
+### NVENC: class ID settled, methods still unknown
+
+`NV_VIDEO_ENCODE_NVENC_CLASS_ID = 0x21` (MSENC is an alias), from the T210
+nvhost device table and `class_ids.h`. Cross-checked the only way that matters:
+the same header gives `NV_GRAPHICS_VIC_CLASS_ID = 0x5D`, the value proven on
+hardware in M16. So `SETCL(0, 0x21, 0)` is the encoder's equivalent - the field
+that cost six runs on the VIC, settled with no console time.
+
+**Deliberately not probed yet.** M16 also proved `INCR_SYNCPT` fires in *any*
+class, so a `SETCL`-only probe cannot discriminate, and with no method table
+anywhere local, writing methods would be aiming blind at an engine - the pattern
+that froze the console twice.
+
+### Next
+
+One `mv` of SysDVR's `boot2.flag`, one boot with a cable attached, and confirm
+`1209:5f1e` from the PC. Fully reversible, but it stops a working capture tool
+while ours is unfinished - the user's call, not ours to make unilaterally.
+
 ## *** M50 FATALED THE CONSOLE - and M49's conclusion was wrong ***
 
 ```
@@ -915,7 +982,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M51)
+## The route itself: kernel debug SVCs (M32 -> M52)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:
