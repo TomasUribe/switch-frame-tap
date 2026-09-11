@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M54**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M55**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -57,12 +57,16 @@ process's framebuffer.
 - **Never take large static memory.** A 4 MB array fataled *another* sysmodule
   with `0x10801 LimitReached` at boot (M27), and 8 MB held from boot did it again
   (M50). `.bss` lives at ~1.45 MB; the practical heap ceiling is **2 MB**.
-  **M54 correction:** there are *two* gates, and they are not the same one.
-  `pool_partition` picks the **physical pool** — now `1` (Applet, 411 MB free),
-  so our pages no longer come out of System. `application_type` picks the
-  **resource-limit group** — still System, still shared with `am`, and
-  `LimitReached` is *that* gate. Moving the pool did **not** make a big
-  allocation safe; the 8 MB request was refused, which is a different thing.
+  **M54/M55 correction:** there are *two* gates, and they are not the same one.
+  `pool_partition` picks the **physical pool** — now `1` (Applet).
+  `application_type` picks the **resource-limit group** — now `2`
+  (`ProgramInfoFlag_Applet`), and `LimitReached` is *that* gate, the one that
+  killed `am`. M54 moved only the pool and I wrongly called that safe; it took
+  **both**. With both on Applet the probe-time budget is **411,260 KB free**
+  rather than 3,748 KB, so the 2 MB ceiling above is historical.
+  **But:** that is a measured *limit*, not a demonstrated allocation — nothing
+  larger than 2 MB has actually been taken yet (M56). Do not spend against a
+  number again without taking it first.
 - **`handle_table_size` must be 512**, not the default 16 — `ams_mitm` uses 512.
   16 exhausted mid-run and made `smGetService("vi:m")` return `0xD201
   OutOfHandles`, which reads exactly like a permission refusal and is not one.
@@ -79,6 +83,77 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M55 RUN: application_type 2 - the memory ceiling is gone ***
+
+One KAC capability: `{"type": "application_type", "value": 2}`
+(`ProgramInfoFlag_Applet`). `pm_spec.cpp:145` reads exactly this field to pick
+the resource-limit group, so it moves gate A from System to Applet.
+
+```
+M54  [probe, BEFORE heap grab] process total=  5472 KB used=1724 KB free=  3748 KB
+M55  [probe, BEFORE heap grab] process total=412984 KB used=1724 KB free=411260 KB
+```
+
+**75x.** At boot it reads 511,936 KB, against M54's 14,060 KB. Our own `used` is
+1,724 KB in both runs — nothing about us changed except which group we count
+against.
+
+It also confirms the `kern_k_process.cpp:868` semantics derived in M54, to the
+kilobyte:
+
+```
+412,984 = 411,260 (Applet group free) + 1,724 (our used)
+```
+
+**A 1080p frame is 7,913 KB. Free at probe is 411,260 KB — about 52 frames.**
+
+### Both gates are now on Applet
+
+| gate | field | value | pool/group free at probe |
+|---|---|---|---|
+| physical pool | `pool_partition` | 1 | 411,260 KB |
+| resource limit | `application_type` | 2 | 411,260 KB |
+
+M54 moved the first and I wrongly called that the end of it. It took both.
+
+### Still measure-only, on purpose
+
+The ladder stayed capped at `{ 2_MB }`. Applet went 100,740 → 102,788 KB
+(+2,048, the 2 MB), System flat at 229,140 KB both sides. Console survived
+282 s, `txn=27515`, `vic=vb:released`, no fatal. VIC healthy: `job_fill` and
+`job_blit_self` both wrote our memory. `nvdrv:t` still returns the full mask.
+
+**An applet-group mitm was untested by anyone** — `memlet` declares
+`application_type 2` but is not a mitm. It works, with no observable change to
+the mitm, nvdrv permissions, or the VIC.
+
+### What this does NOT prove
+
+We measured the limit. **We did not take 8 MB.** "A 1080p frame now fits" is
+what the resource limit reports, not something demonstrated on hardware. That
+exact gap — a number that says yes versus hardware that does it — is what I got
+wrong in M49 ("never a hard limit") and again in M54 ("structurally
+impossible"). Both times I reasoned about a limit and spent against the
+reasoning.
+
+The difference now is the margin: 411 MB against 8 MB is 50x, and it is
+measured rather than inferred. That is a reason to try it, not a reason to skip
+verifying it.
+
+### masagrator
+
+His objection — *on 22.5.0 a sysmodule cannot hold a 1080p buffer* — is
+genuinely retired, and he was right for every run up to M53. It stood as long as
+it did because **two** independent gates had to move, and I kept moving one and
+announcing the result. He is owed the numbers.
+
+### M56
+
+Raise the ladder to 8 MB and actually take it. Log both pools and both gates
+either side. Success = a full 1080p frame resident in a sysmodule, System pool
+and System resource limit untouched, no fatal. Then the capture path can read a
+whole frame instead of 983,040 B block-rows.
 
 ## *** M54 RUN: the pool moved - and my "structurally impossible" was wrong ***
 
@@ -1859,8 +1934,8 @@ applet-mitm/
   patch_libstrat.py     the non-domain mitm sub-object forwarding patch (idempotent)
   applet-mitm.json      NPDM: service_host vi:u; service_access fatal:u lm fsp-srv
                         nvdrv{,:a,:s,:t} vi:m vi:s pm:dmnt; handle_table_size 512;
-                        pool_partition 1 (Applet, M54); debug_flags force_debug;
-                        read-only debug SVCs; usb:ds
+                        pool_partition 1 + application_type 2 (both Applet, M54/M55);
+                        debug_flags force_debug; read-only debug SVCs; usb:ds
   source/
     applet_mitm_main.cpp     ServerManager, RegisterMitmServer("vi:u"), nv weak-global overrides
     applet_mitm_service.*    the wrapper chain + binder intercept

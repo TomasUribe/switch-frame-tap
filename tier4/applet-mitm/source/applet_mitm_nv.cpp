@@ -158,7 +158,14 @@ namespace ams::mitm::applet {
              * requirement - 5 MB and 3 MB return 0xca01 (InvalidSize) - and the
              * ladder still descends, so a refusal costs us nothing. */
             LogPools("before heap grab");
-            for (const size_t sz : { 8_MB, 6_MB, 4_MB, 2_MB }) {
+            /* M55 IS MEASURE-ONLY, and the ladder is back at 2 MB on purpose.
+             * If application_type 2 moved us to the Applet resource-limit group,
+             * an 8 MB request would now SUCCEED - and reserving 8 MB against a
+             * shared limit is exactly what killed am in M50. M54 only escaped
+             * because it was refused (0x1003), which is luck, not safety.
+             * Read the budget this run; spend it in a later one, against a
+             * number we have actually measured. */
+            for (const size_t sz : { 2_MB }) {
                 const auto rc = os::SetMemoryHeapSize(sz);
                 LogLine("   SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
                 if (R_SUCCEEDED(rc)) { want = sz; break; }

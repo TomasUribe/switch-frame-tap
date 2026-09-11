@@ -112,6 +112,10 @@
             }
         },
         {
+            "type": "application_type",
+            "value": 2
+        },
+        {
             "type": "min_kernel_version",
             "value": "0x0030"
         },

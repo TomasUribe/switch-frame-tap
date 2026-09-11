@@ -406,7 +406,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M54: up. pool_partition 1 (Applet) - the heap must not come out of System.");
+        mitm::applet::LogLine("applet-mitm M55: up. application_type 2 (Applet group) - MEASURE ONLY, ladder capped at 2 MB.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
