@@ -191,6 +191,142 @@ namespace ams {
          * the 983,040 B block-row is the natural unit of the block-linear layout
          * anyway. */
 
+        /* ---- USB device enumeration -------------------------------------
+         * The transport half, and the reason it is worth a run before NVENC:
+         * NVENC has a class ID now (0x21, cross-checked against VIC's 0x5D which
+         * we proved on hardware in M16) but no method table anywhere local, so a
+         * SETCL for it would be writing blind at an engine. USB is safe - no
+         * engine, no memory grab - and it is on the critical path.
+         *
+         * The arithmetic that makes this the interesting direction: the VIC
+         * already downscales correctly, and 480x270 raw at 30 fps is 15.5 MB/s,
+         * inside USB 2.0's ~30 MB/s with no encoder at all. A working prototype
+         * without NVENC.
+         *
+         * Sequence and descriptor values follow SysDVR's UsbComms.c, which is a
+         * known-good implementation on this firmware. Endpoint buffers are
+         * static 0x1000 pairs - 8 KB of .bss, not heap, so this costs nothing
+         * against the 976 KB. */
+        alignas(0x1000) constinit u8 g_usb_ep_in_buf[0x1000]  = {};
+        alignas(0x1000) constinit u8 g_usb_ep_out_buf[0x1000] = {};
+        constinit bool g_usb_armed = false;
+
+        void TryUsbEnumerate() {
+            if (!g_usb_armed) {
+                mitm::applet::LogLine("   usb: not armed (add \"usb\" to the arm file)");
+                return;
+            }
+            mitm::applet::LogLine("---- USB device enumeration (usb:ds) ----");
+
+            /* ::Result - libnx's u32 - NOT ams::Result, which is a class and
+             * would not survive being passed through printf varargs. */
+            ::Result rc = usbDsInitialize();
+            mitm::applet::LogLine("   usbDsInitialize rc=0x%x %s", rc,
+                                  R_SUCCEEDED(rc) ? "" : "<- could not acquire usb:ds");
+            if (R_FAILED(rc)) { return; }
+
+            u8 iMan = 0, iProd = 0, iSer = 0;
+            static const u16 langs[1] = { 0x0409 };
+            rc = usbDsAddUsbLanguageStringDescriptor(nullptr, langs, 1);
+            if (R_SUCCEEDED(rc)) { rc = usbDsAddUsbStringDescriptor(std::addressof(iMan),  "switch-frame-tap"); }
+            if (R_SUCCEEDED(rc)) { rc = usbDsAddUsbStringDescriptor(std::addressof(iProd), "Switch Frame Tap"); }
+            if (R_SUCCEEDED(rc)) { rc = usbDsAddUsbStringDescriptor(std::addressof(iSer),  "0001"); }
+            mitm::applet::LogLine("   string descriptors rc=0x%x", rc);
+
+            struct usb_device_descriptor dd = {
+                .bLength            = USB_DT_DEVICE_SIZE,
+                .bDescriptorType    = USB_DT_DEVICE,
+                .bcdUSB             = 0x0110,
+                .bDeviceClass       = 0x00,
+                .bDeviceSubClass    = 0x00,
+                .bDeviceProtocol    = 0x00,
+                .bMaxPacketSize0    = 0x40,
+                .idVendor           = 0x1209,   /* pid.codes open range */
+                .idProduct          = 0x5F1E,
+                .bcdDevice          = 0x0100,
+                .iManufacturer      = iMan,
+                .iProduct           = iProd,
+                .iSerialNumber      = iSer,
+                .bNumConfigurations = 0x01,
+            };
+            rc = usbDsSetUsbDeviceDescriptor(UsbDeviceSpeed_Full, std::addressof(dd));
+            dd.bcdUSB = 0x0200;
+            if (R_SUCCEEDED(rc)) { rc = usbDsSetUsbDeviceDescriptor(UsbDeviceSpeed_High, std::addressof(dd)); }
+            mitm::applet::LogLine("   device descriptors (Full+High) rc=0x%x", rc);
+            if (R_FAILED(rc)) { return; }
+
+            UsbDsInterface *iface  = nullptr;
+            UsbDsEndpoint  *ep_in  = nullptr;
+            UsbDsEndpoint  *ep_out = nullptr;
+
+            struct usb_interface_descriptor id = {
+                .bLength            = USB_DT_INTERFACE_SIZE,
+                .bDescriptorType    = USB_DT_INTERFACE,
+                .bInterfaceNumber   = 4,
+                .bAlternateSetting  = 0,
+                .bNumEndpoints      = 2,
+                .bInterfaceClass    = USB_CLASS_VENDOR_SPEC,
+                .bInterfaceSubClass = USB_CLASS_VENDOR_SPEC,
+                .bInterfaceProtocol = USB_CLASS_VENDOR_SPEC,
+                .iInterface         = 0,
+            };
+            struct usb_endpoint_descriptor ep_i = {
+                .bLength          = USB_DT_ENDPOINT_SIZE,
+                .bDescriptorType  = USB_DT_ENDPOINT,
+                .bEndpointAddress = USB_ENDPOINT_IN,
+                .bmAttributes     = USB_TRANSFER_TYPE_BULK,
+                .wMaxPacketSize   = 0x200,
+                .bInterval        = 0,
+            };
+            struct usb_endpoint_descriptor ep_o = {
+                .bLength          = USB_DT_ENDPOINT_SIZE,
+                .bDescriptorType  = USB_DT_ENDPOINT,
+                .bEndpointAddress = USB_ENDPOINT_OUT,
+                .bmAttributes     = USB_TRANSFER_TYPE_BULK,
+                .wMaxPacketSize   = 0x40,
+                .bInterval        = 0,
+            };
+
+            std::memset(g_usb_ep_in_buf,  0, sizeof(g_usb_ep_in_buf));
+            std::memset(g_usb_ep_out_buf, 0, sizeof(g_usb_ep_out_buf));
+
+            rc = usbDsRegisterInterface(std::addressof(iface));
+            mitm::applet::LogLine("   usbDsRegisterInterface rc=0x%x", rc);
+            if (R_FAILED(rc)) { return; }
+
+            id.bInterfaceNumber   = iface->interface_index;
+            ep_i.bEndpointAddress = static_cast<u8>(ep_i.bEndpointAddress + id.bInterfaceNumber + 1);
+            ep_o.bEndpointAddress = static_cast<u8>(ep_o.bEndpointAddress + id.bInterfaceNumber + 1);
+
+            /* Full speed */
+            rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_Full, std::addressof(id),   USB_DT_INTERFACE_SIZE);
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_Full, std::addressof(ep_i), USB_DT_ENDPOINT_SIZE); }
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_Full, std::addressof(ep_o), USB_DT_ENDPOINT_SIZE); }
+            /* High speed - 512 B bulk, the speed we actually expect */
+            ep_i.wMaxPacketSize = 0x200;
+            ep_o.wMaxPacketSize = 0x200;
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_High, std::addressof(id),   USB_DT_INTERFACE_SIZE); }
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_High, std::addressof(ep_i), USB_DT_ENDPOINT_SIZE); }
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_High, std::addressof(ep_o), USB_DT_ENDPOINT_SIZE); }
+            mitm::applet::LogLine("   configuration descriptors rc=0x%x", rc);
+            if (R_FAILED(rc)) { return; }
+
+            rc = usbDsInterface_RegisterEndpoint(iface, std::addressof(ep_in), ep_i.bEndpointAddress);
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_RegisterEndpoint(iface, std::addressof(ep_out), ep_o.bEndpointAddress); }
+            mitm::applet::LogLine("   endpoints IN=0x%02x OUT=0x%02x rc=0x%x", ep_i.bEndpointAddress, ep_o.bEndpointAddress, rc);
+            if (R_FAILED(rc)) { return; }
+
+            rc = usbDsInterface_EnableInterface(iface);
+            mitm::applet::LogLine("   EnableInterface rc=0x%x", rc);
+            if (R_FAILED(rc)) { return; }
+
+            rc = usbDsEnable();
+            mitm::applet::LogLine("   usbDsEnable rc=0x%x", rc);
+            mitm::applet::LogLine("   %s", R_SUCCEEDED(rc)
+                ? "*** USB DEVICE ENUMERATED - look for 1209:5f1e in lsusb ***"
+                : "usbDsEnable failed - device will not appear on the bus");
+        }
+
         Result ServerManager::OnNeedsToAccept(int port_index, Server *server) {
             std::shared_ptr<::Service> fsrv;
             sm::MitmProcessInfo client_info;
@@ -245,17 +381,19 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M51: up. M50 fataled am - reverted, no heap held at boot.");
+        mitm::applet::LogLine("applet-mitm M52: up. NVENC class is 0x21. Trying USB enumeration - the transport half.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
         mitm::applet::g_dbg_armed   = ArmFileContains("dbg");
         mitm::applet::g_dump_armed  = ArmFileContains("dump");
+        g_usb_armed                 = ArmFileContains("usb");
         mitm::applet::g_probe_delay_s = ArmFileNumber("wait", 120);
         mitm::applet::LogLine("arm file (sdmc:/applet-mitm.armed): vic=%s exec=%s",
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
         LogMemoryPools();
+        TryUsbEnumerate();
 
         mitm::applet::LogLine("probe fires at t=%u s; frame dump to SD: %s",
                               mitm::applet::g_probe_delay_s,

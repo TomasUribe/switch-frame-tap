@@ -25,7 +25,8 @@
         "nvdrv:t",
         "vi:m",
         "vi:s",
-        "pm:dmnt"
+        "pm:dmnt",
+        "usb:ds"
     ],
     "service_host": [
         "vi:u"
