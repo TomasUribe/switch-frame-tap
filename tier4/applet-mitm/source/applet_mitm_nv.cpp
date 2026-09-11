@@ -372,18 +372,28 @@ namespace ams::mitm::applet {
          * brightness structure, no coherent image. That is a source-LAYOUT
          * error, not scale or crop. Three fields could cause it and none has a
          * reference, so sweep them in one boot the way M16 settled SETCL. */
-        struct StripVariant { const char *name; u32 luma_px; u32 blk_h; u32 cache_w; };
+        /* M43 settled it, and it was never the layout. The engine's output came
+         * back as [0xFF, G_src, B_src, A_src] - the source shifted down one lane
+         * with alpha forced to max by ConstantAlpha/PlanarAlpha. Per-lane error
+         * against a software de-swizzle of the same bytes:
+         *
+         *     aligned:  out[1]vsR 7.15   out[2]vsG 21.02   out[3]vsB 195.71
+         *     shifted:  out[1]vsG 1.87   out[2]vsB  1.69   out[3]vsA   0.70
+         *
+         * Under 2 LSB on every lane once shifted - filter-difference magnitude.
+         * So geometry, scale and block-linear addressing were all correct, and
+         * the engine simply ate the source's R byte as alpha.
+         *
+         * The game's surface is R,G,B,A in memory, which the VIC calls
+         * R8G8B8A8, not the A8B8G8R8 I declared. Sweep the three candidates
+         * rather than assume, keeping the layout that already works. */
+        struct StripVariant { const char *name; u32 src_fmt; };
         constexpr StripVariant StripVariants[] = {
-            { "A_px_bh4",   StripW,     4, vic::CACHE_WIDTH_64Bx4  },  /* M41, known wrong */
-            { "B_byt_bh4",  StripW * 4, 4, vic::CACHE_WIDTH_64Bx4  },  /* luma width in BYTES */
-            { "C_px_bh0",   StripW,     0, vic::CACHE_WIDTH_64Bx4  },
-            { "D_byt_bh0",  StripW * 4, 0, vic::CACHE_WIDTH_64Bx4  },
-            { "E_px_bh4_c0",StripW,     4, vic::CACHE_WIDTH_16Bx16 },  /* BL-only cache width */
-            { "F_byt_bh1",  StripW * 4, 1, vic::CACHE_WIDTH_64Bx4  },
-            { "G_pitchkind",StripW,     4, vic::CACHE_WIDTH_64Bx4  },  /* kind=PITCH control: MUST differ */
+            { "P34_rgba", vic::PIXFMT_R8G8B8A8 },   /* predicted correct */
+            { "P33_abgr", vic::PIXFMT_A8B8G8R8 },   /* M43's control - shifted one lane */
+            { "P32_argb", vic::PIXFMT_A8R8G8B8 },
         };
         constexpr u32 StripVariantCount = sizeof(StripVariants) / sizeof(StripVariants[0]);
-        static_assert(StripW * 4 - 1 <= 16383);   /* SlotLumaWidth is 14 bits */
 
         constexpr OutDesc StripOut { 480, 32, 512 };
         constexpr u32 StripOutSize = StripOut.stride_px * 4 * StripOut.h;
@@ -1437,11 +1447,11 @@ namespace ams::mitm::applet {
                                                    cap_addr, 0, 0, 0, 0, SelfSrc };
                                 for (u32 v = 0; v < StripVariantCount; ++v) {
                                     const StripVariant &sv = StripVariants[v];
-                                    const u32 kind = (sv.name[0] == 'G') ? vic::BLK_KIND_PITCH
-                                                                         : vic::BLK_KIND_GENERIC_16Bx2;
-                                    g_strip_src = SrcDesc{ StripW, StripH, sv.luma_px,
-                                                           kind, sv.blk_h,
-                                                           vic::PIXFMT_A8B8G8R8, sv.cache_w };
+                                    /* layout fixed at what M43 proved correct;
+                                     * only the source pixel format varies */
+                                    g_strip_src = SrcDesc{ StripW, StripH, StripW,
+                                                           vic::BLK_KIND_GENERIC_16Bx2, 4,
+                                                           sv.src_fmt, vic::CACHE_WIDTH_64Bx4 };
                                     char stage[48];
                                     std::snprintf(stage, sizeof(stage), "vb:strip_%s", sv.name);
                                     VicStage("vs:5_sweep");

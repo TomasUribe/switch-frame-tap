@@ -63,8 +63,25 @@ def box_downscale(rows):
 
 
 def vic_rows(data):
+    """VIC output rows, reordered from A,R,G,B to R,G,B,A.
+
+    M16's fill proved the output byte order: asking A=1023 R=768 G=512 B=256
+    produced ff c0 80 40, so byte 0 is ALPHA. The software reference is R,G,B,A,
+    so without this swap every comparison is misaligned by one lane - and the
+    PNGs come out red-tinted, because byte 0 (alpha, pinned at 255) gets drawn
+    as red. That artifact is what sent M42 and M43 chasing a layout bug.
+    """
     stride = OUT_STRIDE * BPP
-    return [bytearray(data[y * stride: y * stride + OUT_W * BPP]) for y in range(OUT_H)]
+    rows = []
+    for y in range(OUT_H):
+        src = data[y * stride: y * stride + OUT_W * BPP]
+        r = bytearray(len(src))
+        r[0::4] = src[1::4]      # R <- byte1
+        r[1::4] = src[2::4]      # G <- byte2
+        r[2::4] = src[3::4]      # B <- byte3
+        r[3::4] = src[0::4]      # A <- byte0
+        rows.append(r)
+    return rows
 
 
 def write_png(path, rows, w):

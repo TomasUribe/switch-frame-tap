@@ -75,6 +75,69 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M43 RUN: it was never the layout - the source pixel format was wrong ***
+
+The dump path fix worked: `7 dumped`, zero `0xd401`, and the file checksums now
+agree with the engine's. So for the first time the VIC comparison is real data.
+
+**The `G_pitchkind` control differed** (10347312 vs A's 10672437), so the engine
+*is* reading our slot surface config. The "config ignored entirely" branch is
+ruled out.
+
+### First, a correction to M42
+
+M42 concluded three fields were "inert" from identical **byte sums**. A byte sum
+is blind to reordering - which is exactly what a layout change does. The md5s
+tell the real story: A, B and E share one md5 (genuinely identical, so luma width
+and cache width really are inert), but **C has A's byte sum with a different
+md5**, and `sorted(A) == sorted(C)`. Same bytes, different order.
+`SlotBlkHeight` is **live**; it permutes pixels. The on-console
+"(identical to A - field inert)" line repeats that same mistake and should be
+read as "same sum", nothing more.
+
+### The actual fault
+
+Per-lane comparison against a software de-swizzle of the same strip:
+
+| | out[1] | out[2] | out[3] |
+|---|---|---|---|
+| aligned (out=A,R,G,B vs src R,G,B) | 7.15 | 21.02 | 195.71 |
+| **shifted by one lane** | **1.87** | **1.69** | **0.70** |
+
+Under 2 LSB on every lane once shifted - filter-difference magnitude. And
+channel 0 is `min=255 max=255 distinct=1` in all seven variants.
+
+So the engine's output is `[0xFF, G_src, B_src, A_src]`: it consumed the
+source's **R byte as alpha**, slid R,G,B down one place, and forced alpha to max
+via `ConstantAlpha=1 / PlanarAlpha=1023`.
+
+**Geometry, scale and block-linear addressing were all correct - probably since
+M41.** The game's surface is R,G,B,A in memory, which the VIC calls
+**`PIXFMT_R8G8B8A8` (34)**, not the `A8B8G8R8` (33) we declared.
+
+### Why this took two extra runs
+
+M16's fill had already proved the VIC's **output** byte order is `A,R,G,B`
+(`ff c0 80 40` from A=1023/R=768/G=512/B=256). `tools/compare_vic.py` assumed
+`R,G,B,A`, so it drew byte 0 - alpha, pinned at 255 - as **red**. The
+"scrambled, red-tinted" image that sent M42 and M43 hunting for a layout bug was
+substantially a decoder artifact. The harness now reorders `A,R,G,B -> R,G,B,A`.
+
+Re-scoring M43's data with the corrected harness gives **74.63**, worse than the
+57.30 it printed before - because two misalignments were partially cancelling.
+The number that matters is what `P34_rgba` scores next run, not this one.
+
+### M44
+
+Sweep the source pixel format with the layout fixed at what M43 proved correct
+(pixels, blk_h 4, 64Bx4, kind GENERIC_16Bx2):
+
+- `P34_rgba` - `R8G8B8A8`, predicted correct
+- `P33_abgr` - `A8B8G8R8`, M43's control, expected to stay shifted one lane
+- `P32_argb` - `A8R8G8B8`
+
+If P34 lands under ~5 mean error, the VIC path is done and NVENC is next.
+
 ## M40-M42 RUNS: capture holds up; the VIC sweep was measuring garbage
 
 **M40 (the good run).** With the probe delayed to 180 s so it lands mid-race, and
@@ -471,7 +534,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M43)
+## The route itself: kernel debug SVCs (M32 -> M44)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:
