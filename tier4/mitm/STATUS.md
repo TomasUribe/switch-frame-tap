@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M55**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M56**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -64,9 +64,12 @@ process's framebuffer.
   killed `am`. M54 moved only the pool and I wrongly called that safe; it took
   **both**. With both on Applet the probe-time budget is **411,260 KB free**
   rather than 3,748 KB, so the 2 MB ceiling above is historical.
-  **But:** that is a measured *limit*, not a demonstrated allocation — nothing
-  larger than 2 MB has actually been taken yet (M56). Do not spend against a
-  number again without taking it first.
+  **M56 demonstrated it:** 16 MB granted on the first rung, Applet `+16,384 KB`
+  exactly, System flat to the KB, no fatal. The 2 MB ceiling is dead — but the
+  memory is **not free**: a 16 MB heap makes the one-time VIC setup ~6x slower
+  and every `SetMemoryAttribute`/`nvmapOwn` ~10x slower (5-8 ms -> 61-79 ms).
+  Take what a frame needs, not what the pool allows, until that curve is
+  understood.
 - **`handle_table_size` must be 512**, not the default 16 — `ams_mitm` uses 512.
   16 exhausted mid-run and made `smGetService("vi:m")` return `0xD201
   OutOfHandles`, which reads exactly like a permission refusal and is not one.
@@ -83,6 +86,71 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M56 RUN: 16 MB held in a sysmodule - and it is not free ***
+
+The ladder was `{16, 12, 10, 8, 4, 2}` MB, descending. It never descended:
+
+```
+SetMemoryHeapSize(16 MB) rc=0x0
+[before heap grab] pool 1 Applet  used= 100740 KB  free= 411260 KB
+[after  heap grab] pool 1 Applet  used= 117124 KB  free= 394876 KB   (+16384 = exactly 16 MB)
+[before heap grab] pool 2 System  used= 229140 KB  free=   8588 KB
+[after  heap grab] pool 2 System  used= 229140 KB  free=   8588 KB   (flat to the KB)
+```
+
+**A sysmodule is holding 16 MB — twice a 1080p frame — with the System pool and
+the System resource limit untouched.** Console ran 259 s with the game live,
+`txn=24099`, `vic=vb:released`, no fatal. VIC healthy: `job_fill` `OP_DONE` and
+wrote our memory, `job_blit_self` submitted, `nvdrv:t` still full mask.
+
+M50's claim is now properly retired, and it took all three of: pool_partition 1
+(M54), application_type 2 (M55), and actually taking the memory (M56).
+
+```
+capture region 16192 KB vs one 1080p frame 8100 KB -> FITS
+stage buf at +960 KB; full-frame capture would OVERLAP staging
+```
+
+### The cost, measured
+
+A 16 MB heap makes the one-time VIC setup path **~6x slower**, and every
+`SetMemoryAttribute`/`nvmapOwn` step **~10x slower**:
+
+| | M54 (2 MB) | M55 (2 MB) | M56 (16 MB) |
+|---|---|---|---|
+| heap -> job_fill (total setup) | 0.706 s | 0.742 s | **4.359 s** |
+| alloc_bufs -> open_vic | 0.071 s | 0.069 s | 0.684 s |
+| nvmap/attr block (8 steps) | 41 ms | 44 ms | **382 ms** |
+| per step | 5-8 ms | 5-9 ms | **61-79 ms** |
+| binder txn rate | 98.3/s | 97.4/s | 92.7/s |
+
+**The memset is not the cause.** 16 MB zeroed in <=26 ms (120.458 -> 120.484)
+against ~9 ms for 2 MB — sub-linear, and irrelevant at this scale. Nor is it a
+one-time cache writeback afterwards: the penalty repeats on *every* step
+(61, 73, 79, 74, 74 ms), not just the first.
+
+**Open question, not a conclusion.** Most likely the per-call cost of
+`svcSetMemoryAttribute` scales with the containing heap region (kernel memory
+block splitting/merging), but the log cannot distinguish that from alternatives.
+Cheap test in M57: request 10 MB instead of 16 and see whether the per-step cost
+tracks heap size. If it does, take only what a frame needs.
+
+This is worker-thread setup cost, not per-frame, and nothing froze. But 4.36 s
+is a window a user would feel, and the txn rate did dip ~5%, so it is recorded as
+a cost rather than folded into the success.
+
+### M57
+
+Two things, and they are independent:
+
+1. **Relayout.** `g_stage_buf = g_ind_buf + FbBlockRowStage` puts staging
+   983,040 B into a region that must now hold 8,294,400 B. Move staging past a
+   full frame — there is room (8,294,400 + 983,040 = 9,277,440 against
+   16,580,608 available). This is our own constant, not a platform limit, and it
+   is the only thing between here and a full-frame capture.
+2. **Size/cost curve.** 10 MB vs 16 MB, to find whether the setup penalty is
+   proportional to the heap.
 
 ## *** M55 RUN: application_type 2 - the memory ceiling is gone ***
 

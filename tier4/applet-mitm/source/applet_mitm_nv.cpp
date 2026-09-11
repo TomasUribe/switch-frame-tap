@@ -158,14 +158,20 @@ namespace ams::mitm::applet {
              * requirement - 5 MB and 3 MB return 0xca01 (InvalidSize) - and the
              * ladder still descends, so a refusal costs us nothing. */
             LogPools("before heap grab");
-            /* M55 IS MEASURE-ONLY, and the ladder is back at 2 MB on purpose.
-             * If application_type 2 moved us to the Applet resource-limit group,
-             * an 8 MB request would now SUCCEED - and reserving 8 MB against a
-             * shared limit is exactly what killed am in M50. M54 only escaped
-             * because it was refused (0x1003), which is luck, not safety.
-             * Read the budget this run; spend it in a later one, against a
-             * number we have actually measured. */
-            for (const size_t sz : { 2_MB }) {
+            /* M56 actually spends it. M55 measured 411,260 KB free at probe with
+             * BOTH gates on Applet (pool_partition 1, application_type 2), so
+             * this is a request against a measured number rather than an
+             * inferred one - the distinction M49/M54 got wrong.
+             *
+             * Sizes are 2 MB multiples: the kernel returns 0xca01 (InvalidSize)
+             * otherwise, which is what made 5 MB and 3 MB look like refusals.
+             *
+             * 8 MB is deliberately NOT the top rung. VicBufsEnd is 0x30000, so
+             * an 8 MB heap leaves 8,192,000 B of capture region against a
+             * 8,294,400 B frame - 102 KB short. 10 MB is the first rung where a
+             * full 1080p frame physically fits. The ladder descends, so a
+             * refusal costs nothing and we still learn the real ceiling. */
+            for (const size_t sz : { 16_MB, 12_MB, 10_MB, 8_MB, 4_MB, 2_MB }) {
                 const auto rc = os::SetMemoryHeapSize(sz);
                 LogLine("   SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
                 if (R_SUCCEEDED(rc)) { want = sz; break; }
@@ -220,6 +226,24 @@ namespace ams::mitm::applet {
                     static_cast<void *>(g_vic_cmd_buf),
                     static_cast<void *>(g_vic_dst_buf),
                     static_cast<void *>(g_vic_src_buf));
+            /* M56: state the fit arithmetic instead of eyeballing it later.
+             * g_ind_size = want - VicBufsEnd(0x30000); one 1080p frame is
+             * 8,294,400 B. Note the second constraint: g_stage_buf sits at
+             * g_ind_buf + FbBlockRowStage (983,040 B), so even when the region
+             * is large enough, a full-frame capture would run through the
+             * staging area. That relayout is its own milestone - this line only
+             * reports whether it is now the blocker. */
+            {
+                constexpr size_t OneFrame = 1920u * 1080u * 4u;
+                LogLine("   capture region %zu KB vs one 1080p frame %zu KB -> %s",
+                        g_ind_size / 1024, OneFrame / 1024,
+                        g_ind_size >= OneFrame ? "FITS" : "TOO SMALL");
+                LogLine("   stage buf at +%zu KB; full-frame capture %s",
+                        FbBlockRowStage / 1024,
+                        (g_ind_size >= OneFrame && FbBlockRowStage < OneFrame)
+                            ? "would OVERLAP staging - relayout is the next blocker"
+                            : "clear of staging");
+            }
             return true;
         }
 
