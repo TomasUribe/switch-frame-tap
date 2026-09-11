@@ -67,11 +67,69 @@ process's framebuffer.
 - **A zero address handed to the VIC hangs the engine**, and a hung VIC takes the
   compositor down with it. Every address is checked before submit.
 - **Read the SD in a card reader**, not over MTP.
+- **A device-shared region is not a surface.** Regions are merged by the kernel
+  when state/permission/attribute match, so several nvmap objects appear as one
+  block. Never assume a region's base is an allocation's base — find the
+  allocation by content.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## The live avenue: kernel debug SVCs (M32 -> M34, not yet run)
+## *** M34 RUN: THE DEBUG READ WORKS *** — and the region picker does not
+
+The NPDM fix was right. On hardware:
+
+```
+DebugActiveProcess(pid=142) rc=0x0 ATTACHED (and already detached)
+```
+
+**`svcReadDebugProcessMemory` returns the game's memory to us.** After nvmap,
+indirect layers and the display controller all refused, the kernel debug path is
+open. That is the single result this whole project was blocked on.
+
+What it read, however, was **not pixels**:
+
+```
+framebuffer candidate: base=0x14f5e6d000 size=41541632 (larger than one slot)
+slot0 +0x0        nonzero=18/32  78 e0 6a d9 73 00 00 00 00 00 e0 f5 14 00 00 00
+slot1 +0x870000   nonzero= 0/32  (all zero)
+slot2 +0x10E0000  nonzero= 0/32  (all zero)
+```
+
+Those 16 bytes are two 64-bit words, `0x73d96ae078` and `0x14f5e00000` — the
+second a pointer back into the same region. Heap bookkeeping. The selector took
+the first device-shared region >= 8,847,360 B, which is **41,541,632** bytes, not
+26,542,080: the swapchain sits *somewhere inside* that region, so the region base
+is not the surface origin, and the slot offsets were applied from the wrong zero.
+
+The `*** READ THE GAME'S FRAMEBUFFER ***` line in that log is my own message
+being over-eager — it only ever proved that some bytes were readable.
+
+**The search space is small.** Of the 24 regions logged, exactly one is big
+enough to hold the swapchain, with 14,999,552 B of slack — 3,662 page-aligned
+offsets to test. Note also the walk **hit its 1500-step cap**, so that map is
+truncated and there may be further regions above `0x1507b8b000`.
+
+Two side results from the same run: the VIC fill and self-blit are still
+**byte-exact** (`ff c0 80 40`, and the ramp `ff 00 00 11 / ff 04 00 11 …`), so the
+pipeline is healthy; and `2450` still returns `0x60A` with every handle shape, so
+the indirect-layer route stays closed.
+
+### M35 — find the surface instead of assuming where it starts
+
+Scan inside each device-shared region >= 26,542,080 B, at 4 KB steps, for this
+signature: the surface is A8B8G8R8 and a presented frame is **opaque**, so one of
+the four byte lanes is `0xFF` in every pixel. The first 64 bytes of a
+block-linear surface are the first GOB's first row — 16 consecutive pixels — so
+the 4-byte period holds there.
+
+Sixteen `0xFF` in one lane is weak alone. Requiring **the same lane at all three
+slot offsets at once** is not: heap data does not reproduce that pattern at
+exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring at
+least one other lane to vary. Step cap raised to 4000 with an explicit
+completion flag, read budget capped at 24,000 so the freeze stays bounded.
+
+## The route itself: kernel debug SVCs (M32 -> M35)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:

@@ -1107,6 +1107,51 @@ namespace ams::mitm::applet {
          * game stopped instead, because a frozen frame is the cleaner sample. */
         struct RegionHit { u64 base; u64 size; u32 state; u32 perm; u32 attr; u32 devices; };
 
+        /* The swapchain is ONE nvmap object: three slots of 8,847,360 B, laid out
+         * contiguously at the offsets the binder parcels already handed us. */
+        constexpr u64 FbSlotSize   = 8847360ull;
+        constexpr u64 FbSwapSize   = 3ull * FbSlotSize;               /* 26,542,080 */
+        constexpr u64 FbSlotOff[3] = { 0ull, 0x870000ull, 0x10E0000ull };
+
+        struct FbCandidate { u64 addr; u32 lane; u32 varied; u8 head[3][16]; };
+
+        /* M34 attached and read successfully - and read allocator metadata.
+         * The region it picked is 41.5 MB, not 26,542,080: the swapchain lives
+         * SOMEWHERE INSIDE it, so the region's base is not the surface's origin.
+         * The two 64-bit words it sampled were 0x73d96ae078 and 0x14f5e00000 -
+         * the second a pointer back into that same region. Heap bookkeeping.
+         *
+         * So scan for the surface instead of assuming where it starts. The
+         * signature: the surface is A8B8G8R8 and a presented frame is opaque, so
+         * one of the four byte lanes is 0xFF in every pixel. The first 64 bytes
+         * of a block-linear surface are the first GOB's first row - 16
+         * consecutive pixels - so the 4-byte period does hold there.
+         *
+         * Sixteen 0xFF in one lane is a weak signal by itself. Requiring it at
+         * all THREE slot offsets simultaneously is not: allocator data does not
+         * repeat that pattern at exactly 8,847,360-byte spacing, twice over. */
+        s32 FbPixelLane(const u8 *p, u32 *out_varied) {
+            for (u32 lane = 0; lane < 4; ++lane) {
+                bool opaque = true;
+                for (u32 i = 0; i < 16; ++i) {
+                    if (p[i * 4 + lane] != 0xFF) { opaque = false; break; }
+                }
+                if (!opaque) { continue; }
+
+                /* reject a uniform fill: at least one other lane must vary */
+                u32 varied = 0;
+                for (u32 o = 0; o < 4; ++o) {
+                    if (o == lane) { continue; }
+                    for (u32 i = 1; i < 16; ++i) {
+                        if (p[i * 4 + o] != p[o]) { ++varied; break; }
+                    }
+                }
+                if (out_varied != nullptr) { *out_varied = varied; }
+                return static_cast<s32>(lane);
+            }
+            return -1;
+        }
+
         void TryDebugCapture() {
             if (!g_dbg_armed) { return; }
 
@@ -1125,63 +1170,74 @@ namespace ams::mitm::applet {
             }
 
             /* ---- from here the game is STOPPED. No logging, no SD, no waits. */
-            RegionHit hits[24] = {};
-            u32  nhits = 0, steps = 0;
-            u64  fb_base = 0, fb_size = 0;
-            u8   sample[3][32] = {};
-            bool sampled[3] = {};
-            ::ams::Result r_attach{}, r_read = ::ams::svc::ResultInvalidHandle();
+            RegionHit   hits[24] = {};   u32 nhits = 0;
+            RegionHit   big[6]   = {};   u32 nbig  = 0;
+            FbCandidate cand[6]  = {};   u32 ncand = 0;
+            u32  steps = 0, reads = 0, budget = 24000;
+            bool walk_complete = false;
+            ::ams::Result r_attach{};
             bool attached = false;
 
             ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
             r_attach = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value);
             if (R_SUCCEEDED(r_attach)) {
                 attached = true;
+
+                /* pass 1: map the address space, keeping every device-shared
+                 * region large enough to contain the whole swapchain. M34 capped
+                 * at 1500 steps and hit the cap, so the map it logged was
+                 * truncated - 4000 with an explicit completion flag now. */
                 u64 addr = 0;
-                for (; steps < 1500; ++steps) {
+                for (; steps < 4000; ++steps) {
                     ::ams::svc::MemoryInfo mi = {};
                     ::ams::svc::PageInfo   pi = {};
-                    if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr))) { break; }
-                    if (mi.size == 0) { break; }
+                    if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr))) { walk_complete = true; break; }
+                    if (mi.size == 0) { walk_complete = true; break; }
 
-                    /* The kernel splits memory blocks whenever state, permission
-                     * or ATTRIBUTE changes, so an nvmap-pinned range appears as
-                     * its own entry even though it sits inside the game's heap -
-                     * carrying MemoryAttribute_DeviceShared and device_count > 0.
-                     * That is an exact discriminator for framebuffer memory, far
-                     * better than "biggest region", which would just find the
-                     * heap and sample its metadata. */
-                    const u32 attr = static_cast<u32>(mi.attribute);
-                    const bool dev = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
+                    const u32  attr = static_cast<u32>(mi.attribute);
+                    const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
 
-                    if ((dev || mi.size >= 8 * 1024 * 1024) && nhits < 24) {
-                        hits[nhits++] = { mi.base_address, mi.size,
-                                          static_cast<u32>(mi.state), static_cast<u32>(mi.permission),
-                                          attr, mi.device_count };
+                    if (dev && mi.size >= FbSwapSize && nbig < 6) {
+                        big[nbig++] = { mi.base_address, mi.size, static_cast<u32>(mi.state),
+                                        static_cast<u32>(mi.permission), attr, mi.device_count };
                     }
-                    /* the swapchain is exactly 3 x 8,847,360 */
-                    if (dev && fb_base == 0 && mi.size >= 8847360ull) {
-                        fb_base = mi.base_address;
-                        fb_size = mi.size;
-                        if (mi.size == 26542080ull) { break; }   /* exact - stop early, game is frozen */
+                    if ((dev || mi.size >= 8 * 1024 * 1024) && nhits < 24) {
+                        hits[nhits++] = { mi.base_address, mi.size, static_cast<u32>(mi.state),
+                                          static_cast<u32>(mi.permission), attr, mi.device_count };
                     }
                     const u64 next = mi.base_address + mi.size;
-                    if (next <= addr) { break; }
+                    if (next <= addr) { walk_complete = true; break; }
                     addr = next;
                 }
 
-                /* Sample all three swapchain slots. If this really is the
-                 * swapchain, each slot holds a different rendered frame. */
-                if (fb_base != 0) {
-                    static const u64 slot_off[3] = { 0x0, 0x870000, 0x10E0000 };
-                    for (u32 i = 0; i < 3; ++i) {
-                        if (slot_off[i] + 32 > fb_size) { continue; }
-                        const auto r = ::ams::svc::ReadDebugProcessMemory(
-                            reinterpret_cast<uintptr_t>(sample[i]), dbg, fb_base + slot_off[i], 32);
-                        sampled[i] = R_SUCCEEDED(r);
-                        if (i == 0) { r_read = r; }
+                /* pass 2: inside each candidate region, look for an offset whose
+                 * three slot positions all carry the opaque-pixel signature. */
+                u8 s[3][64];
+                for (u32 r = 0; r < nbig && ncand < 6 && budget > 0; ++r) {
+                    const u64 last = big[r].size - FbSwapSize;
+                    for (u64 off = 0; off <= last && ncand < 6 && budget > 0; off += 0x1000) {
+                        --budget; ++reads;
+                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(s[0]), dbg, big[r].base + off, 64))) { continue; }
+                        u32 varied = 0;
+                        const s32 lane = FbPixelLane(s[0], std::addressof(varied));
+                        if (lane < 0) { continue; }
+
+                        bool all_slots = true;
+                        for (u32 k = 1; k < 3; ++k) {
+                            --budget; ++reads;
+                            if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(s[k]), dbg, big[r].base + off + FbSlotOff[k], 64))
+                                || FbPixelLane(s[k], nullptr) != lane) { all_slots = false; break; }
+                        }
+                        if (!all_slots) { continue; }
+
+                        cand[ncand].addr   = big[r].base + off;
+                        cand[ncand].lane   = static_cast<u32>(lane);
+                        cand[ncand].varied = varied;
+                        for (u32 k = 0; k < 3; ++k) { std::memcpy(cand[ncand].head[k], s[k], 16); }
+                        ++ncand;
                     }
                 }
+
                 ::ams::svc::CloseHandle(dbg);   /* resumes the game */
             }
             /* ---- game is running again; safe to log ------------------------ */
@@ -1192,49 +1248,51 @@ namespace ams::mitm::applet {
                     attached ? "ATTACHED (and already detached)" : "failed");
             if (!attached) { VicStage("dbg:2_FAILED"); return; }
 
-            LogLine("   walked %u regions; %u of interest (device-shared, or >= 8 MB):", steps, nhits);
+            LogLine("   walked %u regions (%s); %u of interest; %u big enough for the swapchain; %u probe reads",
+                    steps, walk_complete ? "complete" : "HIT THE STEP CAP", nhits, nbig, reads);
             for (u32 i = 0; i < nhits; ++i) {
                 LogLine("     [%2u] base=0x%010llx size=%10llu state=0x%02x perm=0x%x attr=0x%x devs=%u%s",
                         i, static_cast<unsigned long long>(hits[i].base),
                         static_cast<unsigned long long>(hits[i].size),
                         hits[i].state, hits[i].perm, hits[i].attr, hits[i].devices,
-                        (hits[i].size == 26542080ull) ? "  <== EXACT SWAPCHAIN SIZE" : "");
+                        (hits[i].size == FbSwapSize) ? "  <== EXACT SWAPCHAIN SIZE" : "");
             }
 
-            if (fb_base == 0) {
-                LogLine("   no device-shared region >= 8,847,360 B found");
-                VicStage("dbg:no_fb_region");
+            if (nbig == 0) {
+                LogLine("   no device-shared region >= %llu B - the swapchain is not where we are looking",
+                        static_cast<unsigned long long>(FbSwapSize));
+                VicStage("dbg:no_big_region");
+                return;
+            }
+            for (u32 i = 0; i < nbig; ++i) {
+                LogLine("   searchable region %u: base=0x%010llx size=%llu (slack %lld B)",
+                        i, static_cast<unsigned long long>(big[i].base),
+                        static_cast<unsigned long long>(big[i].size),
+                        static_cast<long long>(big[i].size - FbSwapSize));
+            }
+
+            if (ncand == 0) {
+                LogLine("   no offset matched the opaque-pixel signature at all three slots");
+                LogLine("   (the surface may not be opaque, or it is outside the scanned regions)");
+                VicStage("dbg:no_signature");
                 return;
             }
 
-            LogLine("   framebuffer candidate: base=0x%010llx size=%llu (%s)",
-                    static_cast<unsigned long long>(fb_base),
-                    static_cast<unsigned long long>(fb_size),
-                    (fb_size == 26542080ull) ? "EXACT 3-slot swapchain" : "larger than one slot");
-
-            {
-                static const char *nm[3] = { "slot0 +0x0", "slot1 +0x870000", "slot2 +0x10E0000" };
-                u32 total_nz = 0;
-                for (u32 i = 0; i < 3; ++i) {
-                    if (!sampled[i]) { LogLine("   %s: read failed", nm[i]); continue; }
-                    u32 nz = 0;
-                    char hex[3 * 16 + 1];
-                    int k = 0;
-                    for (u32 b = 0; b < 16; ++b) { k += std::snprintf(hex + k, sizeof(hex) - k, "%02x ", sample[i][b]); }
-                    for (u32 b = 0; b < 32; ++b) { if (sample[i][b] != 0) { nz++; } }
-                    total_nz += nz;
-                    LogLine("   %-17s nonzero=%2u/32  %s", nm[i], nz, hex);
+            for (u32 i = 0; i < ncand; ++i) {
+                LogLine("   *** CANDIDATE %u: addr=0x%010llx  alpha lane=%u  varied=%u ***",
+                        i, static_cast<unsigned long long>(cand[i].addr), cand[i].lane, cand[i].varied);
+                for (u32 k = 0; k < 3; ++k) {
+                    const u8 *h = cand[i].head[k];
+                    LogLine("       slot%u +0x%07llx: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x",
+                            k, static_cast<unsigned long long>(FbSlotOff[k]),
+                            h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
+                            h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]);
                 }
-                if (total_nz > 0) {
-                    LogLine("   *** READ THE GAME'S FRAMEBUFFER *** (%u nonzero bytes across 3 slots)", total_nz);
-                    VicStage("dbg:READ_OK");
-                } else {
-                    LogLine("   all three slots read as zero - region found but not the pixels");
-                    VicStage("dbg:read_all_zero");
-                }
-                AMS_UNUSED(r_read);
             }
-            VicStage("dbg:done");
+            LogLine("   *** FRAMEBUFFER LOCATED: 0x%010llx (offset 0x%llx into its region) ***",
+                    static_cast<unsigned long long>(cand[0].addr),
+                    static_cast<unsigned long long>(cand[0].addr - big[0].base));
+            VicStage("dbg:FB_FOUND");
         }
 
         void VicWorkerThread(void *) {
