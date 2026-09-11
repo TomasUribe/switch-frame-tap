@@ -75,7 +75,68 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M35 RUN: THE SWAPCHAIN IS LOCATED ***
+## *** M36 RUN: LIVE CAPTURE IS FEASIBLE AT 60 fps ***
+
+```
+drained 44 debug events; ContinueDebugEvent rc=0x0 -> GAME RUNNING WHILE WE STAY ATTACHED
+live sample over 120 ms: *** PIXELS CHANGED - the game is presenting while attached ***
+    t0: ff ff ff ff ff ff ff ff
+    t1: aa aa af ff ab ab af ff
+read 983040 B of block-row in 776 us -> 1265 MB/s
+=> one full 8,847,360 B slot would take ~6988 us; 60 fps needs <= 16667 us  [FEASIBLE]
+```
+
+Three separate results, and together they settle the architecture:
+
+1. **`ContinueDebugEvent(ExceptionHandled | ContinueAll)` resumes the game with
+   the debug handle still held.** Reading no longer requires freezing the target.
+2. **The pixels move underneath us** — sampled 120 ms apart while attached, the
+   corner went from flat white to `aa aa af ff`. The game is presenting live.
+3. **1265 MB/s.** A whole 8,847,360 B slot reads in ~7.0 ms against a 16.67 ms
+   frame budget. Full-resolution 60 fps capture has the headroom.
+
+The exact-size fast path also worked: `5 big enough (1 exactly 26542080 B); 3
+probe reads` — the search collapsed from ~24,000 reads to 3, and the frozen
+window to ~43 ms, nearly all of it the region walk rather than the search.
+
+ASLR confirmed a third time: the swapchain was at `0x1a3d5e6000` this run,
+`0x10851e6000` the last.
+
+### The one misleading number, and why it is not a problem
+
+```
+block-row stats: nonzero=516752/983040  distinct byte values=238  opaque pixels=0/245760
+first 16 B: aa aa af ff  ab ab af ff  ac ac b0 ff  ae ae b2 ff
+```
+
+`opaque pixels=0/245760` looks alarming and is an artifact of my own code. At
+the instant of detection the corner was **flat white**, so all four byte lanes
+were `0xFF` and the scanner picked lane 0 for being first. The stat then counted
+lane 0 — which is **red** — across the strip. The real alpha lane is **3**:
+`aa aa af ff` is A8B8G8R8 stored little-endian as **R,G,B,A**.
+
+A second bug of mine allowed it: `FbPixelLane` computed `varied` and never acted
+on it, so a uniform block passed a test whose comment said it should be rejected.
+The location was still correct because the exact-size match carried it.
+
+The strip itself is unmistakably an image: **52.6% nonzero, 238 of 256 distinct
+byte values**, and neighbouring pixels differing by one or two
+(`aa aa af / ab ab af / ac ac b0 / ae ae b2`) — a smooth grey-blue gradient.
+
+### M37 — put a real frame on the SD card
+
+Enough measuring. M37 streams a whole slot to `sdmc:/applet-mitm-frame.bin` in
+64 KB chunks while the game runs, writes the geometry beside it in
+`applet-mitm-frame.txt`, and `tools/deswizzle.py` turns it into a PNG on the PC.
+Block-linear de-swizzling is done off-console precisely so this step depends on
+nothing we have not already proven.
+
+Also fixed: the `varied == 0` hole, the alpha lane (now measured from the strip,
+with all four lane counts logged instead of one guessed lane), and an
+exactly-sized device-shared region is now accepted on size alone — the corner is
+allowed to be flat white.
+
+## M35 run: the swapchain is located
 
 ```
 searchable region 1: base=0x10851e6000 size=26542080 (slack 0 B)
@@ -186,7 +247,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M36)
+## The route itself: kernel debug SVCs (M32 -> M37)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:
