@@ -167,6 +167,49 @@ namespace ams {
             mitm::applet::LogLine("   for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB");
         }
 
+        /* M48 turned up a contradiction worth resolving before touching
+         * pool_partition: at BOOT this process reports total=13076 KB with
+         * 11380 KB free, but by the time the probe runs M47 measured
+         * total=4720 KB with 976 KB free. The budget appears to SHRINK once a
+         * game is resident. If 11 MB is genuinely available at the right moment,
+         * a whole 1080p frame (7913 KB) fits and the NPDM change is unnecessary.
+         *
+         * So: measure at boot, try the ladder, then RELEASE immediately. M27
+         * already proved that holding several MB from the System pool during
+         * boot fatals a different sysmodule with LimitReached, and System has
+         * only 14 MB free in total. Learning the ceiling is worth a run;
+         * risking an unbootable console to hold it is not. */
+        void ProbeHeapCeilingAtBoot() {
+            u64 t = 0, u = 0;
+            svc::GetInfo(std::addressof(t), svc::InfoType_TotalMemorySize, svc::PseudoHandle::CurrentProcess, 0);
+            svc::GetInfo(std::addressof(u), svc::InfoType_UsedMemorySize,  svc::PseudoHandle::CurrentProcess, 0);
+            mitm::applet::LogLine("   [boot] process total=%llu KB used=%llu KB free=%lld KB",
+                                  static_cast<unsigned long long>(t / 1024),
+                                  static_cast<unsigned long long>(u / 1024),
+                                  static_cast<long long>((static_cast<s64>(t) - static_cast<s64>(u)) / 1024));
+
+            size_t best = 0;
+            for (const size_t sz : { size_t(8_MB), size_t(6_MB), size_t(4_MB), size_t(2_MB) }) {
+                const auto rc = os::SetMemoryHeapSize(sz);
+                mitm::applet::LogLine("   [boot] SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
+                if (R_SUCCEEDED(rc)) { best = sz; break; }
+            }
+            if (best > 0) {
+                u64 t2 = 0, u2 = 0;
+                svc::GetInfo(std::addressof(t2), svc::InfoType_TotalMemorySize, svc::PseudoHandle::CurrentProcess, 0);
+                svc::GetInfo(std::addressof(u2), svc::InfoType_UsedMemorySize,  svc::PseudoHandle::CurrentProcess, 0);
+                mitm::applet::LogLine("   [boot] holding %zu MB: total=%llu KB used=%llu KB",
+                                      best / (1024 * 1024),
+                                      static_cast<unsigned long long>(t2 / 1024),
+                                      static_cast<unsigned long long>(u2 / 1024));
+                const auto rel = os::SetMemoryHeapSize(0);
+                mitm::applet::LogLine("   [boot] RELEASED rc=0x%x - not held through boot, M27's 4 MB starved another sysmodule",
+                                      rel.GetValue());
+            }
+            mitm::applet::LogLine("   *** LARGEST GRANTABLE HEAP AT BOOT: %zu MB *** (a 1080p frame needs 8 MB)",
+                                  best / (1024 * 1024));
+        }
+
         Result ServerManager::OnNeedsToAccept(int port_index, Server *server) {
             std::shared_ptr<::Service> fsrv;
             sm::MitmProcessInfo client_info;
@@ -221,7 +264,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M48: up. NVENC channel works. Surveying every memory pool at boot.");
+        mitm::applet::LogLine("applet-mitm M49: up. Is 11 MB free at boot real? Measuring the budget 3 ways.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
@@ -232,6 +275,7 @@ namespace ams {
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
         LogMemoryPools();
+        ProbeHeapCeilingAtBoot();
 
         mitm::applet::LogLine("probe fires at t=%u s; frame dump to SD: %s",
                               mitm::applet::g_probe_delay_s,

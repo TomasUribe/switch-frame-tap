@@ -100,7 +100,22 @@ namespace ams::mitm::applet {
             if (g_vic_heap != 0) { return true; }
 
             size_t want = 0;
-            for (const size_t sz : { 8_MB, 6_MB, 5_MB, 4_MB, 3_MB, 2_MB }) {
+            /* measurement point 2 of 3: what the budget looks like at PROBE
+             * time, with a game resident - to be compared against the boot
+             * figure. 5 MB and 3 MB are dropped from the ladder: they returned
+             * 0xca01 (kernel InvalidSize) because svcSetHeapSize requires 2 MB
+             * granularity, so they were never valid requests and only added
+             * noise. */
+            {
+                u64 t = 0, u = 0;
+                ::ams::svc::GetInfo(std::addressof(t), ::ams::svc::InfoType_TotalMemorySize, ::ams::svc::PseudoHandle::CurrentProcess, 0);
+                ::ams::svc::GetInfo(std::addressof(u), ::ams::svc::InfoType_UsedMemorySize,  ::ams::svc::PseudoHandle::CurrentProcess, 0);
+                LogLine("   [probe, BEFORE heap grab] process total=%llu KB used=%llu KB free=%lld KB",
+                        static_cast<unsigned long long>(t / 1024),
+                        static_cast<unsigned long long>(u / 1024),
+                        static_cast<long long>((static_cast<s64>(t) - static_cast<s64>(u)) / 1024));
+            }
+            for (const size_t sz : { 8_MB, 6_MB, 4_MB, 2_MB }) {
                 const auto rc = os::SetMemoryHeapSize(sz);
                 LogLine("   SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
                 if (R_SUCCEEDED(rc)) { want = sz; break; }
@@ -125,7 +140,7 @@ namespace ams::mitm::applet {
                 ::ams::svc::GetInfo(std::addressof(used),   ::ams::svc::InfoType_UsedMemorySize,          ::ams::svc::PseudoHandle::CurrentProcess, 0);
                 ::ams::svc::GetInfo(std::addressof(srtot),  ::ams::svc::InfoType_SystemResourceSizeTotal, ::ams::svc::PseudoHandle::CurrentProcess, 0);
                 ::ams::svc::GetInfo(std::addressof(srused), ::ams::svc::InfoType_SystemResourceSizeUsed,  ::ams::svc::PseudoHandle::CurrentProcess, 0);
-                LogLine("   MEMORY BUDGET: total=%llu KB used=%llu KB free=%lld KB | sysresource %llu/%llu KB",
+                LogLine("   [probe, AFTER heap grab] total=%llu KB used=%llu KB free=%lld KB | sysresource %llu/%llu KB",
                         static_cast<unsigned long long>(tot / 1024),
                         static_cast<unsigned long long>(used / 1024),
                         static_cast<long long>((static_cast<s64>(tot) - static_cast<s64>(used)) / 1024),

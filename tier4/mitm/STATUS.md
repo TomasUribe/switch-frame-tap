@@ -75,6 +75,61 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M48 RUN: we are in the one pool that is full ***
+
+Boot-only test - no game, no dock, 20 seconds:
+
+```
+pool 0 Application   total= 3363840 KB  used=      0 KB  free= 3363840 KB
+pool 1 Applet        total=  512000 KB  used=     64 KB  free=  511936 KB
+pool 2 System        total=  237728 KB  used= 223232 KB  free=    14496 KB
+pool 3 SystemUnsafe  total=   45184 KB  used=  43180 KB  free=     2004 KB
+THIS PROCESS (pool_partition 2, at boot): total=13076 KB used=1696 KB free=11380 KB
+```
+
+**System is 94% used, with 14 MB free across every sysmodule on the console.**
+Applet has **500 MB** free and Application **3.2 GB**. So `pool_partition` is not
+a marginal lever - it is the whole question.
+
+Two cautions on reading that table. Application's 3.2 GB is free only because no
+game was running; with MK8 resident most of it is gone, so Applet's 500 MB is the
+honest target. And a sysmodule may simply not be permitted to allocate from
+those pools - untested.
+
+### The contradiction worth resolving first
+
+`THIS PROCESS ... total=13076 KB free=11380 KB` **at boot**, against M47's
+`total=4720 KB free=976 KB` at probe time. Our own budget appears to *shrink*
+once a game is resident - and 11,380 KB free at boot is already more than a whole
+1080p frame needs (7913 KB).
+
+If that headroom is real at the right moment, a frame fits, the strip-wise design
+becomes a choice rather than a constraint, and **the NPDM change is unnecessary**.
+Two readings fit the data and imply very different things: either M47's figure
+was taken after the heap and transfer memory were already committed and measures
+something else, or the budget genuinely varies with system load. They are
+distinguishable by measurement, so measure rather than guess.
+
+### M49
+
+Three measurement points in one run - **boot**, **probe before the heap grab**,
+**probe after** - plus the heap ladder retried **at boot**, when 11 MB appears
+free.
+
+The boot ladder grabs and then **immediately releases**. M27 already proved that
+holding several MB from the System pool during boot fatals a *different*
+sysmodule with `LimitReached`, and System has only 14 MB free in total. Learning
+the ceiling is worth a run; risking an unbootable console to hold it is not. The
+release `rc` is logged, so a failed release is visible rather than silent.
+
+The ladder also drops 5 MB and 3 MB: they returned `0xca01` (kernel
+`InvalidSize`) because `svcSetHeapSize` requires 2 MB granularity, so they were
+never valid requests and only added noise.
+
+`*** LARGEST GRANTABLE HEAP AT BOOT: N MB ***` is the line that decides the next
+move. 8 MB means a whole frame fits and NVENC has room; 2 MB means the budget is
+genuinely fixed and `pool_partition` becomes the next thing to try.
+
 ## *** M47 RUN: NVENC CHANNEL WORKS, and the memory budget is brutal ***
 
 Handheld, so 1280x720 of content inside the usual 1920x1080 surface. The layout
@@ -756,7 +811,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M48)
+## The route itself: kernel debug SVCs (M32 -> M49)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:
