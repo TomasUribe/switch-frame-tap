@@ -59,7 +59,13 @@ namespace ams::mitm::applet::vic {
     constexpr u32 BLK_KIND_PITCH        = 0;
     constexpr u32 BLK_KIND_GENERIC_16Bx2 = 1;
     /* cache widths */
-    constexpr u32 CACHE_WIDTH_64Bx4 = 2;
+    /* Which are legal per libdrm vic.h: BL = block-linear 16Bx2, PL = pitch.
+     * 64Bx4 and 128Bx2 are valid for both; 16Bx16/32Bx8 are BL only. */
+    constexpr u32 CACHE_WIDTH_16Bx16 = 0;   /* BL only */
+    constexpr u32 CACHE_WIDTH_32Bx8  = 1;   /* BL only */
+    constexpr u32 CACHE_WIDTH_64Bx4  = 2;   /* BL + PL */
+    constexpr u32 CACHE_WIDTH_128Bx2 = 3;   /* BL + PL */
+    constexpr u32 CACHE_WIDTH_256Bx1 = 4;   /* PL only */
 
     #pragma pack(push, 1)
 

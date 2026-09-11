@@ -329,10 +329,15 @@ namespace ams::mitm::applet {
          *                would not tell us. */
         enum class VicJob { Fill, BlitSelf, BlitGame, BlitStrip };
 
-        struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt; };
+        /* stride_px is what goes into SlotLumaWidth (+1). For pitch-linear that
+         * is plainly the pixel stride. For BLOCK-linear nobody has told us
+         * whether the field wants pixels or BYTES: libdrm only ever blits
+         * pitch surfaces and marks both SlotBlkHeight and SlotCacheWidth
+         * "XXX". So it is swept below rather than guessed. */
+        struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt, cache_w; };
 
         /* our own pitch-linear 64x64 buffer, stride 256 px like the destination */
-        constexpr SrcDesc SelfSrc { DstW, DstH, DstStridePx, vic::BLK_KIND_PITCH, 0, vic::PIXFMT_A8B8G8R8 };
+        constexpr SrcDesc SelfSrc { DstW, DstH, DstStridePx, vic::BLK_KIND_PITCH, 0, vic::PIXFMT_A8B8G8R8, vic::CACHE_WIDTH_64Bx4 };
 
         struct OutDesc { u32 w, h, stride_px; };
 
@@ -350,11 +355,30 @@ namespace ams::mitm::applet {
          * the VIC, which takes the compositor and the console with it. */
         constexpr u32 StripW = 1920, StripH = 128;
         constexpr SrcDesc StripSrc { StripW, StripH, StripW,
-                                     vic::BLK_KIND_GENERIC_16Bx2, 4, vic::PIXFMT_A8B8G8R8 };
+                                     vic::BLK_KIND_GENERIC_16Bx2, 4, vic::PIXFMT_A8B8G8R8,
+                                     vic::CACHE_WIDTH_64Bx4 };
+        /* set per variant before each BlitStrip submit */
+        constinit SrcDesc g_strip_src = StripSrc;
 
         /* 4x downscale into the existing 64 KB destination. The stride is
          * aligned to 256 px the way libdrm aligns every VIC surface (M13):
          * 512 px = 2048 B, x 32 rows = 65536 B, exactly DstSize. */
+        /* M41 produced a completed blit whose pixels were scrambled: the right
+         * brightness structure, no coherent image. That is a source-LAYOUT
+         * error, not scale or crop. Three fields could cause it and none has a
+         * reference, so sweep them in one boot the way M16 settled SETCL. */
+        struct StripVariant { const char *name; u32 luma_px; u32 blk_h; u32 cache_w; };
+        constexpr StripVariant StripVariants[] = {
+            { "A_px_bh4",   StripW,     4, vic::CACHE_WIDTH_64Bx4  },  /* M41, known wrong */
+            { "B_byt_bh4",  StripW * 4, 4, vic::CACHE_WIDTH_64Bx4  },  /* luma width in BYTES */
+            { "C_px_bh0",   StripW,     0, vic::CACHE_WIDTH_64Bx4  },
+            { "D_byt_bh0",  StripW * 4, 0, vic::CACHE_WIDTH_64Bx4  },
+            { "E_px_bh4_c0",StripW,     4, vic::CACHE_WIDTH_16Bx16 },  /* BL-only cache width */
+            { "F_byt_bh1",  StripW * 4, 1, vic::CACHE_WIDTH_64Bx4  },
+        };
+        constexpr u32 StripVariantCount = sizeof(StripVariants) / sizeof(StripVariants[0]);
+        static_assert(StripW * 4 - 1 <= 16383);   /* SlotLumaWidth is 14 bits */
+
         constexpr OutDesc StripOut { 480, 32, 512 };
         constexpr u32 StripOutSize = StripOut.stride_px * 4 * StripOut.h;
         static_assert(StripOutSize <= DstSize);
@@ -421,7 +445,7 @@ namespace ams::mitm::applet {
             s->SlotPixelFormat   = src.pixfmt;
             s->SlotBlkKind       = src.blk_kind;
             s->SlotBlkHeight     = src.blk_h_log2;
-            s->SlotCacheWidth    = vic::CACHE_WIDTH_64Bx4;
+            s->SlotCacheWidth    = src.cache_w;
             s->SlotSurfaceWidth  = src.w - 1;
             s->SlotSurfaceHeight = src.h - 1;
             s->SlotLumaWidth     = src.stride_px - 1;
@@ -510,7 +534,7 @@ namespace ams::mitm::applet {
                 case VicJob::Fill:     FillClearConfig(cfg);            break;
                 case VicJob::BlitSelf:  FillBlitConfig(cfg, SelfSrc,   SelfOut);  break;
                 case VicJob::BlitGame:  FillBlitConfig(cfg, c.game_src, SelfOut); break;
-                case VicJob::BlitStrip: FillBlitConfig(cfg, StripSrc,  StripOut); break;
+                case VicJob::BlitStrip: FillBlitConfig(cfg, g_strip_src, StripOut); break;
             }
 
             auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
@@ -858,7 +882,8 @@ namespace ams::mitm::applet {
         {
             const SrcDesc game_src{ g_game_surface.width, g_game_surface.height,
                                     g_game_surface.stride_px, vic::BLK_KIND_GENERIC_16Bx2,
-                                    g_game_surface.block_h_log2, g_game_surface.pix_format };
+                                    g_game_surface.block_h_log2, g_game_surface.pix_format,
+                                    vic::CACHE_WIDTH_64Bx4 };
             const JobCtx ctx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr,
                               (self_addr != 0) ? self_addr : src_addr, 0,
                               cfg_handle, dst_handle, src_handle, game_src };
@@ -1223,9 +1248,10 @@ namespace ams::mitm::applet {
             if (R_FAILED(fs::CreateFile(path, static_cast<s64>(len)))) { return false; }
             fs::FileHandle f;
             if (R_FAILED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Write))) { return false; }
-            const bool ok = R_SUCCEEDED(fs::WriteFile(f, 0, buf, len, fs::WriteOption::Flush));
+            const auto wrc = fs::WriteFile(f, 0, buf, len, fs::WriteOption::Flush);
             fs::CloseFile(f);
-            return ok;
+            if (R_FAILED(wrc)) { LogLine("   WriteBufToSd(%s) rc=0x%x", path, wrc.GetValue()); }
+            return R_SUCCEEDED(wrc);
         }
 
         constexpr const char *StripBinPath = "sdmc:/applet-mitm-strip.bin";
@@ -1288,6 +1314,7 @@ namespace ams::mitm::applet {
             u32  cap_over = 0, slot_hits[4] = {};
             u32  strip_own_rc = 0, strip_pin = 0;
             bool strip_read_ok = false, strip_blit_ok = false, strip_dumped = false, vic_dumped = false;
+            u32  strip_ok_count = 0, strip_dump_count = 0;
             bool dumped = false;
             u32  nonzero = 0, distinct = 0, lane_ff[4] = {}, total_px = 0;
             u8   live_a[16] = {}, live_b[16] = {};
@@ -1397,14 +1424,27 @@ namespace ams::mitm::applet {
                                  * cached writes must reach memory first */
                                 armDCacheFlush(g_ind_buf, FbBlockRow);
 
-                                VicStage("vs:4_blit");
+                                VicStage("vs:4_dump_strip");
+                                strip_dumped = WriteBufToSd(StripBinPath, g_ind_buf, FbBlockRow);
+
                                 const JobCtx sctx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr,
                                                    cap_addr, 0, 0, 0, 0, SelfSrc };
-                                strip_blit_ok = RunOneJob("vb:job_blit_strip", VicJob::BlitStrip, true, sctx);
+                                for (u32 v = 0; v < StripVariantCount; ++v) {
+                                    const StripVariant &sv = StripVariants[v];
+                                    g_strip_src = SrcDesc{ StripW, StripH, sv.luma_px,
+                                                           vic::BLK_KIND_GENERIC_16Bx2, sv.blk_h,
+                                                           vic::PIXFMT_A8B8G8R8, sv.cache_w };
+                                    char stage[48];
+                                    std::snprintf(stage, sizeof(stage), "vb:strip_%s", sv.name);
+                                    VicStage("vs:5_sweep");
+                                    if (RunOneJob(stage, VicJob::BlitStrip, true, sctx)) { ++strip_ok_count; }
 
-                                VicStage("vs:5_dump");
-                                strip_dumped = WriteBufToSd(StripBinPath, g_ind_buf, FbBlockRow);
-                                vic_dumped   = WriteBufToSd(VicBinPath, g_vic_dst_buf, StripOutSize);
+                                    char path[64];
+                                    std::snprintf(path, sizeof(path), "sdmc:/applet-mitm-vic-%s.bin", sv.name);
+                                    if (WriteBufToSd(path, g_vic_dst_buf, StripOutSize)) { ++strip_dump_count; }
+                                }
+                                strip_blit_ok = strip_ok_count > 0;
+                                vic_dumped    = strip_dump_count > 0;
                             }
                             UnmapCmdBuffer(vfd, cap_handle);
                         }
@@ -1646,6 +1686,7 @@ namespace ams::mitm::applet {
             LogLine("   nvmapOwn(capture, cacheable) rc=0x%x -> pinned at 0x%08x", strip_own_rc, strip_pin);
             LogLine("   block-row read %s; strip blit %s", strip_read_ok ? "OK" : "FAILED",
                     strip_blit_ok ? "*** COMPLETED ***" : "did not complete");
+            LogLine("   swept %u variants: %u completed, %u dumped", StripVariantCount, strip_ok_count, strip_dump_count);
             LogLine("   dumps: %s %s   (compare with tools/compare_vic.py)",
                     strip_dumped ? "strip.bin OK" : "strip.bin FAILED",
                     vic_dumped   ? "vic.bin OK"   : "vic.bin FAILED");

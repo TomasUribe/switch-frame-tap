@@ -82,39 +82,55 @@ def write_png(path, rows, w):
         + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
+def score(soft, hard):
+    tot = mx = n = 0
+    for y in range(OUT_H):
+        for x in range(OUT_W):
+            i = x * BPP
+            for c in range(3):          # alpha carries no picture
+                d = abs(soft[y][i + c] - hard[y][i + c])
+                tot += d; n += 1
+                mx = max(mx, d)
+    return tot / n, mx
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
         return 1
     strip = open(sys.argv[1], "rb").read()
-    vic = open(sys.argv[2], "rb").read()
-    pre = sys.argv[3] if len(sys.argv) > 3 else "vic_cmp"
-    print(f"strip {len(strip):,} B (expect {SRC_W*BPP*SRC_H//1:,} swizzled = 983,040)")
-    print(f"vic   {len(vic):,} B (expect 65,536)")
+    vics = sys.argv[2:]
+    print(f"strip {len(strip):,} B (expect 983,040)\n")
 
     full = deswizzle_strip(strip)
     soft = box_downscale(full)
-    hard = vic_rows(vic)
+    write_png("cmp_soft.png", soft, OUT_W)
+    write_png("cmp_full.png", full, SRC_W)
 
-    tot = mx = 0
-    n = 0
-    per = [0, 0, 0, 0]
-    for y in range(OUT_H):
-        for x in range(OUT_W):
-            i = x * BPP
-            for c in range(3):          # ignore alpha
-                d = abs(soft[y][i + c] - hard[y][i + c])
-                tot += d; per[c] += d; n += 1
-                mx = max(mx, d)
-    print(f"\nmean abs error {tot/n:6.2f}   max {mx}")
-    print(f"per channel R={per[0]/(OUT_W*OUT_H):.2f} G={per[1]/(OUT_W*OUT_H):.2f} B={per[2]/(OUT_W*OUT_H):.2f}")
-    print("VERDICT:", "layout CORRECT (filter differences only)" if tot/n < 24
-          else "LAYOUT WRONG - check kind / block height / stride")
+    results = []
+    for path in vics:
+        data = open(path, "rb").read()
+        if len(data) < OUT_STRIDE * BPP * OUT_H:
+            print(f"  {os.path.basename(path):<34} SHORT ({len(data):,} B) - skipped")
+            continue
+        hard = vic_rows(data)
+        mean, mx = score(soft, hard)
+        name = os.path.basename(path).replace("applet-mitm-vic-", "").replace(".bin", "")
+        write_png(f"cmp_{name}.png", hard, OUT_W)
+        results.append((mean, mx, name))
 
-    write_png(f"{pre}_full.png", full, SRC_W)
-    write_png(f"{pre}_soft.png", soft, OUT_W)
-    write_png(f"{pre}_hard.png", hard, OUT_W)
-    print(f"\nwrote {pre}_full.png ({SRC_W}x{SRC_H}), {pre}_soft.png and {pre}_hard.png ({OUT_W}x{OUT_H})")
+    results.sort()
+    print(f"  {'variant':<16} {'mean err':>9} {'max':>5}   verdict")
+    for mean, mx, name in results:
+        v = "*** LAYOUT CORRECT ***" if mean < 24 else ("close" if mean < 45 else "wrong")
+        print(f"  {name:<16} {mean:9.2f} {mx:5d}   {v}")
+
+    if results and results[0][0] < 24:
+        print(f"\nWINNER: {results[0][2]}")
+    elif results:
+        print(f"\nNone matched. Best was {results[0][2]} at {results[0][0]:.1f} "
+              f"- the layout field we need is not in this sweep.")
+    print("\nwrote cmp_soft.png (software reference) and cmp_<variant>.png for each")
     return 0
 
 
