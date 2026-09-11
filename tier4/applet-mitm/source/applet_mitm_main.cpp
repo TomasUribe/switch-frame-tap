@@ -160,7 +160,7 @@ namespace ams {
             u64 ptot = 0, pused = 0;
             svc::GetInfo(std::addressof(ptot),  svc::InfoType_TotalMemorySize, svc::PseudoHandle::CurrentProcess, 0);
             svc::GetInfo(std::addressof(pused), svc::InfoType_UsedMemorySize,  svc::PseudoHandle::CurrentProcess, 0);
-            mitm::applet::LogLine("   THIS PROCESS (pool_partition 2, at boot): total=%llu KB used=%llu KB free=%lld KB",
+            mitm::applet::LogLine("   THIS PROCESS (pool_partition 1 = Applet, at boot): total=%llu KB used=%llu KB free=%lld KB",
                                   static_cast<unsigned long long>(ptot / 1024),
                                   static_cast<unsigned long long>(pused / 1024),
                                   static_cast<long long>((static_cast<s64>(ptot) - static_cast<s64>(pused)) / 1024));
@@ -322,9 +322,34 @@ namespace ams {
 
             rc = usbDsEnable();
             mitm::applet::LogLine("   usbDsEnable rc=0x%x", rc);
-            mitm::applet::LogLine("   %s", R_SUCCEEDED(rc)
-                ? "*** USB DEVICE ENUMERATED - look for 1209:5f1e in lsusb ***"
-                : "usbDsEnable failed - device will not appear on the bus");
+            if (R_FAILED(rc)) {
+                mitm::applet::LogLine("   usbDsEnable failed - device will not appear on the bus");
+                return;
+            }
+
+            /* M53: usbDsEnable returning 0x0 only means OUR side configured itself.
+             * It says nothing about whether the HOST enumerated us - M52 logged
+             * "USB DEVICE ENUMERATED" off this rc alone and that claim was wrong.
+             * usbDsGetState reaching UsbState_Configured is the real signal: the
+             * host has read our descriptors and selected a configuration.
+             * Atmosphere's own haze uses exactly this test (usb_session.cpp:242).
+             * Poll 10 s so a cable seated slightly late still counts. */
+            static const char *const state_names[] = {
+                "Detached", "Attached", "Powered", "Default", "Address", "Configured", "Suspended",
+            };
+            UsbState st = UsbState_Detached, best = UsbState_Detached;
+            for (int i = 0; i < 100; ++i) {
+                if (R_FAILED(usbDsGetState(std::addressof(st)))) { break; }
+                if (static_cast<int>(st) > static_cast<int>(best)) { best = st; }
+                if (st == UsbState_Configured) { break; }
+                os::SleepThread(TimeSpan::FromMilliSeconds(100));
+            }
+            const unsigned b = static_cast<unsigned>(best);
+            mitm::applet::LogLine("   usb state high-water = %u (%s)", b,
+                                  b < (sizeof(state_names) / sizeof(state_names[0])) ? state_names[b] : "?");
+            mitm::applet::LogLine("   %s", best == UsbState_Configured
+                ? "*** HOST CONFIGURED US - we own the bus, expect 1209:5f1e in lsusb ***"
+                : "host did NOT configure us - bus owned by someone else, or no cable attached");
         }
 
         Result ServerManager::OnNeedsToAccept(int port_index, Server *server) {
@@ -381,7 +406,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M52: up. NVENC class is 0x21. Trying USB enumeration - the transport half.");
+        mitm::applet::LogLine("applet-mitm M54: up. pool_partition 1 (Applet) - the heap must not come out of System.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

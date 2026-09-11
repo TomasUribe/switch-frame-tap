@@ -96,6 +96,34 @@ namespace ams::mitm::applet {
          * output before it goes to the filesystem */
         constinit u8       *g_stage_buf   = nullptr;
 
+        /* M54: the decisive measurement. LogMemoryPools() in applet_mitm_main.cpp
+         * is in an anonymous namespace, so it cannot be reached from here - this
+         * is the same survey, taken either side of the heap grab.
+         *
+         * pool_partition moved 2 -> 1, so the bytes must now come out of Applet
+         * (511,936 KB free at boot) and NOT out of System (15,452 KB), which is
+         * the pool am was starved of when M50 fataled the console. Measuring
+         * both sides is the point: the kernel chain says Applet, but M49's
+         * reading was reasoning that turned out to be wrong, and only the
+         * before/after delta shows which pool actually drained. */
+        void LogPools(const char *when) {
+            static const char *const names[4] = { "Application", "Applet", "System", "SystemUnsafe" };
+            for (u64 pool = 0; pool < 4; ++pool) {
+                u64 tot = 0, used = 0;
+                const auto r1 = ::ams::svc::GetSystemInfo(std::addressof(tot),  ::ams::svc::SystemInfoType_TotalPhysicalMemorySize, ::ams::svc::InvalidHandle, pool);
+                const auto r2 = ::ams::svc::GetSystemInfo(std::addressof(used), ::ams::svc::SystemInfoType_UsedPhysicalMemorySize,  ::ams::svc::InvalidHandle, pool);
+                if (R_FAILED(r1) || R_FAILED(r2)) {
+                    LogLine("   [%s] pool %llu %-12s rc=%x/%x", when,
+                            static_cast<unsigned long long>(pool), names[pool], r1.GetValue(), r2.GetValue());
+                    continue;
+                }
+                LogLine("   [%s] pool %llu %-12s used=%8llu KB  free=%9lld KB", when,
+                        static_cast<unsigned long long>(pool), names[pool],
+                        static_cast<unsigned long long>(used / 1024),
+                        static_cast<long long>((static_cast<s64>(tot) - static_cast<s64>(used)) / 1024));
+            }
+        }
+
         bool AllocVicHeap() {
             if (g_vic_heap != 0) { return true; }
 
@@ -115,13 +143,22 @@ namespace ams::mitm::applet {
                         static_cast<unsigned long long>(u / 1024),
                         static_cast<long long>((static_cast<s64>(t) - static_cast<s64>(u)) / 1024));
             }
-            /* CAPPED AT 2 MB ON PURPOSE. The ladder used to try 8 MB first,
-             * and M50 proved what happens if a larger request is ever granted:
-             * we drain a System pool with ~14 MB free and am dies with
-             * LimitReached, taking the console with it. 2 MB has been safe across
-             * ~20 runs. Widening this is a deliberate decision that needs
-             * pool_partition to change first, not an optimisation. */
-            for (const size_t sz : { 2_MB }) {
+            /* M54 widens the ladder, and the precondition the M51 comment named
+             * has now been met: pool_partition is 1 (Applet). Verified chain,
+             * not assumed - ldr_process_creation.cpp:464 maps pool_partition 1
+             * to CreateProcessFlag_PoolPartitionApplet, KProcess::Initialize
+             * threads that pool into m_allocate_option
+             * (kern_k_page_table_base.cpp:513), and SetHeapSize allocates
+             * through exactly that option (same file, line 1930).
+             *
+             * This does NOT raise our ceiling: pm_spec.cpp:145 picks the
+             * resource-limit group from application_type, never from
+             * pool_partition, so we stay in the System group at ~14 MB. What
+             * changes is whose memory we spend. 2 MB granularity is a kernel
+             * requirement - 5 MB and 3 MB return 0xca01 (InvalidSize) - and the
+             * ladder still descends, so a refusal costs us nothing. */
+            LogPools("before heap grab");
+            for (const size_t sz : { 8_MB, 6_MB, 4_MB, 2_MB }) {
                 const auto rc = os::SetMemoryHeapSize(sz);
                 LogLine("   SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
                 if (R_SUCCEEDED(rc)) { want = sz; break; }
@@ -133,6 +170,10 @@ namespace ams::mitm::applet {
                 LogLine("   AllocateMemoryBlock(%zu MB) FAILED rc=0x%x", want / (1024 * 1024), rc.GetValue());
                 return false;
             }
+            /* The line that settles it: System free must be ~unchanged and
+             * Applet free must drop by `want`. If System drops instead, the
+             * NPDM change did not take and we are back on M50's path - stop. */
+            LogPools("after heap grab");
             /* masagrator's point on GBAtemp, and he is right: a sysmodule cannot
              * hold a 1080p frame. One is 7,913 KB against a 2 MB heap - 4x the
              * whole allocation - which is why everything here works in 983,040 B

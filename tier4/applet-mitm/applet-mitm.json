@@ -8,7 +8,7 @@
     "default_cpu_id": 3,
     "process_category": 0,
     "is_retail": true,
-    "pool_partition": 2,
+    "pool_partition": 1,
     "is_64_bit": true,
     "address_space_type": 3,
     "disable_device_address_space_merge": true,

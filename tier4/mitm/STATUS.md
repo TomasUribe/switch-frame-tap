@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M34**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M54**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -54,10 +54,15 @@ process's framebuffer.
 
 ## Hard-won constraints (do not relearn these)
 
-- **Never take large static memory.** A sysmodule's `.bss` comes from the shared
-  system pool (`pool_partition 2`). A 4 MB array fataled *another* sysmodule with
-  `0x10801 LimitReached` at boot. `.bss` lives at ~1.45 MB; the heap ceiling is
-  **2 MB**.
+- **Never take large static memory.** A 4 MB array fataled *another* sysmodule
+  with `0x10801 LimitReached` at boot (M27), and 8 MB held from boot did it again
+  (M50). `.bss` lives at ~1.45 MB; the practical heap ceiling is **2 MB**.
+  **M54 correction:** there are *two* gates, and they are not the same one.
+  `pool_partition` picks the **physical pool** — now `1` (Applet, 411 MB free),
+  so our pages no longer come out of System. `application_type` picks the
+  **resource-limit group** — still System, still shared with `am`, and
+  `LimitReached` is *that* gate. Moving the pool did **not** make a big
+  allocation safe; the 8 MB request was refused, which is a different thing.
 - **`handle_table_size` must be 512**, not the default 16 — `ams_mitm` uses 512.
   16 exhausted mid-run and made `smGetService("vi:m")` return `0xD201
   OutOfHandles`, which reads exactly like a permission refusal and is not one.
@@ -74,6 +79,145 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M54 RUN: the pool moved - and my "structurally impossible" was wrong ***
+
+`pool_partition: 2 -> 1` (System -> Applet). One NPDM field. It does exactly
+what the kernel source says, measured either side of the grab:
+
+```
+[before heap grab] pool 1 Applet       used=  100740 KB  free=   411260 KB
+[before heap grab] pool 2 System       used=  229140 KB  free=     8588 KB
+SetMemoryHeapSize(8 MB) rc=0x1003
+SetMemoryHeapSize(6 MB) rc=0x1003
+SetMemoryHeapSize(4 MB) rc=0x1003
+SetMemoryHeapSize(2 MB) rc=0x0
+[after  heap grab] pool 1 Applet       used=  102788 KB  free=   409212 KB
+[after  heap grab] pool 2 System       used=  229140 KB  free=     8588 KB
+```
+
+Applet **+2,048 KB — exactly the 2 MB granted**. System **unchanged to the KB**.
+Application and SystemUnsafe unchanged. Console ran 257 s with the game live,
+`txn=25367`, `vic=vb:released`, no fatal. VIC healthy: `job_fill` and
+`job_blit_self` both `OP_DONE`, engine wrote our memory.
+
+### The chain, verified in source *before* the run
+
+Not inferred from a successful allocation — that is precisely the M49 mistake:
+
+- `ldr_process_creation.cpp:464` — `pool_partition 1` → `CreateProcessFlag_PoolPartitionApplet`
+- `kern_k_page_table_base.cpp:513` — `KProcess::Initialize`'s `pool` → `m_allocate_option`
+- same file, line 1930 — `SetHeapSize` allocates through `m_allocate_option`
+- `kern_k_shared_memory.cpp:40` — `CreateSharedMemory` uses the same option
+
+The heap inherits the pool for free. `memlet`'s `svcCreateSharedMemory`
+machinery is **not** needed.
+
+### The retraction
+
+I told the user this made M50's failure "structurally impossible". **That is
+wrong, and wrong in the same direction as M49 and M50.**
+
+M50's fatal was `0x10801 LimitReached` — a **resource limit** error, not pool
+exhaustion. Two independent gates:
+
+| gate | set by | M54 |
+|---|---|---|
+| resource limit (`LimitReached`, what killed `am`) | `application_type` → `ResourceLimitGroup_System` | **unchanged** |
+| physical pool | `pool_partition` | System → Applet |
+
+`pool_partition` moves the *second*. M50 died on the *first*. Had M54's 8 MB
+been granted it would have reserved 8 MB of the same shared System resource
+limit `am` needs, and `am` could have died again. **`am` survived this run
+because the request was refused, not because I made it safe.**
+
+That is now three times — M49, M50, M54 — of reasoning about a limit and then
+spending memory on the strength of the reasoning. Measure first.
+
+### What `process total` actually is
+
+`kern_k_process.cpp:868` — `GetTotalUserPhysicalMemorySize()` returns
+`m_resource_limit->GetFreeValue(PhysicalMemoryMax)` **plus** our own used size.
+That free value belongs to the **shared System resource-limit group**, not to
+us. The process figures were never a per-process quota:
+
+```
+[boot ] THIS PROCESS: total=14060 KB used=1724 KB free=12336 KB
+[probe] process       total= 5472 KB used=1724 KB free= 3748 KB
+```
+
+Nothing of ours changed between those lines — `used` is identical. The System
+*group* drained as the game and other sysmodules claimed their share. Quoting
+the boot number to justify a probe-time allocation, which is what I did when I
+said a 1080p frame "fits", is the M49 error with fresh numbers.
+
+**A 1080p frame is 7,913 KB. The whole budget at probe is 5,472 KB. It never
+fit, and the Applet pool's 411 MB free is irrelevant to that.**
+
+### masagrator, precisely
+
+His objection survives M54, but the *reason* changed and the change matters: it
+is not "the System pool is exhausted" (we have escaped that) but "the System
+**resource limit group** is nearly exhausted once a game is resident". Owed to
+him as a correction, not a rebuttal.
+
+### Verifying an NPDM field actually changed
+
+`npdmtool` silently accepts unknown fields — it printed ten "field not present"
+notices and still exited 0. So prove it differentially: compile the same JSON
+twice, differing only in the field, and diff.
+
+```
+offset 653: p1=005 p2=011      (octal 5 and 9)
+```
+
+`AcidFlag_PoolPartitionShift = 2`, so partition 1 → `1<<2 = 4`, partition 2 →
+`2<<2 = 8`, plus the retail bit: `4|1 = 5`, `8|1 = 9`. Matches the kernel
+definition exactly. **Use this for every NPDM field from now on.**
+
+### Souldbminer's comment (GBAtemp), assessed
+
+> the best way to do this is to simply rip the frames straight from the display
+> controller with MMIO, you have access to it from a sysmodule
+
+**The mechanism is real and corrects an assumption recorded in this file.** MMIO
+is reachable from a sysmodule with no kernel or secmon patch:
+
+- `boot.json` declares `{"address": "0x54200000", "size": "0x3000", "is_io": true}` — that is DISPLAY_A
+- `boot_display.cpp:43,92` maps it via `dd::QueryIoMapping`
+- we **already** declare `svcQueryIoMapping: 0x55`; only the `map` capability is missing
+- `npdmtool` compiles a `map` entry for `0x54200000` (verified)
+- `PhysicalMapAllowedMask = (1<<36)-1`, so the address is acceptable
+
+**But the framing does not survive contact.** The DC holds no pixels; it is a
+scanout engine reading DRAM through the **SMMU**. `boot_display.cpp:155-158`
+hands it a framebuffer via `CreateDeviceAddressSpace` →
+`AttachDeviceAddressSpace(DeviceName_Dc)` → `MapDeviceAddressSpaceAligned`, so
+`WINBUF_START_ADDR` holds a **device virtual address** — meaningless without the
+IOMMU page tables. We hold `0x56`/`0x57`/`0x5a` and could attach our own address
+space to the DC, but nvservices already owns that attachment, and fighting it
+for the live display engine is M50's class of move.
+
+His NVENC point matches what we found independently: nouveau has no Tegra NVENC
+support, so REing `nvservices` is the honest path.
+
+### M55 (proposed, not run)
+
+`application_type: 2` (`ProgramInfoFlag_Applet = (2 << 0)`) moves gate A from the
+System group to the Applet group — `pm_spec.cpp:145` reads exactly this field,
+`ldr_process_creation.cpp:171` computes it from the ACI KAC, and `memlet` is
+shipped precedent for a sysmodule declaring it. `npdmtool` honours it (NPDM
+1096 → 1100 B, one new capability word at offset 873, verified differentially).
+It would also unlock `system_resource_size`, which `ldr_process_creation.cpp:521`
+gates on `IsApplication(meta) || IsApplet(meta)`.
+
+**Measure only.** Keep the ladder at 2 MB and just log `TotalMemorySize` at
+probe. If the group moved it jumps from 5,472 KB to hundreds of MB. That answers
+the question without allocating anything, and it breaks the pattern that
+produced M50.
+
+An applet-group **mitm** is untested by anyone — `memlet` is not a mitm — so it
+is the user's call, not ours.
 
 ## *** M52 RUN: USB TRANSPORT WORKS - but SysDVR owns the bus ***
 
@@ -1715,7 +1859,8 @@ applet-mitm/
   patch_libstrat.py     the non-domain mitm sub-object forwarding patch (idempotent)
   applet-mitm.json      NPDM: service_host vi:u; service_access fatal:u lm fsp-srv
                         nvdrv{,:a,:s,:t} vi:m vi:s pm:dmnt; handle_table_size 512;
-                        pool_partition 2; debug_flags force_debug; read-only debug SVCs
+                        pool_partition 1 (Applet, M54); debug_flags force_debug;
+                        read-only debug SVCs; usb:ds
   source/
     applet_mitm_main.cpp     ServerManager, RegisterMitmServer("vi:u"), nv weak-global overrides
     applet_mitm_service.*    the wrapper chain + binder intercept
