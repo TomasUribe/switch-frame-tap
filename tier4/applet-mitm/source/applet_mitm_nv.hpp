@@ -57,6 +57,13 @@ namespace ams::mitm::applet {
      * into. Both are relaxed atomic stores - the capture loop polls them from
      * the worker thread, and nothing that can block ever touches the binder
      * thread. That rule has held since M8 froze the console. */
+    /* "dump" in the arm file: write a whole frame to the SD card. It freezes
+     * the game for the duration of the write - 0.3 s on an idle card, 2.5 s when
+     * the game is loading and competing for it - so it is off by default.
+     * "wait=N": seconds of uptime before the probe fires (default 120). */
+    extern bool g_dump_armed;
+    extern u32  g_probe_delay_s;
+
     extern std::atomic<u32> g_queue_count;
     extern std::atomic<s32> g_queue_slot;
 

@@ -577,6 +577,9 @@ namespace ams::mitm::applet {
 
     }
 
+    constinit bool g_dump_armed    = false;
+    constinit u32  g_probe_delay_s = 120;
+
     constinit std::atomic<u32> g_queue_count{0};
     constinit std::atomic<s32> g_queue_slot{-1};
 
@@ -1233,6 +1236,7 @@ namespace ams::mitm::applet {
             u32  cap_done = 0, cap_missed = 0, cap_distinct = 0;
             u64  cap_min = ~UINT64_C(0), cap_max = 0, cap_sum = 0, cap_ns = 0;
             u32  fps_before = 0, fps_during = 0, fps_after = 0;
+            u32  cap_over = 0, slot_hits[4] = {};
             bool dumped = false;
             u32  nonzero = 0, distinct = 0, lane_ff[4] = {}, total_px = 0;
             u8   live_a[16] = {}, live_b[16] = {};
@@ -1327,7 +1331,7 @@ namespace ams::mitm::applet {
                  * frame comes out coherent. It costs ~400 ms frozen, once, which is
                  * a fine trade for a screenshot. A streaming capture would instead
                  * read into RAM at 1129 MB/s and never go near the SD card. */
-                if (found && g_ind_buf != nullptr && g_ind_size >= 0x10000) {
+                if (found && g_dump_armed && g_ind_buf != nullptr && g_ind_size >= 0x10000) {
                     dumped = DumpSlotToSd(dbg, cand.addr, std::addressof(dump_ns), std::addressof(dump_chunks));
                 }
 
@@ -1420,11 +1424,23 @@ namespace ams::mitm::applet {
                                 const s32 slot = g_queue_slot.load(std::memory_order_relaxed);
                                 const u64 off  = (slot >= 0 && static_cast<u32>(slot) < 3) ? FbSlotOff[slot] : 0;
 
+                                if (slot >= 0 && slot < 4) { ++slot_hits[slot]; }
+
                                 const u64 t2 = armTicksToNs(armGetSystemTick());
                                 bool ok = true;
+                                u32  sig = 0;
                                 for (u64 done = 0; done < FbSlotSize; done += FbBlockRow) {
                                     const u64 n = (FbSlotSize - done < FbBlockRow) ? (FbSlotSize - done) : FbBlockRow;
                                     if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, cand.addr + off + done, n))) { ok = false; break; }
+                                    if (done == 0) {
+                                        /* Hash block-row 0 - the TOP of the picture.
+                                         * M39 hashed the buffer AFTER the loop, which
+                                         * holds the last strip: rows 1024-1151, almost
+                                         * all padding below the 1080-row image. It
+                                         * barely changes, which is why only 31 of 120
+                                         * frames looked distinct. */
+                                        for (u32 k = 0; k < 8192; k += 8) { sig = sig * 31u + g_ind_buf[k]; }
+                                    }
                                 }
                                 const u64 dt = armTicksToNs(armGetSystemTick()) - t2;
                                 if (!ok) { ++cap_missed; continue; }
@@ -1433,12 +1449,7 @@ namespace ams::mitm::applet {
                                 cap_sum += dt;
                                 if (dt < cap_min) { cap_min = dt; }
                                 if (dt > cap_max) { cap_max = dt; }
-
-                                /* signature of the last strip, to prove we are
-                                 * getting new pixels rather than re-reading one
-                                 * stale slot 120 times */
-                                u32 sig = 0;
-                                for (u32 k = 0; k < 8192; k += 8) { sig = sig * 31u + g_ind_buf[k]; }
+                                if (dt > UINT64_C(16667000)) { ++cap_over; }
                                 if (sig != last_sig) { ++cap_distinct; last_sig = sig; }
                             }
                             cap_ns = armTicksToNs(armGetSystemTick()) - cap_t0;
@@ -1544,13 +1555,21 @@ namespace ams::mitm::applet {
                 LogLine("   captured %u full frames in %llu ms -> %u fps  (%u distinct, %u missed)",
                         cap_done, static_cast<unsigned long long>(cap_ns / 1000000),
                         cap_fps, cap_distinct, cap_missed);
-                LogLine("   per-frame read: min %llu us  avg %llu us  max %llu us   (60 fps budget 16667 us)",
+                LogLine("   per-frame read: min %llu us  avg %llu us  max %llu us  (%u of %u over the 16667 us budget)",
                         static_cast<unsigned long long>(cap_min / 1000),
                         static_cast<unsigned long long>(avg / 1000),
-                        static_cast<unsigned long long>(cap_max / 1000));
-                LogLine("   game presented: %u fps before, %u fps during, %u fps after  [%s]",
+                        static_cast<unsigned long long>(cap_max / 1000),
+                        cap_over, cap_done);
+                LogLine("   slots read: [0]=%u [1]=%u [2]=%u  (a rotating swapchain should hit all three)",
+                        slot_hits[0], slot_hits[1], slot_hits[2]);
+                /* Compare against the average of before and after, with a tight
+                 * tolerance. M39 used "before - 6" and called 56 vs 59/61 fps
+                 * unaffected; that hid a real ~4 fps dip. */
+                const u32 base = (fps_before + fps_after) / 2;
+                LogLine("   game presented: %u fps before, %u during, %u after -> %d fps delta  [%s]",
                         fps_before, fps_during, fps_after,
-                        (fps_during + 6 >= fps_before) ? "*** GAME UNAFFECTED ***" : "game slowed while capturing");
+                        static_cast<int>(fps_during) - static_cast<int>(base),
+                        (fps_during + 3 >= base) ? "*** GAME UNAFFECTED ***" : "GAME SLOWED while capturing");
             } else if (cap_missed > 0) {
                 LogLine("   capture loop never got a frame (%u misses) - was the game presenting?", cap_missed);
             }

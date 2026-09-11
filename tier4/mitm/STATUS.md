@@ -75,7 +75,60 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M38 RUN: NATIVE 1920x1080, CLEAN ***
+## M39 RUN: 120 frames captured, and three things to fix
+
+```
+captured 120 full frames in 2137 ms -> 56 fps  (31 distinct, 0 missed)
+per-frame read: min 5861 us  avg 10292 us  max 19655 us   (60 fps budget 16667 us)
+game presented: 59 fps before, 56 fps during, 61 fps after  [*** GAME UNAFFECTED ***]
+```
+
+**The loop works.** 120 consecutive native-resolution frames, zero missed, driven
+off the `queueBuffer` intercept. Reading the slot the game just presented is
+sound, and the debug handle survives a multi-second capture session.
+
+But the honest reading of those numbers is worse than the verdict line claims,
+and all three problems are mine:
+
+**1. The game did slow, by about 4 fps.** 56 during, against 59 before and 61
+after. The verdict printed `GAME UNAFFECTED` because I wrote the tolerance as
+`fps_during + 6 >= fps_before`, which is loose enough to swallow a real dip. M40
+compares against the average of before and after with a tolerance of 3, and
+prints the signed delta so the number cannot hide behind a label.
+
+**2. `31 distinct of 120` is a measurement bug, not a stale-slot bug.** The
+signature hashed `g_ind_buf` *after* the strip loop — which holds the **last**
+strip, rows 1024-1151. The image is 1080 rows, so that buffer is mostly padding
+below the picture and barely changes. M40 hashes **block-row 0**, the top of the
+frame, taken during the read. M40 also logs how many times each of the three
+slots was read, so swapchain rotation is visible rather than inferred.
+
+**3. Jitter is the real risk, not throughput.** min 5861 us, avg 10292 us, max
+19655 us — the maximum is *over* the 16667 us budget, and the average is 54%
+higher than the 6691 us measured standalone in M38. Reading while the game
+renders costs more than reading while it idles, which is unsurprising: we are
+competing for memory bandwidth with the thing we are capturing. M40 counts how
+many frames exceed budget instead of reporting only min/avg/max.
+
+### And the stutter had a specific cause
+
+The SD dump took **2566 ms at 3 MB/s**, against M38's 280 ms at 31 MB/s — and the
+game is frozen for all of it, because the dump happens before
+`ContinueDebugEvent`. The game was loading at the time, competing for the same
+card. That freeze is exactly the stutter felt on the console.
+
+The dump is now **opt-in** (`dump` in the arm file). It proved the capture; it is
+not something a streaming implementation would ever do.
+
+### The probe was also firing far too early
+
+`total > 300` binder transactions lands at ~50 s — still the title screen, which
+is why all three captured frames are the MK8 logo. The trigger is now **elapsed
+time**, set by `wait=N` in the arm file (default 120 s), so the capture can land
+in an actual race. That also makes the measurement more honest: a race is a much
+heavier scene than a title screen, and jitter is exactly where that will show.
+
+## M38 run: native 1920x1080, clean
 
 Docked, and the frame came out perfect: the Mario Kart 8 Deluxe title screen,
 sharp lettering, lens flare, star field, no tearing and no wash.
@@ -345,7 +398,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M39)
+## The route itself: kernel debug SVCs (M32 -> M40)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:

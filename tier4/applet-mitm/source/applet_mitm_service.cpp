@@ -111,7 +111,12 @@ namespace ams::mitm::applet {
             g_queue_count.fetch_add(1, std::memory_order_relaxed);
         }
 
-        if (code == 7 && g_vic_armed && total > 300 && g_game_surface.armed) {
+        /* Fire on elapsed time, not transaction count. "total > 300" landed at
+         * ~50 s, which is still the title screen - too early to be holding a
+         * controller in a race. g_probe_delay_s comes from "wait=N" in the arm
+         * file and defaults to 120 s. */
+        const u64 uptime_s = armTicksToNs(armGetSystemTick()) / UINT64_C(1000000000);
+        if (code == 7 && g_vic_armed && uptime_s >= g_probe_delay_s && g_game_surface.armed) {
             bool ex = false;
             if (g_blit_attempted.compare_exchange_strong(ex, true)) {
                 const auto *p  = static_cast<const u8 *>(parcel_in.GetPointer());

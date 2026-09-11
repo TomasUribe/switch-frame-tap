@@ -103,6 +103,34 @@ namespace ams {
             return std::strstr(buf, keyword) != nullptr;
         }
 
+        /* Numeric option out of the arm file: "wait=180" delays the probe so
+         * there is time to actually get into a race before it fires. M39 probed
+         * at ~50 s, which is still the title screen. */
+        u32 ArmFileNumber(const char *key, u32 def) {
+            fs::FileHandle f;
+            if (R_FAILED(fs::OpenFile(std::addressof(f), "sdmc:/applet-mitm.armed", fs::OpenMode_Read))) {
+                return def;
+            }
+            char buf[256] = {};
+            s64 fsz = 0;
+            if (R_FAILED(fs::GetFileSize(std::addressof(fsz), f))) { fs::CloseFile(f); return def; }
+            size_t n = static_cast<size_t>(fsz);
+            if (n > sizeof(buf) - 1) { n = sizeof(buf) - 1; }
+            const bool ok = n > 0 && R_SUCCEEDED(fs::ReadFile(f, 0, buf, n));
+            fs::CloseFile(f);
+            if (!ok) { return def; }
+            buf[n] = '\0';
+
+            const char *p = std::strstr(buf, key);
+            if (p == nullptr) { return def; }
+            p += std::strlen(key);
+            while (*p == '=' || *p == ' ') { ++p; }
+            u32 v = 0;
+            bool any = false;
+            while (*p >= '0' && *p <= '9') { v = v * 10 + static_cast<u32>(*p - '0'); ++p; any = true; }
+            return any ? v : def;
+        }
+
         Result ServerManager::OnNeedsToAccept(int port_index, Server *server) {
             std::shared_ptr<::Service> fsrv;
             sm::MitmProcessInfo client_info;
@@ -157,14 +185,19 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M39: up. Native 1080p captured - now testing sustained per-frame capture.");
+        mitm::applet::LogLine("applet-mitm M40: up. Probe delayed so the capture lands in a real race.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
         mitm::applet::g_dbg_armed   = ArmFileContains("dbg");
+        mitm::applet::g_dump_armed  = ArmFileContains("dump");
+        mitm::applet::g_probe_delay_s = ArmFileNumber("wait", 120);
         mitm::applet::LogLine("arm file (sdmc:/applet-mitm.armed): vic=%s exec=%s",
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
+        mitm::applet::LogLine("probe fires at t=%u s; frame dump to SD: %s",
+                              mitm::applet::g_probe_delay_s,
+                              mitm::applet::g_dump_armed ? "ARMED (freezes the game ~0.3-2.5 s)" : "off");
         mitm::applet::LogLine("debug-capture route: %s   pmdmntInitialize rc=0x%x",
                               mitm::applet::g_dbg_armed ? "ARMED" : "off (add \"dbg\" to the arm file)",
                               mitm::applet::g_pmdmnt_rc);
