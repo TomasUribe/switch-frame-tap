@@ -75,6 +75,55 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## External review: the downstream budget is tighter than assumed
+
+masagrator raised two objections on the GBAtemp thread. Both are worth recording
+because one is simply correct and changes the plan.
+
+**Transport.** He read the 1100 MB/s figure as a transport rate. It is not - that
+is `ReadDebugProcessMemory` pulling a frame out of the game's address space, a
+memory read. Raw 1080p60 is **498 MB/s**. But correcting the number does not
+rescue the point: 498 MB/s still exceeds practical USB 3, and `usb:ds` in normal
+mode is USB 2.0, roughly 30-40 MB/s. SysDVR's own readme states the same wall -
+*"Video quality is fixed to 720p @ 30fps with h264 compression, this is a
+hardware limit"*. **Encoding is load-bearing, not an optimisation.**
+
+**Memory, and he is right.** From our own log:
+
+```
+SetMemoryHeapSize(8 MB) rc=0x1003
+SetMemoryHeapSize(6 MB) rc=0x1003
+SetMemoryHeapSize(4 MB) rc=0x1003
+SetMemoryHeapSize(2 MB) rc=0x0
+```
+
+2 MB is the ceiling and one 1080p frame is **7,913 KB - four times the entire
+heap**. That is why everything works in 983,040 B block-rows, and M27 already
+found the sharp edge: 4 MB of `.bss` fataled a *different* sysmodule at boot
+with `LimitReached`, because `.bss` comes from the same shared system pool.
+
+What was never quantified is NVENC's own working set on top - input surface,
+bitstream buffer, and reference frames for inter-frame prediction.
+
+### Consequences
+
+1. **Measure the budget rather than infer it.** M47 asks the kernel directly via
+   `svcGetInfo` (`TotalMemorySize`, `UsedMemorySize`, `SystemResourceSize*`)
+   instead of deducing it from a failed `SetMemoryHeapSize`. The ladder is also
+   finer (8/6/5/4/3/2 MB) to find the true ceiling rather than a power of two.
+2. **All-intra becomes the default encoder plan, not a fallback.** I-frames need
+   no reference frames, removing the largest consumer. It costs bitrate, and
+   bitrate is the budget with more room to trade than memory.
+3. **`pool_partition` has never been varied.** It is a one-line NPDM change
+   (currently 2, system). Worth one test before concluding 2 MB is immovable.
+4. **The screenshot tool is a real product.** Native 1080p capture works, has no
+   bandwidth and no encoder problem, and is done. If NVENC will not fit a
+   sysmodule's budget, that ships rather than nothing.
+
+The capture findings stand regardless of what happens downstream: the kernel
+debug-SVC route, the NPDM `force_debug` requirement, and why nvmap pinning of a
+foreign handle cannot work.
+
 ## *** M45 RUN: THE VIC IS EXACT - err 0.00 on all four lanes ***
 
 ```
@@ -635,7 +684,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M46)
+## The route itself: kernel debug SVCs (M32 -> M47)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:

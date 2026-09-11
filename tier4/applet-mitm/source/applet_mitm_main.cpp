@@ -185,7 +185,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M46: up. VIC proven exact. Stutter fixed, first NVENC probe.");
+        mitm::applet::LogLine("applet-mitm M47: up. NVENC probe + measuring the memory budget we actually have.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

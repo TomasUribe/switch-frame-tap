@@ -100,7 +100,7 @@ namespace ams::mitm::applet {
             if (g_vic_heap != 0) { return true; }
 
             size_t want = 0;
-            for (const size_t sz : { 8_MB, 6_MB, 4_MB, 2_MB }) {
+            for (const size_t sz : { 8_MB, 6_MB, 5_MB, 4_MB, 3_MB, 2_MB }) {
                 const auto rc = os::SetMemoryHeapSize(sz);
                 LogLine("   SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
                 if (R_SUCCEEDED(rc)) { want = sz; break; }
@@ -111,6 +111,28 @@ namespace ams::mitm::applet {
             if (const auto rc = os::AllocateMemoryBlock(std::addressof(addr), want); R_FAILED(rc)) {
                 LogLine("   AllocateMemoryBlock(%zu MB) FAILED rc=0x%x", want / (1024 * 1024), rc.GetValue());
                 return false;
+            }
+            /* masagrator's point on GBAtemp, and he is right: a sysmodule cannot
+             * hold a 1080p frame. One is 7,913 KB against a 2 MB heap - 4x the
+             * whole allocation - which is why everything here works in 983,040 B
+             * block-rows. What we never did is ask the kernel what the budget
+             * actually IS, instead of inferring it from a failed request. That
+             * matters now, because NVENC needs its own input surface, bitstream
+             * buffer and (unless we go all-intra) reference frames on top. */
+            {
+                u64 tot = 0, used = 0, srtot = 0, srused = 0;
+                ::ams::svc::GetInfo(std::addressof(tot),    ::ams::svc::InfoType_TotalMemorySize,         ::ams::svc::PseudoHandle::CurrentProcess, 0);
+                ::ams::svc::GetInfo(std::addressof(used),   ::ams::svc::InfoType_UsedMemorySize,          ::ams::svc::PseudoHandle::CurrentProcess, 0);
+                ::ams::svc::GetInfo(std::addressof(srtot),  ::ams::svc::InfoType_SystemResourceSizeTotal, ::ams::svc::PseudoHandle::CurrentProcess, 0);
+                ::ams::svc::GetInfo(std::addressof(srused), ::ams::svc::InfoType_SystemResourceSizeUsed,  ::ams::svc::PseudoHandle::CurrentProcess, 0);
+                LogLine("   MEMORY BUDGET: total=%llu KB used=%llu KB free=%lld KB | sysresource %llu/%llu KB",
+                        static_cast<unsigned long long>(tot / 1024),
+                        static_cast<unsigned long long>(used / 1024),
+                        static_cast<long long>((static_cast<s64>(tot) - static_cast<s64>(used)) / 1024),
+                        static_cast<unsigned long long>(srused / 1024),
+                        static_cast<unsigned long long>(srtot / 1024));
+                LogLine("   one 1080p frame is 7913 KB; heap granted %zu KB; NVENC must fit in what is left",
+                        want / 1024);
             }
             g_vic_heap_size = want;
             g_ind_size      = want - VicBufsEnd;
