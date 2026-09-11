@@ -185,7 +185,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M40: up. Probe delayed so the capture lands in a real race.");
+        mitm::applet::LogLine("applet-mitm M41: up. Feeding real game pixels through the VIC.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

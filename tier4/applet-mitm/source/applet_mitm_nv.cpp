@@ -272,7 +272,7 @@ namespace ams::mitm::applet {
         }
 
         /* CREATE + ALLOC(kind, our cpu pages) + GET_ID for a buffer we own. */
-        ::Result NvmapOwn(u32 fd, void *cpu, u32 size, u8 kind, u32 *out_handle, u32 *out_id) {
+        ::Result NvmapOwn(u32 fd, void *cpu, u32 size, u8 kind, u32 *out_handle, u32 *out_id, bool cacheable = false) {
             u32 nverr = 0;
             struct { u32 size; u32 handle; } cr = { size, 0 };
             ::Result rc = NvIoctl(fd, NvmapIocCreate, std::addressof(cr), sizeof(cr), std::addressof(nverr));
@@ -283,7 +283,7 @@ namespace ams::mitm::applet {
                 u8 kind; u8 pad[7]; u64 addr;
             } al = {};
             al.handle = cr.handle;
-            al.flags  = 0;
+            al.flags  = cacheable ? 1u : 0u;      /* bit0 = CACHEABLE */
             al.align  = 0x1000;
             al.kind   = kind;
             al.addr   = reinterpret_cast<u64>(cpu);
@@ -291,15 +291,25 @@ namespace ams::mitm::applet {
             if (R_FAILED(rc) || nverr != 0) { LogLine("   nvmapOwn ALLOC fail rc=0x%x nverr=%u", rc, nverr); return rc; }
 
             /* flags bit0 is CACHEABLE (libnx passes is_cpu_cacheable?1:0), not
-             * read-write as the wiki's comment suggests. We asked for
-             * non-cacheable, so we owe the matching CPU-side step that libnx
-             * does and we never did: flush, then mark the mapping uncached.
-             * Without it the CPU keeps a cached, non-coherent view. */
+             * read-write as the wiki's comment suggests. For a non-cacheable
+             * buffer we owe the matching CPU-side step that libnx does and we
+             * never did: flush, then mark the mapping uncached. Without it the
+             * CPU keeps a cached, non-coherent view.
+             *
+             * The capture buffer is the exception. It is written by
+             * ReadDebugProcessMemory - a kernel memcpy of 983,040 B, every
+             * frame - and an uncached destination would cost far more than
+             * cache maintenance does. It stays CACHED, and the caller flushes
+             * it before the engine reads. */
             armDCacheFlush(cpu, size);
-            const auto sma = svc::SetMemoryAttribute(reinterpret_cast<uintptr_t>(cpu), size,
-                                                     svc::MemoryAttribute_Uncached,
-                                                     svc::MemoryAttribute_Uncached);
-            LogLine("   SetMemoryAttribute(%p, 0x%x, uncached) rc=0x%x", cpu, size, sma.GetValue());
+            if (!cacheable) {
+                const auto sma = svc::SetMemoryAttribute(reinterpret_cast<uintptr_t>(cpu), size,
+                                                         svc::MemoryAttribute_Uncached,
+                                                         svc::MemoryAttribute_Uncached);
+                LogLine("   SetMemoryAttribute(%p, 0x%x, uncached) rc=0x%x", cpu, size, sma.GetValue());
+            } else {
+                LogLine("   nvmapOwn(%p, 0x%x) kept CACHEABLE - caller must flush before submit", cpu, size);
+            }
 
             struct { u32 id; u32 handle; } gi = { 0, cr.handle };
             rc = NvIoctl(fd, NvmapIocGetId, std::addressof(gi), sizeof(gi), std::addressof(nverr));
@@ -317,26 +327,51 @@ namespace ams::mitm::applet {
          *   BlitReloc  - source address left to nvservices via a reloc, which
          *                knows the game buffer's address even though pinning
          *                would not tell us. */
-        enum class VicJob { Fill, BlitSelf, BlitGame };
+        enum class VicJob { Fill, BlitSelf, BlitGame, BlitStrip };
 
         struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt; };
 
         /* our own pitch-linear 64x64 buffer, stride 256 px like the destination */
         constexpr SrcDesc SelfSrc { DstW, DstH, DstStridePx, vic::BLK_KIND_PITCH, 0, vic::PIXFMT_A8B8G8R8 };
 
-        void FillOutputConfig(vic::VicConfigStruct *c) {
+        struct OutDesc { u32 w, h, stride_px; };
+
+        /* the 64x64 self-blit target, unchanged: it is the byte-exact regression
+         * reference and must keep producing identical output */
+        constexpr OutDesc SelfOut { DstW, DstH, DstStridePx };
+
+        /* One block-row of the GAME's surface: full 1920 px width by 128 rows,
+         * block-linear, exactly what the binder parcels describe.
+         *
+         * NOTE the kind. SlotBlkKind is a 4-BIT field carrying the VIC's own
+         * enum - 0 pitch, 1 generic 16Bx2 - not the nvmap kind 0xFE that the
+         * parcels report. Writing 0xFE there truncates to 0xE and hands the
+         * engine a surface layout that does not exist, and a bad layout hangs
+         * the VIC, which takes the compositor and the console with it. */
+        constexpr u32 StripW = 1920, StripH = 128;
+        constexpr SrcDesc StripSrc { StripW, StripH, StripW,
+                                     vic::BLK_KIND_GENERIC_16Bx2, 4, vic::PIXFMT_A8B8G8R8 };
+
+        /* 4x downscale into the existing 64 KB destination. The stride is
+         * aligned to 256 px the way libdrm aligns every VIC surface (M13):
+         * 512 px = 2048 B, x 32 rows = 65536 B, exactly DstSize. */
+        constexpr OutDesc StripOut { 480, 32, 512 };
+        constexpr u32 StripOutSize = StripOut.stride_px * 4 * StripOut.h;
+        static_assert(StripOutSize <= DstSize);
+
+        void FillOutputConfig(vic::VicConfigStruct *c, const OutDesc &out) {
             c->outputConfig.TargetRectLeft   = 0;
             c->outputConfig.TargetRectTop    = 0;
-            c->outputConfig.TargetRectRight  = DstW - 1;
-            c->outputConfig.TargetRectBottom = DstH - 1;
+            c->outputConfig.TargetRectRight  = out.w - 1;
+            c->outputConfig.TargetRectBottom = out.h - 1;
 
             c->outputSurfaceConfig.OutPixelFormat   = vic::PIXFMT_A8B8G8R8;
             c->outputSurfaceConfig.OutBlkKind       = vic::BLK_KIND_PITCH;
             c->outputSurfaceConfig.OutBlkHeight     = 0;
-            c->outputSurfaceConfig.OutSurfaceWidth  = DstW - 1;
-            c->outputSurfaceConfig.OutSurfaceHeight = DstH - 1;
-            c->outputSurfaceConfig.OutLumaWidth     = DstStridePx - 1;
-            c->outputSurfaceConfig.OutLumaHeight    = DstH - 1;
+            c->outputSurfaceConfig.OutSurfaceWidth  = out.w - 1;
+            c->outputSurfaceConfig.OutSurfaceHeight = out.h - 1;
+            c->outputSurfaceConfig.OutLumaWidth     = out.stride_px - 1;
+            c->outputSurfaceConfig.OutLumaHeight    = out.h - 1;
             c->outputSurfaceConfig.OutChromaWidth   = 16383;
             c->outputSurfaceConfig.OutChromaHeight  = 16383;
         }
@@ -346,7 +381,7 @@ namespace ams::mitm::applet {
          * output half of the pipeline. */
         void FillClearConfig(vic::VicConfigStruct *c) {
             std::memset(c, 0, sizeof(*c));
-            FillOutputConfig(c);
+            FillOutputConfig(c, SelfOut);
             /* Four DISTINCT levels so the output byte order can be read straight
              * off the dump: 1023->0xFF, 768->0xC0, 512->0x80, 256->0x40.
              * The previous red gave 'ff ff 00 00', which could not say which
@@ -357,10 +392,10 @@ namespace ams::mitm::applet {
             c->outputConfig.BackgroundB     = 256;    /* 0x40 */
         }
 
-        void FillBlitConfig(vic::VicConfigStruct *c, const SrcDesc &src) {
+        void FillBlitConfig(vic::VicConfigStruct *c, const SrcDesc &src, const OutDesc &out) {
             std::memset(c, 0, sizeof(*c));
 
-            FillOutputConfig(c);
+            FillOutputConfig(c, out);
             c->outputConfig.BackgroundAlpha  = 1023;
             c->outputConfig.BackgroundR      = 1023;
             c->outputConfig.BackgroundG      = 1023;
@@ -373,13 +408,13 @@ namespace ams::mitm::applet {
             slot->PlanarAlpha         = 1023;
             slot->ConstantAlpha       = 1;
             slot->SourceRectLeft      = 0;
-            slot->SourceRectRight     = static_cast<u64>(DstW - 1) << 16;   /* 16.16 fixed point */
+            slot->SourceRectRight     = static_cast<u64>(src.w - 1) << 16;   /* 16.16 fixed point */
             slot->SourceRectTop       = 0;
-            slot->SourceRectBottom    = static_cast<u64>(DstH - 1) << 16;
+            slot->SourceRectBottom    = static_cast<u64>(src.h - 1) << 16;
             slot->DestRectLeft        = 0;
-            slot->DestRectRight       = DstW - 1;
+            slot->DestRectRight       = out.w - 1;
             slot->DestRectTop         = 0;
-            slot->DestRectBottom      = DstH - 1;
+            slot->DestRectBottom      = out.h - 1;
             slot->SoftClampHigh       = 1023;
 
             vic::SlotSurfaceConfig *s = std::addressof(c->slotStruct[0].slotSurfaceConfig);
@@ -403,7 +438,7 @@ namespace ams::mitm::applet {
         constexpr u32 CfgAddrWord = 8, DstAddrWord = 11, SrcAddrWord = 14;   /* + 1 if SETCL is emitted */
 
         u32 BuildCmdbuf(u32 *w, VicJob job, u32 cfg_addr, u32 dst_addr, u32 src_addr, bool set_class) {
-            const bool has_src  = (job == VicJob::BlitSelf || job == VicJob::BlitGame);
+            const bool has_src  = (job == VicJob::BlitSelf || job == VicJob::BlitGame || job == VicJob::BlitStrip);
             u32 n = 0;
             /* Point the channel at the VIC's register space before touching
              * METHOD_OFFSET/METHOD_DATA, which are per-class registers. */
@@ -428,7 +463,7 @@ namespace ams::mitm::applet {
         }
 
         void TryIndirectCapture();
-        void TryDebugCapture();
+        void TryDebugCapture(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 dst_addr);
 
         struct JobCtx {
             u32 vfd, cmd_handle, syncpt;
@@ -462,7 +497,7 @@ namespace ams::mitm::applet {
         bool RunOneJob(const char *stage, VicJob job, bool set_class, const JobCtx &c) {
             VicStage(stage);
 
-            const bool needs_src = (job == VicJob::BlitSelf || job == VicJob::BlitGame);
+            const bool needs_src = (job == VicJob::BlitSelf || job == VicJob::BlitGame || job == VicJob::BlitStrip);
             if (c.cfg_addr == 0 || c.dst_addr == 0 || (needs_src && c.src_addr == 0)) {
                 LogLine("   [%s] REFUSING to submit: cfg=0x%x dst=0x%x src=0x%x - a zero "
                         "address hangs the VIC and freezes the console",
@@ -473,8 +508,9 @@ namespace ams::mitm::applet {
             auto *cfg = reinterpret_cast<vic::VicConfigStruct *>(g_vic_cfg_buf);
             switch (job) {
                 case VicJob::Fill:     FillClearConfig(cfg);            break;
-                case VicJob::BlitSelf: FillBlitConfig(cfg, SelfSrc);    break;
-                case VicJob::BlitGame: FillBlitConfig(cfg, c.game_src); break;
+                case VicJob::BlitSelf:  FillBlitConfig(cfg, SelfSrc,   SelfOut);  break;
+                case VicJob::BlitGame:  FillBlitConfig(cfg, c.game_src, SelfOut); break;
+                case VicJob::BlitStrip: FillBlitConfig(cfg, StripSrc,  StripOut); break;
             }
 
             auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
@@ -852,7 +888,7 @@ namespace ams::mitm::applet {
         VicStage("vb:ALL_JOBS_DONE");
 
         TryIndirectCapture();
-        TryDebugCapture();
+        TryDebugCapture(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, dst_addr);
 
     close_vic:
         if (cfg_addr != 0) { UnmapCmdBuffer(vfd, cfg_handle); }
@@ -1182,6 +1218,19 @@ namespace ams::mitm::applet {
         constexpr const char *FrameBinPath = "sdmc:/applet-mitm-frame.bin";
         constexpr const char *FrameTxtPath = "sdmc:/applet-mitm-frame.txt";
 
+        bool WriteBufToSd(const char *path, const void *buf, size_t len) {
+            fs::DeleteFile(path);
+            if (R_FAILED(fs::CreateFile(path, static_cast<s64>(len)))) { return false; }
+            fs::FileHandle f;
+            if (R_FAILED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Write))) { return false; }
+            const bool ok = R_SUCCEEDED(fs::WriteFile(f, 0, buf, len, fs::WriteOption::Flush));
+            fs::CloseFile(f);
+            return ok;
+        }
+
+        constexpr const char *StripBinPath = "sdmc:/applet-mitm-strip.bin";
+        constexpr const char *VicBinPath   = "sdmc:/applet-mitm-vic.bin";
+
         bool DumpSlotToSd(::ams::svc::Handle dbg, u64 src, u64 *out_ns, u32 *out_chunks) {
             fs::DeleteFile(FrameBinPath);
             if (R_FAILED(fs::CreateFile(FrameBinPath, static_cast<s64>(FbSlotSize)))) { return false; }
@@ -1204,7 +1253,7 @@ namespace ams::mitm::applet {
             return ok;
         }
 
-        void TryDebugCapture() {
+        void TryDebugCapture(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 dst_addr) {
             if (!g_dbg_armed) { return; }
 
             VicStage("dbg:1_find_pid");
@@ -1237,6 +1286,8 @@ namespace ams::mitm::applet {
             u64  cap_min = ~UINT64_C(0), cap_max = 0, cap_sum = 0, cap_ns = 0;
             u32  fps_before = 0, fps_during = 0, fps_after = 0;
             u32  cap_over = 0, slot_hits[4] = {};
+            u32  strip_own_rc = 0, strip_pin = 0;
+            bool strip_read_ok = false, strip_blit_ok = false, strip_dumped = false, vic_dumped = false;
             bool dumped = false;
             u32  nonzero = 0, distinct = 0, lane_ff[4] = {}, total_px = 0;
             u8   live_a[16] = {}, live_b[16] = {};
@@ -1317,6 +1368,49 @@ namespace ams::mitm::applet {
                         for (u32 k = 0; k < 3; ++k) { std::memcpy(cand.head[k], s[k], 16); }
                         found = true;
                     }
+                }
+
+                /* ---- THE VIC, ON REAL GAME PIXELS -------------------------
+                 * Everything here happens while the game is stopped, so the raw
+                 * strip and the VIC's output are the SAME pixels and can be
+                 * compared byte-for-byte on the PC. If they came from different
+                 * moments, any mismatch would be ambiguous between "wrong VIC
+                 * config" and "the frame moved", which is untestable.
+                 *
+                 * The capture buffer is nvmap'd CACHEABLE: ReadDebugProcessMemory
+                 * writes 983,040 B into it and an uncached destination would cost
+                 * far more than the explicit flush below. */
+                if (found && g_ind_buf != nullptr && g_ind_size >= FbBlockRow && cfg_addr != 0 && dst_addr != 0) {
+                    VicStage("vs:1_own_capture_buf");
+                    u32 cap_handle = 0, cap_id = 0, cap_addr = 0;
+                    const auto orc = NvmapOwn(nvmap_fd, g_ind_buf, static_cast<u32>(FbBlockRow), 0,
+                                              std::addressof(cap_handle), std::addressof(cap_id), true);
+                    if (R_SUCCEEDED(orc)) {
+                        VicStage("vs:2_pin");
+                        MapCmdBuffer(vfd, cap_handle, std::addressof(cap_addr), "capture", 0);
+                        if (cap_addr != 0) {
+                            VicStage("vs:3_read_block_row");
+                            strip_read_ok = R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(
+                                    reinterpret_cast<uintptr_t>(g_ind_buf), dbg, cand.addr, FbBlockRow));
+                            if (strip_read_ok) {
+                                /* the engine reads this through the SMMU; our
+                                 * cached writes must reach memory first */
+                                armDCacheFlush(g_ind_buf, FbBlockRow);
+
+                                VicStage("vs:4_blit");
+                                const JobCtx sctx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr,
+                                                   cap_addr, 0, 0, 0, 0, SelfSrc };
+                                strip_blit_ok = RunOneJob("vb:job_blit_strip", VicJob::BlitStrip, true, sctx);
+
+                                VicStage("vs:5_dump");
+                                strip_dumped = WriteBufToSd(StripBinPath, g_ind_buf, FbBlockRow);
+                                vic_dumped   = WriteBufToSd(VicBinPath, g_vic_dst_buf, StripOutSize);
+                            }
+                            UnmapCmdBuffer(vfd, cap_handle);
+                        }
+                    }
+                    strip_own_rc = orc;   /* ::Result is libnx's u32, not ams::Result */
+                    strip_pin    = cap_addr;
                 }
 
                 /* Dump the frame BEFORE resuming. M37 continued the game first
@@ -1547,6 +1641,14 @@ namespace ams::mitm::applet {
                         (full_ns / 1000 <= 16667) ? "*** FITS IN A 60 fps FRAME BUDGET ***"
                                                   : "over budget for 60 fps");
             }
+
+            LogLine("   ---- VIC on real game pixels ----");
+            LogLine("   nvmapOwn(capture, cacheable) rc=0x%x -> pinned at 0x%08x", strip_own_rc, strip_pin);
+            LogLine("   block-row read %s; strip blit %s", strip_read_ok ? "OK" : "FAILED",
+                    strip_blit_ok ? "*** COMPLETED ***" : "did not complete");
+            LogLine("   dumps: %s %s   (compare with tools/compare_vic.py)",
+                    strip_dumped ? "strip.bin OK" : "strip.bin FAILED",
+                    vic_dumped   ? "vic.bin OK"   : "vic.bin FAILED");
 
             if (cap_done > 0) {
                 const u64 avg     = cap_sum / cap_done;
