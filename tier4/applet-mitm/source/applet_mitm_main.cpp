@@ -185,7 +185,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M42: up. Sweeping VIC block-linear layouts to find the right one.");
+        mitm::applet::LogLine("applet-mitm M43: up. Fixed the dump path - M42 wrote garbage, not engine output.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

@@ -70,6 +70,7 @@ namespace ams::mitm::applet {
          * process will actually grant rather than guessing, and size the capture
          * to whatever we get. 2 MB granularity is the AllocateMemoryBlock unit. */
         constexpr size_t VicBufsEnd  = 0x30000;   /* cfg+cmd+dst+src all live below this */
+        constexpr size_t FbBlockRowStage = 983040;   /* staging starts past one block-row */
         constinit size_t g_vic_heap_size = 0;
 
         /* The capture buffer stays on the HEAP, deliberately.
@@ -91,6 +92,9 @@ namespace ams::mitm::applet {
         constinit u8       *g_vic_dst_buf = nullptr;
         constinit u8       *g_vic_src_buf = nullptr;
         constinit u8       *g_ind_buf     = nullptr;
+        /* cached heap past the nvmap'd block-row, used to stage uncached engine
+         * output before it goes to the filesystem */
+        constinit u8       *g_stage_buf   = nullptr;
 
         bool AllocVicHeap() {
             if (g_vic_heap != 0) { return true; }
@@ -116,6 +120,7 @@ namespace ams::mitm::applet {
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
             g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x20000);
             g_ind_buf     = reinterpret_cast<u8 *>(addr + VicBufsEnd);
+            g_stage_buf   = g_ind_buf + FbBlockRowStage;
 
             std::memset(reinterpret_cast<void *>(addr), 0, want);
             LogLine("   VIC heap %zu MB at 0x%lx (capture buffer %zu KB on heap): cfg=%p cmd=%p dst=%p src=%p",
@@ -375,6 +380,7 @@ namespace ams::mitm::applet {
             { "D_byt_bh0",  StripW * 4, 0, vic::CACHE_WIDTH_64Bx4  },
             { "E_px_bh4_c0",StripW,     4, vic::CACHE_WIDTH_16Bx16 },  /* BL-only cache width */
             { "F_byt_bh1",  StripW * 4, 1, vic::CACHE_WIDTH_64Bx4  },
+            { "G_pitchkind",StripW,     4, vic::CACHE_WIDTH_64Bx4  },  /* kind=PITCH control: MUST differ */
         };
         constexpr u32 StripVariantCount = sizeof(StripVariants) / sizeof(StripVariants[0]);
         static_assert(StripW * 4 - 1 <= 16383);   /* SlotLumaWidth is 14 bits */
@@ -1314,7 +1320,7 @@ namespace ams::mitm::applet {
             u32  cap_over = 0, slot_hits[4] = {};
             u32  strip_own_rc = 0, strip_pin = 0;
             bool strip_read_ok = false, strip_blit_ok = false, strip_dumped = false, vic_dumped = false;
-            u32  strip_ok_count = 0, strip_dump_count = 0;
+            u32  strip_ok_count = 0, strip_dump_count = 0, variant_sum[8] = {};
             bool dumped = false;
             u32  nonzero = 0, distinct = 0, lane_ff[4] = {}, total_px = 0;
             u8   live_a[16] = {}, live_b[16] = {};
@@ -1431,17 +1437,29 @@ namespace ams::mitm::applet {
                                                    cap_addr, 0, 0, 0, 0, SelfSrc };
                                 for (u32 v = 0; v < StripVariantCount; ++v) {
                                     const StripVariant &sv = StripVariants[v];
+                                    const u32 kind = (sv.name[0] == 'G') ? vic::BLK_KIND_PITCH
+                                                                         : vic::BLK_KIND_GENERIC_16Bx2;
                                     g_strip_src = SrcDesc{ StripW, StripH, sv.luma_px,
-                                                           vic::BLK_KIND_GENERIC_16Bx2, sv.blk_h,
+                                                           kind, sv.blk_h,
                                                            vic::PIXFMT_A8B8G8R8, sv.cache_w };
                                     char stage[48];
                                     std::snprintf(stage, sizeof(stage), "vb:strip_%s", sv.name);
                                     VicStage("vs:5_sweep");
                                     if (RunOneJob(stage, VicJob::BlitStrip, true, sctx)) { ++strip_ok_count; }
 
+                                    /* g_vic_dst_buf is UNCACHED nvmap memory, and handing that
+                                     * straight to fs::WriteFile is what made every vic dump report
+                                     * failure in M41 and M42 while strip.bin - which comes from the
+                                     * CACHEABLE capture buffer - succeeded every time. The files it
+                                     * left behind did not even match the engine's own checksum, so
+                                     * they were never the VIC's output. Stage through normal cached
+                                     * heap past the nvmap'd region first. */
+                                    std::memcpy(g_stage_buf, g_vic_dst_buf, StripOutSize);
+                                    variant_sum[v] = 0;
+                                    for (u32 k = 0; k < StripOutSize; ++k) { variant_sum[v] += g_stage_buf[k]; }
                                     char path[64];
                                     std::snprintf(path, sizeof(path), "sdmc:/applet-mitm-vic-%s.bin", sv.name);
-                                    if (WriteBufToSd(path, g_vic_dst_buf, StripOutSize)) { ++strip_dump_count; }
+                                    if (WriteBufToSd(path, g_stage_buf, StripOutSize)) { ++strip_dump_count; }
                                 }
                                 strip_blit_ok = strip_ok_count > 0;
                                 vic_dumped    = strip_dump_count > 0;
@@ -1687,6 +1705,10 @@ namespace ams::mitm::applet {
             LogLine("   block-row read %s; strip blit %s", strip_read_ok ? "OK" : "FAILED",
                     strip_blit_ok ? "*** COMPLETED ***" : "did not complete");
             LogLine("   swept %u variants: %u completed, %u dumped", StripVariantCount, strip_ok_count, strip_dump_count);
+            for (u32 v = 0; v < StripVariantCount && v < 8; ++v) {
+                LogLine("     %-12s bytesum=%u%s", StripVariants[v].name, variant_sum[v],
+                        (v > 0 && variant_sum[v] == variant_sum[0]) ? "   (identical to A - field inert)" : "");
+            }
             LogLine("   dumps: %s %s   (compare with tools/compare_vic.py)",
                     strip_dumped ? "strip.bin OK" : "strip.bin FAILED",
                     vic_dumped   ? "vic.bin OK"   : "vic.bin FAILED");

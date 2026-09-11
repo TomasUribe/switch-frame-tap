@@ -75,6 +75,79 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## M40-M42 RUNS: capture holds up; the VIC sweep was measuring garbage
+
+**M40 (the good run).** With the probe delayed to 180 s so it lands mid-race, and
+the honest verdict logic in place:
+
+```
+captured 120 full frames in 2001 ms -> 59 fps  (120 distinct, 0 missed)
+per-frame read: min 7143 us  avg 9140 us  max 11803 us  (0 of 120 over budget)
+slots read: [0]=40 [1]=40 [2]=40
+game presented: 62 fps before, 59 during, 60 after -> -2 fps delta  [GAME UNAFFECTED]
+```
+
+Every M39 complaint came back clean: 120/120 distinct (the signature now hashes
+block-row 0 rather than the padding below the image), an even 40/40/40 slot
+split proving we follow the swapchain rotation, zero frames over budget, and a
+2 fps cost measured against the average of before and after with a tolerance of
+3. This held again in M42 (59 fps, 118 distinct, -2 fps).
+
+**M41 (the VIC meets real pixels).** The strip blit completed and wrote 61,378 of
+the 61,440 bytes expected for 480x32 - but the picture was scrambled: correct
+brightness structure, no coherent image. Right byte count, wrong pixel order,
+i.e. a source-LAYOUT fault rather than scale or crop.
+
+**M42 (the sweep), and two faults of mine.**
+
+*The dumps never contained the engine's output.* All six writes returned
+`rc=0xd401` - kernel, description 106, `InvalidCurrentMemory`:
+
+```
+WriteBufToSd(sdmc:/applet-mitm-vic-A_px_bh4.bin) rc=0xd401   (x6)
+swept 6 variants: 6 completed, 0 dumped
+```
+
+`g_vic_dst_buf` is **uncached** nvmap memory, and an uncached buffer cannot be
+handed to `fs::WriteFile` - the IPC layer cannot map it for transfer. This is
+also why M41 reported `strip.bin OK vic.bin FAILED`: the strip comes from the
+CACHEABLE capture buffer, the VIC output does not.
+
+The trap: `fs::CreateFile(path, len)` pre-allocates, so a failed write still
+leaves a correctly-sized file. Six files of exactly 65,536 B existed with six
+different md5s and plausible content - and none of their byte sums matched the
+engine's own checksum for the same job (file A summed 11,031,532 against the
+console's 11,470,945). **The PC-side ranking was comparing corrupted data and is
+discarded.** It printed a "winner"; the winner meant nothing.
+
+*The fields being swept are inert.* The on-console checksums are computed by the
+module straight from the engine output, so unlike the files they can be trusted:
+
+| variant | bytesum | |
+|---|---|---|
+| A  px, bh4, 64Bx4 | 11470945 | baseline |
+| B  byt, bh4 | 11470945 | identical - luma width inert |
+| C  px, bh0 | 11470945 | identical - block height inert |
+| E  px, bh4, 16Bx16 | 11470945 | identical - cache width inert |
+| D  byt, bh0 | 15114208 | differs |
+| F  byt, bh1 | 15258556 | differs |
+
+`SlotLumaWidth`, `SlotBlkHeight` and `SlotCacheWidth`, each changed **alone**, do
+nothing. Only combinations moving luma width *and* block height together change
+the output. So the field that controls the source layout is not in this sweep -
+a far better explanation of "none matched" than "wrong values".
+
+### M43
+
+- Stage the engine output through normal cached heap past the nvmap'd block-row
+  before writing it, fixing `0xd401`.
+- Log each variant's byte sum directly, so the comparison survives a failed dump.
+- Add a **`G_pitchkind` control**: the same blit with `SlotBlkKind = PITCH`. If
+  G's checksum also matches A's, even the block-kind field is being ignored and
+  the engine is not reading our slot surface config at all - a deeper problem
+  worth knowing before sweeping anything further. If G differs, the config is
+  live and the search narrows to how block-linear addressing is derived.
+
 ## M39 RUN: 120 frames captured, and three things to fix
 
 ```
@@ -398,7 +471,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M40)
+## The route itself: kernel debug SVCs (M32 -> M43)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:
