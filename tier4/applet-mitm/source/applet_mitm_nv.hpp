@@ -52,6 +52,14 @@ namespace ams::mitm::applet {
      * wedges therefore names the exact ioctl it wedged on. */
     extern std::atomic<const char *> g_vic_stage;
 
+    /* Written by the binder thread on every queueBuffer (code 7): how many
+     * frames the game has presented, and which swapchain slot the last one went
+     * into. Both are relaxed atomic stores - the capture loop polls them from
+     * the worker thread, and nothing that can block ever touches the binder
+     * thread. That rule has held since M8 froze the console. */
+    extern std::atomic<u32> g_queue_count;
+    extern std::atomic<s32> g_queue_slot;
+
     /* Spawn the worker. The VIC probe MUST NOT run on the binder dispatch
      * thread: doing so blocks the game's queueBuffer, which wedges vi, which
      * forces a power-off, which loses the very log we need. M8b died exactly

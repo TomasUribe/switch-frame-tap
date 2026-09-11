@@ -75,7 +75,51 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M37 RUN: WE HAVE A FRAME ***
+## *** M38 RUN: NATIVE 1920x1080, CLEAN ***
+
+Docked, and the frame came out perfect: the Mario Kart 8 Deluxe title screen,
+sharp lettering, lens flare, star field, no tearing and no wash.
+
+```
+*** SWAPCHAIN AT 0x37399e6000 (offset 0 into its region) - matched by EXACT SIZE ***
+FULL SLOT into RAM: 9/9 strips, 6691 us total, 1322 MB/s -> *** FITS IN A 60 fps FRAME BUDGET ***
+*** WROTE A WHOLE FRAME (game stopped - no tearing): 8847360 B, 280 ms ***
+```
+
+**Native resolution, confirmed by content.** The non-black bounding box is
+exactly `x 0..1919, y 0..1079` and 87% of the buffer is nonzero — against 44%
+and `x 0..1279, y 0..719` on the handheld run. Docked, MK8 really does render
+1920x1080, and we get all of it. This is the resolution SysDVR cannot reach at
+all.
+
+**Dumping before `ContinueDebugEvent` killed the tearing**, exactly as predicted.
+Mean luminance per 128-row band is now 78, 63, 71, 90, 51, 64, 72, 42, 28 —
+varying with the picture's own light and shade, instead of M37's monotonic
+191 → 254 fade ramp.
+
+**And the number that decides streaming:** a whole native-resolution slot reads
+into RAM in **6,691 us of a 16,667 us frame budget — 40%**, at 1322 MB/s, with
+the game running. Roughly 10 ms per frame left over for encode and transport.
+
+### M39 — does it hold up per frame, sustained?
+
+One timing on a title screen is not a streaming capture. M39 wires the read to
+the `queueBuffer` intercept that has been running at 60 fps since M9:
+
+- the binder thread now records, per presented frame, a counter and the slot
+  that frame went into — two relaxed atomic stores and a parse, nothing that can
+  block, which is the rule that has held since M8 froze the console;
+- the worker waits for each present, then reads **the slot the game just
+  presented** rather than the one it is drawing into;
+- 120 consecutive full frames, recording per-frame min/avg/max, how many frames
+  were distinct (proof we are getting new pixels, not re-reading one stale
+  slot), and the **game's own frame rate before, during and after**.
+
+That last measurement is the one that matters. If the game's presentation rate
+drops while we capture, full-rate native capture is not viable no matter how
+good the per-frame number looks in isolation.
+
+## M37 run: we have a frame
 
 ```
 *** SWAPCHAIN AT 0x3f117e6000 (offset 0 into its region) - matched by EXACT SIZE ***
@@ -301,7 +345,7 @@ exactly 8,847,360-byte spacing, twice. A uniform fill is rejected by requiring a
 least one other lane to vary. Step cap raised to 4000 with an explicit
 completion flag, read budget capped at 24,000 so the freeze stays bounded.
 
-## The route itself: kernel debug SVCs (M32 -> M38)
+## The route itself: kernel debug SVCs (M32 -> M39)
 
 Both graphics routes are closed, so go around the graphics stack. Atmosphere's
 own cheat engine reads a running game's memory at 60 Hz this way:

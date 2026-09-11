@@ -577,6 +577,9 @@ namespace ams::mitm::applet {
 
     }
 
+    constinit std::atomic<u32> g_queue_count{0};
+    constinit std::atomic<s32> g_queue_slot{-1};
+
     void CaptureGameSurface(const NvGraphicBufferRaw *gb, u32 which) {
         if (gb == nullptr || gb->num_planes == 0) { return; }
         const NvSurfaceRaw *p0 = std::addressof(gb->planes[0]);
@@ -1227,6 +1230,9 @@ namespace ams::mitm::applet {
 
             u64  strip_ns = 0, dump_ns = 0, full_ns = 0;
             u32  strip_chunks_ok = 0, dump_chunks = 0, full_strips = 0;
+            u32  cap_done = 0, cap_missed = 0, cap_distinct = 0;
+            u64  cap_min = ~UINT64_C(0), cap_max = 0, cap_sum = 0, cap_ns = 0;
+            u32  fps_before = 0, fps_during = 0, fps_after = 0;
             bool dumped = false;
             u32  nonzero = 0, distinct = 0, lane_ff[4] = {}, total_px = 0;
             u8   live_a[16] = {}, live_b[16] = {};
@@ -1380,6 +1386,70 @@ namespace ams::mitm::applet {
                             }
                             full_ns = armTicksToNs(armGetSystemTick()) - t1;
                         }
+
+                        /* ---- sustained per-frame capture ------------------
+                         * One timing on a title screen is not a streaming
+                         * capture. This is the loop a real implementation runs:
+                         * wait until the game presents, read the slot it just
+                         * presented into, repeat. It measures the per-frame cost
+                         * and - just as important - what the GAME's own frame
+                         * rate does while we are doing it. */
+                        {
+                            constexpr u32 CapFrames = 120;
+
+                            const u32 c0 = g_queue_count.load(std::memory_order_relaxed);
+                            os::SleepThread(TimeSpan::FromMilliSeconds(1000));
+                            fps_before = g_queue_count.load(std::memory_order_relaxed) - c0;
+
+                            const u32 during0 = g_queue_count.load(std::memory_order_relaxed);
+                            u32 seen = during0, last_sig = 0;
+                            const u64 cap_t0 = armTicksToNs(armGetSystemTick());
+
+                            for (u32 i = 0; i < CapFrames; ++i) {
+                                u32 spins = 0;
+                                while (g_queue_count.load(std::memory_order_relaxed) == seen && spins < 200) {
+                                    os::SleepThread(TimeSpan::FromMilliSeconds(1));
+                                    ++spins;
+                                }
+                                if (g_queue_count.load(std::memory_order_relaxed) == seen) { ++cap_missed; break; }
+                                seen = g_queue_count.load(std::memory_order_relaxed);
+
+                                /* read the slot the game just PRESENTED, not the
+                                 * one it is drawing into - that is the whole
+                                 * point of having the binder intercept. */
+                                const s32 slot = g_queue_slot.load(std::memory_order_relaxed);
+                                const u64 off  = (slot >= 0 && static_cast<u32>(slot) < 3) ? FbSlotOff[slot] : 0;
+
+                                const u64 t2 = armTicksToNs(armGetSystemTick());
+                                bool ok = true;
+                                for (u64 done = 0; done < FbSlotSize; done += FbBlockRow) {
+                                    const u64 n = (FbSlotSize - done < FbBlockRow) ? (FbSlotSize - done) : FbBlockRow;
+                                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, cand.addr + off + done, n))) { ok = false; break; }
+                                }
+                                const u64 dt = armTicksToNs(armGetSystemTick()) - t2;
+                                if (!ok) { ++cap_missed; continue; }
+
+                                ++cap_done;
+                                cap_sum += dt;
+                                if (dt < cap_min) { cap_min = dt; }
+                                if (dt > cap_max) { cap_max = dt; }
+
+                                /* signature of the last strip, to prove we are
+                                 * getting new pixels rather than re-reading one
+                                 * stale slot 120 times */
+                                u32 sig = 0;
+                                for (u32 k = 0; k < 8192; k += 8) { sig = sig * 31u + g_ind_buf[k]; }
+                                if (sig != last_sig) { ++cap_distinct; last_sig = sig; }
+                            }
+                            cap_ns = armTicksToNs(armGetSystemTick()) - cap_t0;
+                            if (cap_ns > 0) {
+                                fps_during = static_cast<u32>((static_cast<u64>(seen - during0) * UINT64_C(1000000000)) / cap_ns);
+                            }
+
+                            const u32 c1 = g_queue_count.load(std::memory_order_relaxed);
+                            os::SleepThread(TimeSpan::FromMilliSeconds(1000));
+                            fps_after = g_queue_count.load(std::memory_order_relaxed) - c1;
+                        }
                     }
                 }
 
@@ -1465,6 +1535,24 @@ namespace ams::mitm::applet {
                         static_cast<unsigned long long>(mbps),
                         (full_ns / 1000 <= 16667) ? "*** FITS IN A 60 fps FRAME BUDGET ***"
                                                   : "over budget for 60 fps");
+            }
+
+            if (cap_done > 0) {
+                const u64 avg     = cap_sum / cap_done;
+                const u32 cap_fps = (cap_ns > 0) ? static_cast<u32>((static_cast<u64>(cap_done) * UINT64_C(1000000000)) / cap_ns) : 0;
+                LogLine("   ---- sustained per-frame capture ----");
+                LogLine("   captured %u full frames in %llu ms -> %u fps  (%u distinct, %u missed)",
+                        cap_done, static_cast<unsigned long long>(cap_ns / 1000000),
+                        cap_fps, cap_distinct, cap_missed);
+                LogLine("   per-frame read: min %llu us  avg %llu us  max %llu us   (60 fps budget 16667 us)",
+                        static_cast<unsigned long long>(cap_min / 1000),
+                        static_cast<unsigned long long>(avg / 1000),
+                        static_cast<unsigned long long>(cap_max / 1000));
+                LogLine("   game presented: %u fps before, %u fps during, %u fps after  [%s]",
+                        fps_before, fps_during, fps_after,
+                        (fps_during + 6 >= fps_before) ? "*** GAME UNAFFECTED ***" : "game slowed while capturing");
+            } else if (cap_missed > 0) {
+                LogLine("   capture loop never got a frame (%u misses) - was the game presenting?", cap_missed);
             }
 
             if (dumped && dump_ns > 0) {

@@ -102,6 +102,15 @@ namespace ams::mitm::applet {
          * the first int32 of the parcel payload. Once the game has presented a
          * few hundred frames (real content on screen), run the one-shot VIC
          * blit against that slot. */
+        /* Per-frame bookkeeping for the capture loop: a cheap parse and two
+         * relaxed stores. The worker thread polls these to know when a new frame
+         * has been presented and which slot holds it. */
+        if (code == 7) {
+            const s32 qs = ParseQueueBufferSlot(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize());
+            if (qs >= 0 && qs < 8) { g_queue_slot.store(qs, std::memory_order_relaxed); }
+            g_queue_count.fetch_add(1, std::memory_order_relaxed);
+        }
+
         if (code == 7 && g_vic_armed && total > 300 && g_game_surface.armed) {
             bool ex = false;
             if (g_blit_attempted.compare_exchange_strong(ex, true)) {

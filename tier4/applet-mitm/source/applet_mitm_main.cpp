@@ -157,7 +157,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M38: up. First frame captured - now grabbing a clean one, untorn.");
+        mitm::applet::LogLine("applet-mitm M39: up. Native 1080p captured - now testing sustained per-frame capture.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
