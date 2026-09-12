@@ -20,3 +20,21 @@ git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 That is the only one required to build. Check out the tag matching the
 Atmosphère release you run on the console — this project was developed against
 **1.11.2** on firmware **22.5.0**.
+
+## open-gpu-doc (added M63)
+
+```
+git clone --depth 1 https://github.com/NVIDIA/open-gpu-doc.git ref/open-gpu-doc
+```
+
+NVIDIA's own published hardware interface documentation. `classes/video/`
+carries the pieces this project had been missing:
+
+| file | what it settles |
+|---|---|
+| `clceb6.h` | VIC methods. Its `SET_OUTPUT_SURFACE_LUMA_OFFSET` is **0x720**, byte-identical to the value we proved on hardware for the far older `NVB0B6` - which is what validates the two it adds, `SET_OUTPUT_SURFACE_CHROMA_U/V_OFFSET` at 0x724/0x728. Those unblock NV12 output, which M59 refused to guess at. |
+| `clc5b7.h` | The complete NVENC method table: `SET_APPLICATION_ID` 0x200, `SET_CONTROL_PARAMS` 0x700, `SET_IN_DRV_PIC_SETUP` 0x710, `SET_IN_CUR_PIC` 0x734, `SET_OUT_BITSTREAM` 0x71C, `EXECUTE` 0x300, plus the error enum. |
+| `nvenc_drv.h` | The driver structures, **version-gated back to `NV_NVENC_1_0`** and including `NV_NVENC_5_0` / `NV_NVENC_6_0` - the generation Tegra X1 (GM20B) belongs to. The magic encodes the class: 5.0 = `0xd0b70006`, 6.0 = `0xc1b70006`. |
+| `nvjpg_drv.h` | NVJPG. Not useful here: switchbrew's `NV_services` lists `/dev/nvhost-nvjpg` on this firmware as **JPEG Decoder** only - hardware JPEG *encode* arrives on Xavier, not X1. |
+
+Not redistributed; clone it yourself. Licensed by NVIDIA, see the repo.

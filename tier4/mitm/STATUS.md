@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M62**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M63**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,6 +88,120 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M63: THE VIC WAS NEVER SLOW - I measured my own logging ***
+
+M59 reported 119,023 us per full-frame VIC blit and concluded **"the VIC is
+unusable as a per-frame stage."** That went into this file, the README, the
+commit log and the GBAtemp thread as a property of the hardware.
+
+**It is wrong.** Here is what was inside the timed region, per job:
+
+| cost | what it is |
+|---|---|
+| ~7 x `LogLine` | each one `fs::OpenFile` + `WriteFile(WriteOption::Flush)` + `CloseFile` **against the SD card**. An SD flush is 5-20 ms. |
+| `NvOpen`/`NvClose` | `/dev/nvhost-ctrl` opened and closed **every job** |
+| 65,536-iteration loop | byte-by-byte checksum of the output buffer |
+| `memset` + hex format | poison-fill and a 32-byte hex dump |
+
+Seven SD flushes alone is 35-140 ms. **That is the 119 ms.** The engine was
+never measured at all.
+
+The compositor starvation has the same cause. It was not contention for the VIC
+or its syncpoint: it was blocking SD-card I/O in a tight loop on core 3, which
+is where our own IPC thread also lives (M61). Two "hardware findings" collapse
+into one instrumentation bug.
+
+### The lesson, stated plainly
+
+**Never time a region that contains a log write.** Every per-frame diagnostic in
+this project writes to the SD card with an explicit flush, by design, because a
+crash must not lose the tail. That design is right for one-shot probes and
+catastrophic for anything measured in a loop.
+
+`g_vic_quiet` now gates the whole diagnostic path. When false, the one-shot
+probes behave exactly as before and still produce their evidence. When true,
+the job is submit + wait and nothing else, `/dev/nvhost-ctrl` stays open for the
+life of the process, and timings accumulate in memory to be logged once at the
+end.
+
+### What this reopens
+
+The VIC is the natural RGBA -> NV12 converter, and NV12 is what NVENC requires
+as input. M59's wrong conclusion had closed that door and forced the CPU
+point-sampler; the door is open again.
+
+## NVIDIA published the headers we needed
+
+`ref/open-gpu-doc` (`git clone https://github.com/NVIDIA/open-gpu-doc.git`),
+`classes/video/`:
+
+**1. VIC output chroma offsets, confirmed rather than guessed.** libdrm defines
+only `SET_OUTPUT_SURFACE_LUMA_OFFSET`, which is why M59 refused NV12 output - a
+wrong register hangs the VIC and takes the compositor with it. `clceb6.h`
+defines all three:
+
+```
+SET_OUTPUT_SURFACE_LUMA_OFFSET      0x720   <- identical to the value we proved on NVB0B6
+SET_OUTPUT_SURFACE_CHROMA_U_OFFSET  0x724
+SET_OUTPUT_SURFACE_CHROMA_V_OFFSET  0x728
+```
+
+The luma match matters: `NVCEB6` is many generations newer than our `NVB0B6`,
+and its offset is byte-identical to one we verified on hardware. **The host1x
+method ABI is stable across generations**, which is what licenses using the
+other two, and by extension the NVENC table below.
+
+**2. The complete NVENC method table** (`clc5b7.h`) - `SET_APPLICATION_ID`
+(0x200, H264=1), `SET_CONTROL_PARAMS` (0x700, H264=3, CONSTQP=0),
+`SET_IN_DRV_PIC_SETUP` (0x710), `SET_IN_CUR_PIC` (0x734) / `_CHROMA_U` (0x740),
+`SET_OUT_BITSTREAM` (0x71C), `SET_OUT_ENC_STATUS` (0x718),
+`SET_OUT_REF_PIC_LUMA` (0x730), `EXECUTE` (0x300), plus the full error enum.
+
+**3. The driver structures for our generation** (`nvenc_drv.h`, 275 KB),
+version-gated back to `NV_NVENC_1_0`. The magic encodes the class:
+
+```
+NV_NVENC_5_0  0xd0b70006      NV_NVENC_6_0  0xc1b70006
+NV_NVENC_1_0  0xc0b70006      NV_MSENC_2_0  0xa0b70006
+```
+
+Tegra X1 is GM20B, so our engine is in that table. The firmware **validates the
+magic and errors out** (`...EncErrorH264BadMagic`) rather than hanging, so
+probing which version the Switch's firmware accepts is safe by construction.
+
+`nvenc_h264_drv_pic_setup_s` is 512 bytes with sub-structs at offsets - the same
+shape as the VIC config struct we already program correctly.
+
+**4. NVJPG is a dead end here.** `nvjpg_drv.h` exists, but switchbrew's
+`NV_services` lists `/dev/nvhost-nvjpg` on this firmware as **JPEG Decoder**.
+Hardware JPEG *encode* arrives on Xavier, not X1. MJPEG would have been ideal
+for latency - independent frames, no reordering - and it is simply not available.
+
+## M63 build
+
+- `g_vic_quiet`, persistent `/dev/nvhost-ctrl`, in-memory timing accumulators.
+- **NV12 output**: `PIXFMT_Y8_U8V8_N420` (67), chroma plane dimensions in
+  `FillOutputConfig`, and `SET_OUTPUT_SURFACE_CHROMA_U_OFFSET` emitted in the
+  cmdbuf. Luma bytes must be 256-aligned because host1x carries addresses
+  shifted right by 8; every resolution used here satisfies that.
+- `VicDstSize` 1 MB -> 3.5 MB so a full 1920x1080 NV12 frame (3,110,400 B) fits.
+- Heap ladder now reaches **24 MB**. M55 measured 411,260 KB free in the Applet
+  resource-limit group, so 16 MB was never a ceiling, just the top rung.
+- `bench` arm token: 60 quiet VIC jobs at 640x360 in RGBA, then again in NV12,
+  reporting submit+wait average and worst, plus wall time per frame against the
+  16,667 us budget. Dumps the NV12 result to `sdmc:/applet-mitm-nv12.bin`;
+  `tools/nv12topng.py` renders it so correctness is checked on the PC rather
+  than asserted on the console.
+
+### What the bench decides
+
+If quiet VIC jobs come back in single-digit milliseconds, the architecture
+changes: VIC does RGBA -> NV12 (2.67x less data, for free, in hardware), and the
+NVENC path has its required input format. If they are still ~119 ms with the
+logging gone, then M59's conclusion was right for a reason I have not found and
+the CPU path stays.
+
+Either way the number is now being measured rather than inferred.
 ## *** M61-M62: the stream runs, and the bottleneck is now the cable ***
 
 M61 is the run that made it usable, and the bug it fixed was ours, not the
@@ -206,6 +320,12 @@ the console needed a power cycle.
 
 The risk was named in this file before the run and the loop was written anyway.
 **The VIC is fine for a one-shot blit and must not be in a per-frame path.**
+
+> **RETRACTED IN M63.** The 119 ms was ~7 SD-flushing `LogLine` calls and a
+> 65,536-iteration checksum *inside the timed region*, plus an `NvOpen`/`NvClose`
+> of `/dev/nvhost-ctrl` per job. The engine was never measured, and the
+> compositor starvation was blocking SD I/O in a tight loop, not engine
+> contention. See the M63 section at the top of this file.
 
 ### M60: CPU point-sample, no engine at all
 

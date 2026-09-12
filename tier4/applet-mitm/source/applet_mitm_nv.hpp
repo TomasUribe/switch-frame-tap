@@ -68,6 +68,10 @@ namespace ams::mitm::applet {
      * sframes= how many to send. Defaults are 480x270 because that is the only
      * size that fits 60 fps on USB 2.0 (518,400 B/frame = 12.4 ms transfer);
      * 640x360 is selectable but caps near 45 fps until NV12 or SuperSpeed. */
+    /* M63: "bench" times the VIC with instrumentation OFF and proves whether
+     * NV12 output works. M59's 119 ms/blit was measured with ~7 SD-flushing log
+     * calls and a 65,536-iteration checksum inside the timed region. */
+    extern bool g_bench_armed;
     extern bool g_stream_armed;
     extern u32  g_stream_w, g_stream_h, g_stream_frames;
 

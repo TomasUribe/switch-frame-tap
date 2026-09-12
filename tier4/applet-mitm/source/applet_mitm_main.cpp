@@ -466,13 +466,14 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M62: up. STREAMING at 640x360, no start delay.");
+        mitm::applet::LogLine("applet-mitm M63: up. VIC BENCH - the 119 ms was our own logging.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
         mitm::applet::g_dbg_armed   = ArmFileContains("dbg");
         mitm::applet::g_dump_armed  = ArmFileContains("dump");
         g_usb_armed                 = ArmFileContains("usb");
+        mitm::applet::g_bench_armed   = ArmFileContains("bench");
         mitm::applet::g_stream_armed  = ArmFileContains("stream");
         mitm::applet::g_stream_w      = ArmFileNumber("sw", 480);
         mitm::applet::g_stream_h      = ArmFileNumber("sh", 270);

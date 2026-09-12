@@ -20,6 +20,14 @@ namespace ams::mitm::applet::vic {
     constexpr u32 SET_CONTROL_PARAMS              = 0x00000704;
     constexpr u32 SET_CONFIG_STRUCT_OFFSET        = 0x00000708;
     constexpr u32 SET_OUTPUT_SURFACE_LUMA_OFFSET  = 0x00000720;
+    /* M63: libdrm documents only the luma offset, which is why NV12 output was
+     * refused in M59 rather than guessed at - a wrong register hangs the VIC and
+     * takes the compositor with it. NVIDIA's own published class header
+     * (open-gpu-doc classes/video/clceb6.h) defines all three, and its luma
+     * value is byte-identical to the 0x720 we already proved on hardware, which
+     * validates the pair below. */
+    constexpr u32 SET_OUTPUT_SURFACE_CHROMA_U_OFFSET = 0x00000724;
+    constexpr u32 SET_OUTPUT_SURFACE_CHROMA_V_OFFSET = 0x00000728;
 
     constexpr u32 HOST1X_CLASS_VIC = 0x5D;
     /* nvhost "uclass" method regs for a VIC channel */
@@ -55,6 +63,14 @@ namespace ams::mitm::applet::vic {
     constexpr u32 PIXFMT_A8R8G8B8 = 32;
     constexpr u32 PIXFMT_A8B8G8R8 = 33;
     constexpr u32 PIXFMT_R8G8B8A8 = 34;
+    /* NV12 - semi-planar Y + interleaved UV at half resolution in both axes.
+     * 1.5 bytes/pixel against RGBA's 4: a 2.67x bandwidth reduction produced by
+     * the engine for free, and the input format NVENC requires. From
+     * ref/libdrm-vic/vic.h VIC_PIXEL_FORMAT_Y8_U8V8_N420. */
+    constexpr u32 PIXFMT_Y8_U8V8_N420 = 67;   /* NV12 */
+    constexpr u32 PIXFMT_Y8_V8U8_N420 = 68;   /* NV21 */
+
+    constexpr bool IsNv12(u32 fmt) { return fmt == PIXFMT_Y8_U8V8_N420 || fmt == PIXFMT_Y8_V8U8_N420; }
     /* block kinds */
     constexpr u32 BLK_KIND_PITCH        = 0;
     constexpr u32 BLK_KIND_GENERIC_16Bx2 = 1;

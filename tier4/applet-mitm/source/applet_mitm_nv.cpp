@@ -48,6 +48,7 @@ namespace ams::mitm::applet {
     /* M59 streaming prototype. 480x270 default: the only size that fits 60 fps
      * on USB 2.0 (518,400 B/frame = 12.4 ms transfer against a 16.67 ms budget).
      * 640x360 is selectable but caps near 45 fps until NV12 or SuperSpeed. */
+    constinit bool g_bench_armed   = false;
     constinit bool g_stream_armed  = false;
     constinit u32  g_stream_w      = 480;
     constinit u32  g_stream_h      = 270;
@@ -74,13 +75,16 @@ namespace ams::mitm::applet {
         /* M59: 1 MB, sized for a streamed frame rather than the 64x64 self-blit.
          * 640x360 RGBA is 921,600 B; 480x270 is 518,400. The old 0x10000 held
          * neither. */
-        constexpr size_t VicDstSize = 0x100000;  /* linear output            */
+        /* M63: 3.5 MB so a full 1920x1080 NV12 frame (3,110,400 B) fits, which
+         * is both the widest useful VIC output and exactly what NVENC wants as
+         * input. */
+        constexpr size_t VicDstSize = 0x340000;  /* linear output            */
         constexpr size_t VicSrcSize = 0x10000;   /* a SOURCE WE OWN, for the self-blit */
         /* A fixed 8 MB request was refused with os::ResultOutOfMemory (0x1003):
          * a sysmodule's heap is capped well below that. Ask for the largest the
          * process will actually grant rather than guessing, and size the capture
          * to whatever we get. 2 MB granularity is the AllocateMemoryBlock unit. */
-        constexpr size_t VicBufsEnd  = 0x120000;  /* cfg+cmd+dst+src all live below this */
+        constexpr size_t VicBufsEnd  = 0x360000;  /* cfg+cmd+dst+src all live below this */
         /* M59 RELAYOUT - the blocker M56 predicted. Staging used to start
          * 983,040 B into the capture region, which collided with a resident
          * full frame (8,294,400 B). It now starts past a whole slot. */
@@ -90,8 +94,8 @@ namespace ams::mitm::applet {
          * 16 MB heap: VicBufsEnd + FbSlotBytes + 3 * StreamStageSize must stay
          * under g_ind_size (15,597,568), which caps this at ~2,250,000. */
         constexpr size_t StreamStageSize = 0x220000;   /* per stream stage buffer */
-        static_assert(0x120000 + 8847360 + 3 * StreamStageSize <= 16777216,
-                      "stage buffers must fit the 16 MB heap");
+        static_assert(0x360000 + 8847360 + 3 * StreamStageSize <= 24u * 1024 * 1024,
+                      "vic buffers + slot + stage buffers must fit the heap");
         constinit size_t g_vic_heap_size = 0;
 
         /* The capture buffer stays on the HEAP, deliberately.
@@ -200,7 +204,10 @@ namespace ams::mitm::applet {
              * 8,294,400 B frame - 102 KB short. 10 MB is the first rung where a
              * full 1080p frame physically fits. The ladder descends, so a
              * refusal costs nothing and we still learn the real ceiling. */
-            for (const size_t sz : { 16_MB, 12_MB, 10_MB, 8_MB, 4_MB, 2_MB }) {
+            /* M63: reaches 24 MB. M55 measured 411,260 KB free in the Applet
+             * resource-limit group at probe time, so 16 MB was never the
+             * ceiling - it was simply the largest rung the ladder offered. */
+            for (const size_t sz : { 24_MB, 20_MB, 16_MB, 12_MB, 10_MB, 8_MB, 4_MB, 2_MB }) {
                 const auto rc = os::SetMemoryHeapSize(sz);
                 LogLine("   SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
                 if (R_SUCCEEDED(rc)) { want = sz; break; }
@@ -244,7 +251,7 @@ namespace ams::mitm::applet {
             g_vic_cfg_buf = reinterpret_cast<u8 *>(addr + 0x0000);
             g_vic_cmd_buf = reinterpret_cast<u8 *>(addr + 0x4000);
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
-            g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x110000);
+            g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x350000);
             g_ind_buf     = reinterpret_cast<u8 *>(addr + VicBufsEnd);
             g_stage_buf   = g_ind_buf + FbBlockRowStage;
             g_stream_stage[0] = g_stage_buf + StreamStageSize;
@@ -594,9 +601,22 @@ namespace ams::mitm::applet {
             c->outputSurfaceConfig.OutSurfaceHeight = out.h - 1;
             c->outputSurfaceConfig.OutLumaWidth     = out.stride_px - 1;
             c->outputSurfaceConfig.OutLumaHeight    = out.h - 1;
-            c->outputSurfaceConfig.OutChromaWidth   = 16383;
-            c->outputSurfaceConfig.OutChromaHeight  = 16383;
+            /* 16383 is the "no chroma plane" sentinel the RGBA path has always
+             * used. NV12 needs real dimensions: the UV plane is half resolution
+             * in both axes, interleaved, so it is stride/2 x h/2 pairs. */
+            if (vic::IsNv12(out.fmt)) {
+                c->outputSurfaceConfig.OutChromaWidth  = (out.stride_px / 2) - 1;
+                c->outputSurfaceConfig.OutChromaHeight = (out.h / 2) - 1;
+            } else {
+                c->outputSurfaceConfig.OutChromaWidth   = 16383;
+                c->outputSurfaceConfig.OutChromaHeight  = 16383;
+            }
         }
+
+        /* Bytes of the luma plane, i.e. where the interleaved UV plane starts.
+         * Must be 256-aligned because host1x carries addresses shifted right by
+         * 8; every resolution we use satisfies that (1920x1080 = 256*8100). */
+        constexpr u32 Nv12LumaBytes(const OutDesc &out) { return out.stride_px * out.h; }
 
         /* libdrm vic40_fill / vic_clear: paint the whole target one colour with
          * no slot enabled. Anything non-zero in dst afterwards proves the whole
@@ -659,7 +679,8 @@ namespace ams::mitm::applet {
         /* Word indices of the three address slots, for the reloc variant. */
         constexpr u32 CfgAddrWord = 8, DstAddrWord = 11, SrcAddrWord = 14;   /* + 1 if SETCL is emitted */
 
-        u32 BuildCmdbuf(u32 *w, VicJob job, u32 cfg_addr, u32 dst_addr, u32 src_addr, bool set_class) {
+        u32 BuildCmdbuf(u32 *w, VicJob job, u32 cfg_addr, u32 dst_addr, u32 src_addr, bool set_class,
+                        u32 chroma_addr = 0) {
             const bool has_src  = (job == VicJob::BlitSelf || job == VicJob::BlitGame || job == VicJob::BlitStrip);
             u32 n = 0;
             /* Point the channel at the VIC's register space before touching
@@ -676,6 +697,11 @@ namespace ams::mitm::applet {
             w[n++] = cfg_addr >> 8;
             w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_OUTPUT_SURFACE_LUMA_OFFSET >> 2;
             w[n++] = dst_addr >> 8;
+            /* NV12 writes two planes, so the engine needs the UV base too. */
+            if (chroma_addr != 0) {
+                w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_OUTPUT_SURFACE_CHROMA_U_OFFSET >> 2;
+                w[n++] = chroma_addr >> 8;
+            }
             if (has_src) {
                 w[n++] = Host1xIncr0x10x2; w[n++] = vic::SET_SURFACE0_SLOT0_LUMA_OFFSET >> 2;
                 w[n++] = src_addr >> 8;
@@ -703,6 +729,42 @@ namespace ams::mitm::applet {
             SrcDesc game_src;
         };
 
+
+        /* ---- M63: the VIC was never slow ---------------------------------
+         * M59 measured 119,023 us per full-frame blit and concluded the VIC is
+         * unusable as a per-frame stage. That conclusion was wrong, and it was
+         * published to STATUS.md, the README and GBAtemp as a hardware finding.
+         *
+         * What was actually being timed, PER JOB:
+         *   - ~7 LogLine calls, each fs::OpenFile + WriteFile(WriteOption::Flush)
+         *     + CloseFile against the SD card. An SD flush is 5-20 ms.
+         *   - NvOpen + NvClose of /dev/nvhost-ctrl.
+         *   - a 65,536-iteration byte loop computing a checksum of the output,
+         *     plus a poison memset of the same buffer.
+         *
+         * That is 35-140 ms of instrumentation around a 1-2 ms engine op. The
+         * compositor starvation followed from the same cause: blocking SD I/O
+         * in a tight loop, not from contention for the engine.
+         *
+         * g_vic_quiet turns all of it off for streaming. The diagnostic path is
+         * unchanged when quiet is false, so the one-shot probes still produce
+         * exactly the evidence they used to. */
+        constinit bool g_vic_quiet     = false;
+        constinit u32  g_ctrl_fd       = 0;
+        constinit u64  g_vic_ns_total  = 0;
+        constinit u64  g_vic_ns_worst  = 0;
+        constinit u32  g_vic_jobs      = 0;
+
+        /* One open for the life of the process, instead of one per job. */
+        u32 CtrlFd() {
+            if (g_ctrl_fd == 0) {
+                u32 fd = 0, e = 0;
+                if (R_SUCCEEDED(NvOpen("/dev/nvhost-ctrl", std::addressof(fd), std::addressof(e))) && e == 0) {
+                    g_ctrl_fd = fd;
+                }
+            }
+            return g_ctrl_fd;
+        }
 
         /* Program the syncpoint increment the submit already promised. Omitting
          * this is what froze the console: nvhost raised syncpoint 12's max to
@@ -744,18 +806,24 @@ namespace ams::mitm::applet {
                 case VicJob::BlitStrip: FillBlitConfig(cfg, g_strip_src, g_strip_out); break;
             }
 
+            /* pick the OutDesc this job will actually use, so the chroma base
+             * matches the config struct we just filled */
+            const OutDesc &job_out = (job == VicJob::BlitStrip) ? g_strip_out : SelfOut;
+            const u32 chroma_addr = vic::IsNv12(job_out.fmt) ? (c.dst_addr + Nv12LumaBytes(job_out)) : 0u;
+
             auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
-            u32 words = BuildCmdbuf(w, job, c.cfg_addr, c.dst_addr, c.src_addr + c.src_off, set_class);
+            u32 words = BuildCmdbuf(w, job, c.cfg_addr, c.dst_addr, c.src_addr + c.src_off, set_class, chroma_addr);
             const u32 rw = set_class ? 1u : 0u;   /* reloc word indices shift when SETCL leads */
             words = AppendIncrSyncpt(w, words, c.syncpt, true);
 
             /* Prefill with a poison pattern rather than zero. "All zero" cannot
              * distinguish "engine wrote zeros" from "engine never touched our
              * memory"; surviving 0xAB proves the latter outright. */
-            std::memset(g_vic_dst_buf, 0xAB, DstSize);
+            if (!g_vic_quiet) { std::memset(g_vic_dst_buf, 0xAB, DstSize); }
             armDCacheFlush(g_vic_dst_buf, DstSize);
             armDCacheFlush(g_vic_cfg_buf, VicCfgSize);
             armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
+            const u64 job_t0 = armTicksToNs(armGetSystemTick());
 
             const u32 nr = 0u;   /* relocs are inert on Horizon - always inline the addresses */
 
@@ -773,24 +841,26 @@ namespace ams::mitm::applet {
             u32 nverr = 0, fence_val = 0;
             ::Result rc = NvIoctl(c.vfd, req, sb, sz, std::addressof(nverr));
             std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
-            LogLine("   [%s] setcl=%d words=%u cmd[0..3]=%08x %08x %08x %08x",
-                    stage, static_cast<int>(set_class), words, w[0], w[1], w[2], w[3]);
-            LogLine("   [%s] req=0x%08x sz=%u nr=%u rc=0x%x nverr=%u -> fence=%u",
-                    stage, req, sz, nr, rc, nverr, fence_val);
+            if (!g_vic_quiet) {
+                LogLine("   [%s] setcl=%d words=%u cmd[0..3]=%08x %08x %08x %08x",
+                        stage, static_cast<int>(set_class), words, w[0], w[1], w[2], w[3]);
+                LogLine("   [%s] req=0x%08x sz=%u nr=%u rc=0x%x nverr=%u -> fence=%u",
+                        stage, req, sz, nr, rc, nverr, fence_val);
+            }
             if (R_FAILED(rc) || nverr != 0) { LogLine("   [%s] SUBMIT REJECTED", stage); return false; }
 
             /* Read the cmdbuf back: nvservices patches reloc targets in place,
              * so these words now hold the addresses the engine would be given. */
             armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
-            LogLine("   [%s] resolved addrs: cfg=0x%08x dst=0x%08x src=0x%08x (<<8: 0x%x 0x%x 0x%x)",
+            if (!g_vic_quiet) LogLine("   [%s] resolved addrs: cfg=0x%08x dst=0x%08x src=0x%08x (<<8: 0x%x 0x%x 0x%x)",
                     stage, w[CfgAddrWord + rw], w[DstAddrWord + rw],
                     (job == VicJob::Fill) ? 0u : w[SrcAddrWord + rw],
                     w[CfgAddrWord + rw] << 8, w[DstAddrWord + rw] << 8,
                     (job == VicJob::Fill) ? 0u : (w[SrcAddrWord + rw] << 8));
 
             bool completed = false;
-            u32 cfd = 0, ce = 0;
-            if (R_SUCCEEDED(NvOpen("/dev/nvhost-ctrl", std::addressof(cfd), std::addressof(ce))) && ce == 0) {
+            const u32 cfd = CtrlFd();       /* opened once, never closed per job */
+            if (cfd != 0) {
                 struct { u32 id; u32 thresh; u32 timeout; } a = { c.syncpt, fence_val, 100 };
                 nverr = 0;
                 rc = NvIoctl(cfd, NvHostIocCtrlSyncptWait, std::addressof(a), sizeof(a), std::addressof(nverr));
@@ -798,9 +868,11 @@ namespace ams::mitm::applet {
                 u32 e2 = 0;
                 NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
                 completed = (r.value >= fence_val);
-                LogLine("   [%s] WAIT nverr=%u  syncpt=%u (want >= %u)%s",
-                        stage, nverr, r.value, fence_val,
-                        completed ? "  OP_DONE fired" : "  ENGINE DID NOT COMPLETE");
+                if (!g_vic_quiet) {
+                    LogLine("   [%s] WAIT nverr=%u  syncpt=%u (want >= %u)%s",
+                            stage, nverr, r.value, fence_val,
+                            completed ? "  OP_DONE fired" : "  ENGINE DID NOT COMPLETE");
+                }
 
                 /* Never leave a shared syncpoint short of its declared max. */
                 if (r.value < fence_val) {
@@ -813,15 +885,22 @@ namespace ams::mitm::applet {
                         if (k == 0 && ae != 0) { ireq = NvHostIocCtrlSyncptIncrWR;
                             NvIoctl(cfd, ireq, std::addressof(ai), sizeof(ai), std::addressof(ae)); }
                     }
-                    LogLine("   [%s] rescued syncpt %u up to fence %u", stage, c.syncpt, fence_val);
+                    if (!g_vic_quiet) LogLine("   [%s] rescued syncpt %u up to fence %u", stage, c.syncpt, fence_val);
                 }
-                NvClose(cfd);
+                /* cfd is process-wide now - closing it here is what cost a
+                 * device open/close on every single job */
+            }
+            {
+                const u64 dt = armTicksToNs(armGetSystemTick()) - job_t0;
+                g_vic_ns_total += dt; ++g_vic_jobs;
+                if (dt > g_vic_ns_worst) { g_vic_ns_worst = dt; }
             }
 
             /* The VIC wrote through the device side; our cache still holds the
              * zeros we just stored. Without this invalidate the read-back is
              * guaranteed to look empty no matter what the engine did. */
             armDCacheFlush(g_vic_dst_buf, DstSize);
+            if (g_vic_quiet) { return completed; }
 
             u32 sum = 0, changed = 0;
             for (u32 i = 0; i < DstSize; i++) {
@@ -1937,6 +2016,98 @@ namespace ams::mitm::applet {
 
                 /* fallback: if the strip section was skipped, resume here */
                 resume_game();
+
+                /* ---- M63: VIC benchmark, instrumentation OFF ---------------
+                 * The number M59 reported (119,023 us/blit) was dominated by
+                 * its own diagnostics. This times the same engine with
+                 * g_vic_quiet set, and then does it again with an NV12 output
+                 * surface so we learn the cost of the format conversion that
+                 * NVENC will need. Runs after resume_game(), so the game is
+                 * live throughout and any starvation would be visible. */
+                if (found && g_bench_armed && g_ind_buf != nullptr
+                    && g_ind_size >= FbSlotSize && cfg_addr != 0 && dst_addr != 0) {
+                    VicStage("bn:1_pin");
+                    u32 bh = 0, bi = 0, ba = 0;
+                    const auto brc = NvmapOwn(nvmap_fd, g_ind_buf, static_cast<u32>(FbSlotSize), 0,
+                                              std::addressof(bh), std::addressof(bi), true);
+                    if (R_FAILED(brc)) {
+                        LogLine("   bench: NvmapOwn rc=0x%x", brc);
+                    } else {
+                        MapCmdBuffer(vfd, bh, std::addressof(ba), "bench-src", 0);
+                        if (ba == 0) {
+                            LogLine("   bench: pin returned 0 - refusing to submit");
+                        } else {
+                            VicStage("bn:2_read");
+                            if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf),
+                                                                           dbg, cand.addr, FbSlotSize))) {
+                                LogLine("   bench: slot read failed");
+                            } else {
+                                armDCacheFlush(g_ind_buf, FbSlotSize);
+
+                                const SrcDesc full_src{ 1920, 1080, 1920,
+                                                        vic::BLK_KIND_GENERIC_16Bx2, 4,
+                                                        vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4,
+                                                        1920, 1080 };
+                                const JobCtx bc{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, ba, 0, 0, 0, 0, SelfSrc };
+                                constexpr u32 BenchW = 640, BenchH = 360, BenchN = 60;
+
+                                struct BenchCase { const char *name; u32 fmt; };
+                                const BenchCase cases[2] = {
+                                    { "RGBA", vic::PIXFMT_A8B8G8R8 },
+                                    { "NV12", vic::PIXFMT_Y8_U8V8_N420 },
+                                };
+
+                                for (u32 ci = 0; ci < 2; ++ci) {
+                                    g_strip_src = full_src;
+                                    g_strip_out = OutDesc{ BenchW, BenchH, BenchW, cases[ci].fmt };
+
+                                    /* one warm-up outside the timed region, loud,
+                                     * so a failure is diagnosable */
+                                    g_vic_quiet = false;
+                                    const bool warm = RunOneJob("bn:warmup", VicJob::BlitStrip, true, bc);
+                                    LogLine("   bench %s: warm-up %s", cases[ci].name, warm ? "OK" : "FAILED");
+                                    if (!warm) { continue; }
+
+                                    g_vic_quiet    = true;
+                                    g_vic_ns_total = 0; g_vic_ns_worst = 0; g_vic_jobs = 0;
+                                    u32 ok = 0;
+                                    const u64 t0 = armTicksToNs(armGetSystemTick());
+                                    for (u32 i = 0; i < BenchN; ++i) {
+                                        if (RunOneJob("bn:job", VicJob::BlitStrip, true, bc)) { ++ok; }
+                                    }
+                                    const u64 wall = armTicksToNs(armGetSystemTick()) - t0;
+                                    g_vic_quiet = false;
+
+                                    const u32 n = (g_vic_jobs > 0) ? g_vic_jobs : 1;
+                                    LogLine("   bench %s %ux%u: %u/%u jobs, submit+wait avg %llu us, worst %llu us",
+                                            cases[ci].name, BenchW, BenchH, ok, BenchN,
+                                            static_cast<unsigned long long>(g_vic_ns_total / 1000 / n),
+                                            static_cast<unsigned long long>(g_vic_ns_worst / 1000));
+                                    LogLine("   bench %s: wall %llu us for %u jobs = %llu us/frame  (60 fps budget 16667)",
+                                            cases[ci].name,
+                                            static_cast<unsigned long long>(wall / 1000), BenchN,
+                                            static_cast<unsigned long long>(wall / 1000 / BenchN));
+                                }
+
+                                /* dump the NV12 result so correctness is checked
+                                 * on the PC, not asserted here. g_vic_dst_buf is
+                                 * UNCACHED nvmap - stage through cached memory
+                                 * first, the M41/M42 lesson. */
+                                {
+                                    const size_t nv12_sz = static_cast<size_t>(BenchW) * BenchH * 3 / 2;
+                                    if (g_stage_buf != nullptr && nv12_sz <= StreamStageSize) {
+                                        std::memcpy(g_stage_buf, g_vic_dst_buf, nv12_sz);
+                                        const bool w = WriteBufToSd("sdmc:/applet-mitm-nv12.bin", g_stage_buf, nv12_sz);
+                                        LogLine("   bench: nv12 dump %s (%zu B, %ux%u)",
+                                                w ? "OK -> sdmc:/applet-mitm-nv12.bin" : "FAILED", nv12_sz, BenchW, BenchH);
+                                    }
+                                }
+                            }
+                            UnmapCmdBuffer(vfd, bh);
+                        }
+                    }
+                    VicStage("bn:done");
+                }
 
                 /* ---- M60: stream ------------------------------------------
                  * MUST STAY BELOW resume_game(): M59's first run put this above

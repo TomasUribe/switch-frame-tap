@@ -219,12 +219,15 @@ queueBuffer intercept -> svcReadDebugProcessMemory (5.6 ms)
 
 Two findings shaped it, both the hard way:
 
-- **The VIC cannot be used per-frame.** A full-frame blit cost **119 ms**, and
-  worse, nvnflinger composites on the same engine and syncpoint: a tight blit
-  loop starved the compositor and the game fell to 3.8 fps. The VIC is fine for
-  a one-shot blit. The stream uses a CPU point-sampler instead — at an exact 4x
-  reduction every output pixel lands on a 16-byte group boundary, so it is one
-  aligned read per pixel with no engine involved.
+- **The VIC "cannot be used per-frame" — retracted in M63.** A full-frame blit
+  appeared to cost **119 ms**, and a tight blit loop starved the compositor. Both
+  were the same instrumentation bug: the timed region contained ~7 `LogLine`
+  calls, each an SD-card open/write/**flush**/close, plus a 65,536-iteration
+  checksum. Seven SD flushes is 35–140 ms on its own. The engine was never
+  measured. `g_vic_quiet` now gates the diagnostics; the real cost is being
+  measured rather than inferred. The shipping stream still uses a CPU
+  point-sampler — at an exact 4x reduction every output pixel lands on a 16-byte
+  group boundary, so it is one aligned read per pixel.
 - **Every thread here is pinned to core 3**, including the mitm's own IPC
   thread. A stream loop at equal priority starves it and the game blocks on a
   binder call nobody answers. The worker runs below IPC priority and yields
@@ -254,10 +257,13 @@ Capture is no longer the gate — **bandwidth is**. Everything upstream of the
 cable is done and measured; the next move is compression, or proving
 SuperSpeed.
 
-A wrinkle worth knowing before starting the encoder: NVENC wants NV12 input and
-the VIC is the natural way to produce it, but the VIC cannot be used per-frame
-without starving the compositor. Producing NV12 cheaply is an unsolved
-sub-problem of the encode path.
+NVENC wants NV12 input and the VIC is the natural way to produce it. M59 thought
+that door was closed; M63 found the 119 ms was instrumentation, so it is open
+again. NVIDIA's own [open-gpu-doc](https://github.com/NVIDIA/open-gpu-doc)
+supplies what was missing: the VIC output chroma offsets (0x724/0x728, alongside
+a luma offset byte-identical to one we proved on hardware), the full NVENC
+method table, and `nvenc_drv.h` version-gated back to the generation Tegra X1
+belongs to. See [`ref/README.md`](ref/README.md).
 
 ## Layout
 
