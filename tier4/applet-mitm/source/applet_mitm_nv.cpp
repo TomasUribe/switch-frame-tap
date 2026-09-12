@@ -45,6 +45,14 @@ namespace ams::mitm::applet {
     constinit bool g_dbg_armed = false;
     constinit u32  g_pmdmnt_rc = 0xFFFFFFFF;
 
+    /* M59 streaming prototype. 480x270 default: the only size that fits 60 fps
+     * on USB 2.0 (518,400 B/frame = 12.4 ms transfer against a 16.67 ms budget).
+     * 640x360 is selectable but caps near 45 fps until NV12 or SuperSpeed. */
+    constinit bool g_stream_armed  = false;
+    constinit u32  g_stream_w      = 480;
+    constinit u32  g_stream_h      = 270;
+    constinit u32  g_stream_frames = 600;
+
     namespace {
 
         constinit std::atomic<bool> g_blit_done{false};
@@ -63,14 +71,22 @@ namespace ams::mitm::applet {
          * engine reported OP_DONE and we read back nothing. */
         constexpr size_t VicCfgSize = 0x4000;    /* VicConfigStruct (1552 B) */
         constexpr size_t VicCmdSize = 0x1000;    /* host1x pushbuf           */
-        constexpr size_t VicDstSize = 0x10000;   /* linear output            */
+        /* M59: 1 MB, sized for a streamed frame rather than the 64x64 self-blit.
+         * 640x360 RGBA is 921,600 B; 480x270 is 518,400. The old 0x10000 held
+         * neither. */
+        constexpr size_t VicDstSize = 0x100000;  /* linear output            */
         constexpr size_t VicSrcSize = 0x10000;   /* a SOURCE WE OWN, for the self-blit */
         /* A fixed 8 MB request was refused with os::ResultOutOfMemory (0x1003):
          * a sysmodule's heap is capped well below that. Ask for the largest the
          * process will actually grant rather than guessing, and size the capture
          * to whatever we get. 2 MB granularity is the AllocateMemoryBlock unit. */
-        constexpr size_t VicBufsEnd  = 0x30000;   /* cfg+cmd+dst+src all live below this */
-        constexpr size_t FbBlockRowStage = 983040;   /* staging starts past one block-row */
+        constexpr size_t VicBufsEnd  = 0x120000;  /* cfg+cmd+dst+src all live below this */
+        /* M59 RELAYOUT - the blocker M56 predicted. Staging used to start
+         * 983,040 B into the capture region, which collided with a resident
+         * full frame (8,294,400 B). It now starts past a whole slot. */
+        constexpr size_t FbSlotBytes     = 8847360;
+        constexpr size_t FbBlockRowStage = FbSlotBytes;
+        constexpr size_t StreamStageSize = 0x100000;   /* per stream stage buffer */
         constinit size_t g_vic_heap_size = 0;
 
         /* The capture buffer stays on the HEAP, deliberately.
@@ -95,6 +111,10 @@ namespace ams::mitm::applet {
         /* cached heap past the nvmap'd block-row, used to stage uncached engine
          * output before it goes to the filesystem */
         constinit u8       *g_stage_buf   = nullptr;
+        /* M59: two stage buffers so the USB transfer of frame N overlaps the
+         * capture of frame N+1. Each holds [32-byte header][frame], posted as a
+         * single URB - one transfer per frame, not two. */
+        constinit u8       *g_stream_stage[2] = { nullptr, nullptr };
 
         /* M57: usbDs requires a 0x1000-aligned buffer, so the 32-byte frame
          * header cannot be posted from the stack. */
@@ -219,9 +239,11 @@ namespace ams::mitm::applet {
             g_vic_cfg_buf = reinterpret_cast<u8 *>(addr + 0x0000);
             g_vic_cmd_buf = reinterpret_cast<u8 *>(addr + 0x4000);
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
-            g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x20000);
+            g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x110000);
             g_ind_buf     = reinterpret_cast<u8 *>(addr + VicBufsEnd);
             g_stage_buf   = g_ind_buf + FbBlockRowStage;
+            g_stream_stage[0] = g_stage_buf + StreamStageSize;
+            g_stream_stage[1] = g_stream_stage[0] + StreamStageSize;
 
             std::memset(reinterpret_cast<void *>(addr), 0, want);
             LogLine("   VIC heap %zu MB at 0x%lx (capture buffer %zu KB on heap): cfg=%p cmd=%p dst=%p src=%p",
@@ -1461,6 +1483,212 @@ namespace ams::mitm::applet {
             return ok;
         }
 
+        /* ---- M59: the streaming prototype --------------------------------
+         * A composition of proven pieces, not new engine work: the debug-SVC
+         * slot read (5.6 ms at 1571 MB/s, M56), the VIC scaled blit (the BEST
+         * variant already does a uniform 4x downscale, M43), and the USB bulk
+         * transport (M57, byte-exact).
+         *
+         * LATENCY is the design goal, so the loop never queues. Each iteration
+         * takes the slot the game has JUST presented and discards whatever
+         * arrived while we were busy - a backlog would only add delay, and a
+         * dropped frame is cheaper than a late one.
+         *
+         * THROUGHPUT comes from overlap. The post is asynchronous, so frame N's
+         * transfer runs concurrently with frame N+1's capture. Serially 480x270
+         * costs 5.6 + vic + copy + 12.4 ms and caps near 43 fps; overlapped the
+         * transfer alone is the bottleneck and 60 fps fits.
+         *
+         * g_vic_dst_buf is UNCACHED nvmap memory - handing that to any I/O path
+         * is what made every VIC dump fail in M41/M42 - so each frame is staged
+         * into cached memory that already carries its header, giving one URB
+         * per frame rather than two. */
+        struct __attribute__((packed)) SftHdrWire {
+            u32 magic; u16 version; u16 flags;
+            u32 width, height, stride, length, block_h_log2, kind;
+        };
+        static_assert(sizeof(SftHdrWire) == 32, "must match sft_hdr_t in tools/raw-recv/raw-recv.c");
+
+        /* ---- M60: CPU point-sample downscale, no VIC ---------------------
+         * M59c measured the VIC at 119,023 us per full-frame blit - 7x the
+         * whole 60 fps budget - and that is the lesser problem. nvnflinger
+         * composites on the SAME engine and the SAME syncpoint 12 we submit to,
+         * so a tight blit loop starved the compositor: the game fell to 3.8 fps
+         * during the run and never recovered. The VIC is fine for a one-shot
+         * blit and unusable as a per-frame stage.
+         *
+         * Reading straight out of the block-linear capture costs no engine time
+         * and cannot contend with the compositor. At an exact 4x reduction the
+         * arithmetic is unusually kind: output pixel x lands on byte 16*x, which
+         * is always a 16-byte group boundary, so each output pixel is one
+         * aligned 4-byte read. No filtering - this is a point sample, so it
+         * aliases; correctness and frame rate first. */
+        inline u32 BlockLinearOffset(u32 byte_x, u32 y) {
+            const u32 block_y  = y / 128;          /* block = 16 gobs x 8 rows */
+            const u32 y_in_blk = y % 128;
+            const u32 gob_y    = y_in_blk / 8;
+            const u32 yy       = y_in_blk % 8;
+            const u32 block_x  = byte_x / 64;      /* gob is 64 B wide         */
+            const u32 xg       = byte_x % 64;
+            const u32 base     = (block_y * 120u + block_x) * 8192u;   /* 120 blocks/row */
+            const u32 in_gob   = ((xg / 32u) * 256u) + ((yy / 2u) * 64u)
+                               + (((xg % 32u) / 16u) * 32u) + ((yy % 2u) * 16u);
+            return base + gob_y * 512u + in_gob;
+        }
+
+        void DownscalePoint(const u8 *src, u8 *dst, u32 out_w, u32 out_h, u32 step) {
+            for (u32 oy = 0; oy < out_h; ++oy) {
+                const u32 sy = oy * step;
+                u8 *drow = dst + static_cast<size_t>(oy) * out_w * 4;
+                for (u32 ox = 0; ox < out_w; ++ox) {
+                    std::memcpy(drow + ox * 4, src + BlockLinearOffset(ox * step * 4u, sy), 4);
+                }
+            }
+        }
+
+        void StreamFrames(::ams::svc::Handle dbg, u64 slot_base) {
+            const u32 W = g_stream_w, H = g_stream_h;
+            const size_t out_bytes  = static_cast<size_t>(W) * static_cast<size_t>(H) * 4;
+            const size_t wire_bytes = sizeof(SftHdrWire) + out_bytes;
+
+            if (out_bytes > StreamStageSize) {
+                LogLine("   stream: %ux%u needs %zu B but a stage buffer is %zu - refusing",
+                        W, H, out_bytes, StreamStageSize);
+                return;
+            }
+            if (g_stream_stage[0] == nullptr || g_stream_stage[1] == nullptr) {
+                LogLine("   stream: stage buffers absent - heap too small"); return;
+            }
+            if (W == 0 || H == 0 || (1920u % W) != 0 || (1080u % H) != 0 || (1920u / W) != (1080u / H)) {
+                LogLine("   stream: %ux%u is not an exact uniform divisor of 1920x1080 - the point "
+                        "sampler needs one (480x270 = 4x, 640x360 = 3x, 960x540 = 2x)", W, H);
+                return;
+            }
+            if (!UsbReady()) {
+                LogLine("   stream: USB not Configured - nothing to stream to"); return;
+            }
+
+            LogLine("   ---- STREAMING %ux%u RGBA, up to %u frames (%zu B/frame) ----",
+                    W, H, g_stream_frames, wire_bytes);
+
+            /* the header never changes, so write it into both stages once */
+            SftHdrWire h = {};
+            h.magic  = 0x52544653u;          /* "SFTR" */
+            h.version = 1;
+            h.width  = W;  h.height = H;  h.stride = W * 4;
+            h.length = static_cast<u32>(out_bytes);
+            h.block_h_log2 = 0;              /* the VIC output is LINEAR */
+            h.kind         = 0;
+            std::memcpy(g_usb_hdr, std::addressof(h), sizeof(h));
+
+            /* source: the captured slot, exactly as the binder parcels describe it */
+
+            u32 seen   = g_queue_count.load(std::memory_order_relaxed);
+            const u32 q_at_start = seen;
+            u32 parity = 0, urb = 0, sent = 0, dropped = 0;
+            u32 stale_run = 0, stale_total = 0;
+            bool pending = false;
+            u64 t_read = 0, t_vic = 0, t_copy = 0, t_wait = 0;
+            u64 worst = 0, best = ~UINT64_C(0);
+            u32 timed = 0;
+            const u64 loop_t0 = armTicksToNs(armGetSystemTick());
+
+            for (u32 i = 0; i < g_stream_frames; ++i) {
+                /* M59b: capture is NOT gated on the counter any more.
+                 * Both M59 runs bailed here with "game stopped presenting"
+                 * while the heartbeat showed the game emitting ~109 binder
+                 * txns/s across the same window - so g_queue_count was not
+                 * reporting what I assumed, and the run died on a diagnostic
+                 * rather than on a real failure. Wait briefly for a fresh
+                 * frame, then capture regardless: a duplicate frame costs one
+                 * transfer and is visible in the output, whereas bailing costs
+                 * the entire run. The counter is now only used to pick the slot
+                 * and to account for drops. */
+                u32 spins = 0;
+                while (g_queue_count.load(std::memory_order_relaxed) == seen && spins < 20) {
+                    os::SleepThread(TimeSpan::FromMilliSeconds(1));
+                    ++spins;
+                }
+                const u32 now = g_queue_count.load(std::memory_order_relaxed);
+                if (now != seen) {
+                    dropped += (now - seen) - 1;    /* presented while we were busy */
+                    stale_run = 0;
+                } else {
+                    ++stale_run; ++stale_total;
+                    if (stale_run >= 240) {         /* ~5 s of genuinely nothing */
+                        LogLine("   stream: no new frame for %u iterations - stopping at frame %u", stale_run, i);
+                        break;
+                    }
+                }
+                seen = now;
+
+                const s32 slot = g_queue_slot.load(std::memory_order_relaxed);
+                const u64 off  = (slot >= 0 && slot < 3) ? FbSlotOff[slot] : 0;
+
+                const u64 f0 = armTicksToNs(armGetSystemTick());
+                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf),
+                                                                dbg, slot_base + off, FbSlotSize))) {
+                    LogLine("   stream: slot read failed at frame %u", i); break;
+                }
+                armDCacheFlush(g_ind_buf, FbSlotSize);
+                const u64 f1 = armTicksToNs(armGetSystemTick());
+
+                DownscalePoint(g_ind_buf, g_stream_stage[parity], W, H, 1920u / W);
+                const u64 f2 = armTicksToNs(armGetSystemTick());
+                const u64 f3 = f2;   /* no separate staging copy any more */
+
+                /* the previous transfer has had the whole capture above to
+                 * finish in; only now is it allowed to cost us anything */
+                if (pending) {
+                    size_t got = 0;
+                    if (!UsbWaitAsync(urb, std::addressof(got))) {
+                        LogLine("   stream: transfer stalled at frame %u", i); pending = false; break;
+                    }
+                    ++sent;
+                }
+                const u64 f4 = armTicksToNs(armGetSystemTick());
+
+                size_t hsent = 0;
+                if (!UsbSendBuffer(g_usb_hdr, sizeof(SftHdrWire), std::addressof(hsent))) {
+                    LogLine("   stream: header send failed at frame %u", i); pending = false; break;
+                }
+                if (!UsbPostAsync(g_stream_stage[parity], out_bytes, std::addressof(urb))) {
+                    LogLine("   stream: post failed at frame %u", i); pending = false; break;
+                }
+                pending = true;
+                parity ^= 1;
+
+                t_read += f1 - f0; t_vic += f2 - f1; t_copy += f3 - f2; t_wait += f4 - f3;
+                const u64 dt = f4 - f0;
+                if (dt > worst) { worst = dt; }
+                if (dt < best)  { best  = dt; }
+                ++timed;
+            }
+
+            if (pending) {
+                size_t got = 0;
+                if (UsbWaitAsync(urb, std::addressof(got))) { ++sent; }
+            }
+
+            const u64 loop_ns = armTicksToNs(armGetSystemTick()) - loop_t0;
+            const u32 n = (timed > 0) ? timed : 1;
+            const u64 fps_x10 = (loop_ns > 0) ? (UINT64_C(10000000000) * sent / loop_ns) : 0;
+            LogLine("   stream: %u frames sent in %llu ms -> %llu.%llu fps  (%u presented frames dropped)",
+                    sent, static_cast<unsigned long long>(loop_ns / 1000000),
+                    static_cast<unsigned long long>(fps_x10 / 10),
+                    static_cast<unsigned long long>(fps_x10 % 10), dropped);
+            LogLine("   stream: avg per frame - read %llu us, vic %llu us, copy %llu us, usb wait %llu us",
+                    static_cast<unsigned long long>(t_read / 1000 / n),
+                    static_cast<unsigned long long>(t_vic  / 1000 / n),
+                    static_cast<unsigned long long>(t_copy / 1000 / n),
+                    static_cast<unsigned long long>(t_wait / 1000 / n));
+            LogLine("   stream: queue counter %u -> %u over the run; %u stale iterations",
+                    q_at_start, g_queue_count.load(std::memory_order_relaxed), stale_total);
+            LogLine("   stream: frame time best %llu us, worst %llu us  (60 fps budget = 16667 us)",
+                    static_cast<unsigned long long>((best == ~UINT64_C(0)) ? 0 : best / 1000),
+                    static_cast<unsigned long long>(worst / 1000));
+        }
+
         void TryDebugCapture(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 dst_addr) {
             if (!g_dbg_armed) { return; }
 
@@ -1604,7 +1832,7 @@ namespace ams::mitm::applet {
                  * The capture buffer is nvmap'd CACHEABLE: ReadDebugProcessMemory
                  * writes 983,040 B into it and an uncached destination would cost
                  * far more than the explicit flush below. */
-                if (found && g_ind_buf != nullptr && g_ind_size >= FbBlockRow && cfg_addr != 0 && dst_addr != 0) {
+                if (found && !g_stream_armed && g_ind_buf != nullptr && g_ind_size >= FbBlockRow && cfg_addr != 0 && dst_addr != 0) {
                     VicStage("vs:1_own_capture_buf");
                     u32 cap_handle = 0, cap_id = 0, cap_addr = 0;
                     const auto orc = NvmapOwn(nvmap_fd, g_ind_buf, static_cast<u32>(FbBlockRow), 0,
@@ -1692,6 +1920,21 @@ namespace ams::mitm::applet {
                 /* fallback: if the strip section was skipped, resume here */
                 resume_game();
 
+                /* ---- M60: stream ------------------------------------------
+                 * MUST STAY BELOW resume_game(): M59's first run put this above
+                 * it, where DebugActiveProcess still has the game halted, and
+                 * the loop waited for a frame that could not arrive.
+                 *
+                 * No nvmap, no pin, no engine resources - M60 reads the capture
+                 * with the CPU instead of the VIC, because the VIC cost 119 ms
+                 * per frame and starved the compositor it shares with. */
+                if (found && g_stream_armed && g_ind_buf != nullptr && g_ind_size >= FbSlotSize) {
+                    VicStage("st:1_loop");
+                    StreamFrames(dbg, cand.addr);
+                    VicStage("st:2_done");
+                }
+
+
                 if (found) {
                     if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(live_a), dbg, cand.addr, 16))) {
                         os::SleepThread(TimeSpan::FromMilliSeconds(120));
@@ -1759,7 +2002,7 @@ namespace ams::mitm::applet {
                          * so it satisfies both of usbDs's requirements. Sending
                          * from the uncached VIC buffers would fail the way
                          * fs::WriteFile did with 0xd401. */
-                        if (g_ind_size >= FbSlotSize) {
+                        if (!g_stream_armed && g_ind_size >= FbSlotSize) {
                             if (!UsbReady()) {
                                 LogLine("   usb: not Configured (no host, or \"usb\" absent from the arm file) - skipping transport");
                             } else {
@@ -1824,7 +2067,7 @@ namespace ams::mitm::applet {
                          * presented into, repeat. It measures the per-frame cost
                          * and - just as important - what the GAME's own frame
                          * rate does while we are doing it. */
-                        {
+                        if (!g_stream_armed) {
                             constexpr u32 CapFrames = 120;
 
                             const u32 c0 = g_queue_count.load(std::memory_order_relaxed);

@@ -39,3 +39,21 @@ python3 ../../tools/deswizzle.py /tmp/sft_000.bin /tmp/frame.png
 Device is `1209:5f1e` (pid.codes open range), interface 0, bulk IN `0x81`.
 The header layout must stay byte-identical to `SftHdr` in
 `tier4/applet-mitm/source/applet_mitm_nv.cpp`.
+
+## raw-view — live viewer (M60)
+
+libusb + SDL2 in one process. No pipe, no codec: an external player would add
+latency, which is the thing this prototype exists to minimise.
+
+```
+cc -O2 -o raw-view raw-view.c $(pkg-config --cflags --libs libusb-1.0 sdl2)
+./raw-view --scale 2        # window is 2x the stream size
+./raw-view --swap           # flip R and B if colours look wrong
+```
+
+Start it BEFORE the probe fires. The window opens on the first frame and its
+title shows live fps and worst frame gap.
+
+Pixel order: M60 sends the capture's native bytes (R,G,B,A), so the default is
+`SDL_PIXELFORMAT_ABGR8888`. `--swap` selects ARGB for a VIC-produced stream,
+which transposes R and B.

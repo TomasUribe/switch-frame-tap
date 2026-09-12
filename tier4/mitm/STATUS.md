@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M57**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M60**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -87,6 +87,95 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M58-M60: A WORKING 60 fps STREAM ***
+
+```
+stream: 480x270, 518400 B/frame
+300 frames  59.4 fps  worst gap 44.4 ms
+```
+
+Live video from the console to the PC over USB, at **59.4 fps**, with the
+console still running afterwards. Every stage is now proven together: debug-SVC
+capture, downscale, USB transport, live display.
+
+### M58: SuperSpeed is declared, and still negotiates High
+
+`usb:ds` accepts the SuperSpeed descriptors and the endpoint companions
+(`device/configuration descriptors (Full+High+Super) rc=0x0`), enumeration is
+unaffected, and `usbDsGetSpeed` still reports `3 (High, 480 Mbps)`.
+
+M52-M57 only ever declared Full and High, so the host had nothing better to
+negotiate - the 480 Mbps ceiling was ours. haze declares Super
+(`usb_session.cpp:144`), which proves the console supports USB 3.0 device mode.
+The remaining variables are **the cable** (most USB-C cables are USB 2.0 only and
+physically lack the SS pairs) and the console's device-mode capability. The PC is
+ruled out: its root hubs report 10000/20000 Mbps. Untested because no second USB
+3.0 device was available to prove the cable.
+
+### M59: the VIC is unusable as a per-frame stage
+
+The first streaming loop worked and was far too slow:
+
+```
+180 frames sent in 27036 ms -> 6.6 fps
+avg per frame - read 5484 us, vic 119023 us, copy 1662 us, usb wait 602 us
+frame time best 52947 us, worst 1622498 us
+```
+
+**119 ms per full-frame VIC blit** - 7x the entire 60 fps budget. And the worse
+half: nvnflinger composites on the SAME engine and the SAME syncpoint 12 we
+submit to, so a tight blit loop starved the compositor. The queue counter moved
+1495 -> 1598 across 27 s, i.e. **the game fell to 3.8 fps and never recovered**;
+the console needed a power cycle.
+
+The risk was named in this file before the run and the loop was written anyway.
+**The VIC is fine for a one-shot blit and must not be in a per-frame path.**
+
+### M60: CPU point-sample, no engine at all
+
+At an exact 4x reduction the block-linear arithmetic is unusually kind: output
+pixel x lands on byte 16*x, which is always a 16-byte group boundary, so each
+output pixel is one aligned 4-byte read straight out of the capture. No engine,
+no syncpoint, no contention.
+
+```
+480x270 from 1920x1080, 300 frames, 59.4 fps, worst gap 44.4 ms, console healthy
+```
+
+It is a point sample - no filtering, so it aliases. Frame rate first.
+
+USB is now the bottleneck: 518,400 B x 59.4 = **30.8 MB/s**, near what USB 2.0
+bulk realistically delivers. 480x270 RGBA is therefore about the most this
+transport carries at 60 fps; 640x360 (921,600 B) lands near 40 fps.
+
+### Three bugs worth not repeating
+
+1. **The stream loop must sit BELOW `resume_game()`.** Placed above it, the game
+   is still halted by `DebugActiveProcess`: the loop waited 514 ms for a frame
+   that could not arrive, reported "game stopped presenting at frame 0", and was
+   itself most of the 613 ms freeze it measured.
+2. **Do not gate capture on `g_queue_count`.** Two runs died on that check while
+   the heartbeat showed the game emitting ~109 binder txns/s across the same
+   window. The counter's increment path is unconditional for `code == 7`, so the
+   assumption about what it tracks was wrong, not the code. Capture now proceeds
+   regardless and the counter is used only for slot choice and drop accounting.
+3. **Header and payload must be SEPARATE URBs.** Combining them into one
+   518,432-byte post produced `LIBUSB_ERROR_OVERFLOW` on the host: USB delivers
+   one URB as 512-byte packets, so a 32-byte header read overflows. M57 worked
+   because it posted them separately; the "optimisation" broke the framing.
+
+Also: `vic` must stay in the arm file even though the VIC engine is no longer
+used - `g_vic_armed` gates the probe trigger itself
+(`applet_mitm_service.cpp:119`), so without it nothing fires at all.
+
+### A tooling note, because it cost a build
+
+Splicing a moved code block with `s[:start] + new + s[end:]` silently duplicates
+`[end, start)` when `end < start` - which is exactly what happens after the block
+has been moved earlier in the file. It duplicated 122 lines including the strip
+capture and the sustained-capture loop, and only surfaced as a compile error.
+**Assert the ordering before splicing, or match on unique anchors.**
 
 ## *** M57 RUN: a real frame left the console over USB ***
 

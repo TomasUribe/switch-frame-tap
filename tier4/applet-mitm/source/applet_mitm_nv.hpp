@@ -64,6 +64,13 @@ namespace ams::mitm::applet {
     extern bool g_dump_armed;
     extern u32  g_probe_delay_s;
 
+    /* M59 streaming prototype: "stream" arms it, sw=/sh= set the output size,
+     * sframes= how many to send. Defaults are 480x270 because that is the only
+     * size that fits 60 fps on USB 2.0 (518,400 B/frame = 12.4 ms transfer);
+     * 640x360 is selectable but caps near 45 fps until NV12 or SuperSpeed. */
+    extern bool g_stream_armed;
+    extern u32  g_stream_w, g_stream_h, g_stream_frames;
+
     extern std::atomic<u32> g_queue_count;
     extern std::atomic<s32> g_queue_slot;
 

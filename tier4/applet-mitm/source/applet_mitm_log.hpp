@@ -47,4 +47,12 @@ namespace ams::mitm::applet {
     bool UsbReady();
     bool UsbSendBuffer(const void *buf, size_t len, size_t *out_sent);
 
+    /* M59 - asynchronous single-URB post, so a frame's transfer overlaps the
+     * next frame's capture. Serially, 480x270 costs 5.6 ms read + 12.4 ms send
+     * = 43 fps; overlapped the bottleneck is the send alone and 60 fps fits.
+     * Same buffer rules as UsbSendBuffer: 0x1000-aligned, cached memory.
+     * The buffer must stay untouched until UsbWaitAsync returns. */
+    bool UsbPostAsync(const void *buf, size_t len, u32 *out_urb);
+    bool UsbWaitAsync(u32 urb, size_t *out_sent);
+
 }

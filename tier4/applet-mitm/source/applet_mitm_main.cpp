@@ -264,7 +264,18 @@ namespace ams {
             rc = usbDsSetUsbDeviceDescriptor(UsbDeviceSpeed_Full, std::addressof(dd));
             dd.bcdUSB = 0x0200;
             if (R_SUCCEEDED(rc)) { rc = usbDsSetUsbDeviceDescriptor(UsbDeviceSpeed_High, std::addressof(dd)); }
-            mitm::applet::LogLine("   device descriptors (Full+High) rc=0x%x", rc);
+            /* M58: SuperSpeed. M52-M57 declared only Full and High, so the host
+             * negotiated 480 Mbps because that is all we ever offered - the
+             * ceiling was ours, not the platform's. Atmosphere's own haze
+             * declares Super (usb_session.cpp:144), which proves the console
+             * supports USB 3.0 device mode.
+             *
+             * USB 3.0 requires bcdUSB 0x0300 and bMaxPacketSize0 encoded as a
+             * POWER OF TWO: 9 means 2^9 = 512, not 512 itself. */
+            dd.bcdUSB          = 0x0300;
+            dd.bMaxPacketSize0 = 9;
+            if (R_SUCCEEDED(rc)) { rc = usbDsSetUsbDeviceDescriptor(UsbDeviceSpeed_Super, std::addressof(dd)); }
+            mitm::applet::LogLine("   device descriptors (Full+High+Super) rc=0x%x", rc);
             if (R_FAILED(rc)) { return; }
 
             /* bound to the file-scope handles so the transport can post to
@@ -323,7 +334,26 @@ namespace ams {
             if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_High, std::addressof(id),   USB_DT_INTERFACE_SIZE); }
             if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_High, std::addressof(ep_i), USB_DT_ENDPOINT_SIZE); }
             if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_High, std::addressof(ep_o), USB_DT_ENDPOINT_SIZE); }
-            mitm::applet::LogLine("   configuration descriptors rc=0x%x", rc);
+            /* M58: SuperSpeed config - 1024 B bulk, and every SS endpoint needs a
+             * companion descriptor immediately after it or the host rejects the
+             * configuration. bMaxBurst 0x0f = 16 packets per burst, copied from
+             * haze (usb_session.cpp:108). Order matters: iface, ep, companion,
+             * ep, companion. */
+            struct usb_ss_endpoint_companion_descriptor ss_comp = {
+                .bLength           = sizeof(struct usb_ss_endpoint_companion_descriptor),
+                .bDescriptorType   = USB_DT_SS_ENDPOINT_COMPANION,
+                .bMaxBurst         = 0x0f,
+                .bmAttributes      = 0x00,
+                .wBytesPerInterval = 0x00,
+            };
+            ep_i.wMaxPacketSize = 0x400;
+            ep_o.wMaxPacketSize = 0x400;
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_Super, std::addressof(id),      USB_DT_INTERFACE_SIZE); }
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_Super, std::addressof(ep_i),    USB_DT_ENDPOINT_SIZE); }
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_Super, std::addressof(ss_comp), USB_DT_SS_ENDPOINT_COMPANION_SIZE); }
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_Super, std::addressof(ep_o),    USB_DT_ENDPOINT_SIZE); }
+            if (R_SUCCEEDED(rc)) { rc = usbDsInterface_AppendConfigurationData(iface, UsbDeviceSpeed_Super, std::addressof(ss_comp), USB_DT_SS_ENDPOINT_COMPANION_SIZE); }
+            mitm::applet::LogLine("   configuration descriptors (Full+High+Super) rc=0x%x", rc);
             if (R_FAILED(rc)) { return; }
 
             rc = usbDsInterface_RegisterEndpoint(iface, std::addressof(ep_in), ep_i.bEndpointAddress);
@@ -362,6 +392,21 @@ namespace ams {
             const unsigned b = static_cast<unsigned>(best);
             mitm::applet::LogLine("   usb state high-water = %u (%s)", b,
                                   b < (sizeof(state_names) / sizeof(state_names[0])) ? state_names[b] : "?");
+            /* M58: the number this whole milestone exists to produce. */
+            {
+                UsbDeviceSpeed neg = UsbDeviceSpeed_None;
+                const ::Result srrc = usbDsGetSpeed(std::addressof(neg));
+                static const char *const speed_names[] = {
+                    "None", "Low(1.5Mbps)", "Full(12Mbps)", "High(480Mbps)", "SUPER(5Gbps)",
+                };
+                const unsigned sn = static_cast<unsigned>(neg);
+                mitm::applet::LogLine("   *** NEGOTIATED SPEED = %u (%s) *** rc=0x%x", sn,
+                                      sn < (sizeof(speed_names) / sizeof(speed_names[0])) ? speed_names[sn] : "?",
+                                      srrc);
+                mitm::applet::LogLine("   %s", neg == UsbDeviceSpeed_Super
+                    ? "SuperSpeed: NV12 1080p60 (178 MiB/s) is within reach"
+                    : "not SuperSpeed - check the CABLE is USB 3.0, and that the PC port is blue/SS");
+            }
             mitm::applet::LogLine("   %s", best == UsbState_Configured
                 ? "*** HOST CONFIGURED US - we own the bus, expect 1209:5f1e in lsusb ***"
                 : "host did NOT configure us - bus owned by someone else, or no cable attached");
@@ -421,17 +466,27 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M57: up. TRANSPORT - push a real 1080p frame over USB to the PC.");
+        mitm::applet::LogLine("applet-mitm M60: up. STREAMING - CPU downscale, no VIC (it cost 119 ms/frame).");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
         mitm::applet::g_dbg_armed   = ArmFileContains("dbg");
         mitm::applet::g_dump_armed  = ArmFileContains("dump");
         g_usb_armed                 = ArmFileContains("usb");
+        mitm::applet::g_stream_armed  = ArmFileContains("stream");
+        mitm::applet::g_stream_w      = ArmFileNumber("sw", 480);
+        mitm::applet::g_stream_h      = ArmFileNumber("sh", 270);
+        mitm::applet::g_stream_frames = ArmFileNumber("sframes", 600);
         mitm::applet::g_probe_delay_s = ArmFileNumber("wait", 120);
         mitm::applet::LogLine("arm file (sdmc:/applet-mitm.armed): vic=%s exec=%s",
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
+        if (mitm::applet::g_stream_armed) {
+            mitm::applet::LogLine("stream ARMED: %ux%u RGBA, %u frames (%u B/frame); 60 fps needs <=16667 us/frame",
+                                  mitm::applet::g_stream_w, mitm::applet::g_stream_h,
+                                  mitm::applet::g_stream_frames,
+                                  mitm::applet::g_stream_w * mitm::applet::g_stream_h * 4);
+        }
         LogMemoryPools();
         TryUsbEnumerate();
 
@@ -483,6 +538,45 @@ namespace ams::mitm::applet {
         UsbState st = UsbState_Detached;
         if (R_FAILED(usbDsGetState(std::addressof(st)))) { return false; }
         return st == UsbState_Configured;
+    }
+
+    bool UsbPostAsync(const void *buf, size_t len, u32 *out_urb) {
+        if (out_urb != nullptr) { *out_urb = 0; }
+        if (::ams::g_usb_ep_in == nullptr) { return false; }
+
+        u32 urb_id = 0;
+        const ::Result rc = usbDsEndpoint_PostBufferAsync(::ams::g_usb_ep_in,
+                                const_cast<void *>(buf), static_cast<u32>(len),
+                                std::addressof(urb_id));
+        if (R_FAILED(rc)) {
+            LogLine("   usb: PostBufferAsync(%zu B) rc=0x%x", len, rc);
+            return false;
+        }
+        if (out_urb != nullptr) { *out_urb = urb_id; }
+        return true;
+    }
+
+    bool UsbWaitAsync(u32 urb, size_t *out_sent) {
+        if (out_sent != nullptr) { *out_sent = 0; }
+        if (::ams::g_usb_ep_in == nullptr) { return false; }
+
+        ::Result rc = eventWait(std::addressof(::ams::g_usb_ep_in->CompletionEvent), ::ams::UsbTimeoutNs);
+        if (R_FAILED(rc)) {
+            LogLine("   usb: async completion timed out rc=0x%x (host not draining?)", rc);
+            return false;
+        }
+        eventClear(std::addressof(::ams::g_usb_ep_in->CompletionEvent));
+
+        UsbDsReportData report = {};
+        rc = usbDsEndpoint_GetReportData(::ams::g_usb_ep_in, std::addressof(report));
+        if (R_FAILED(rc)) { LogLine("   usb: async GetReportData rc=0x%x", rc); return false; }
+
+        u32 transferred = 0;
+        rc = usbDsParseReportData(std::addressof(report), urb, nullptr, std::addressof(transferred));
+        if (R_FAILED(rc)) { LogLine("   usb: async ParseReportData rc=0x%x", rc); return false; }
+
+        if (out_sent != nullptr) { *out_sent = transferred; }
+        return transferred > 0;
     }
 
     bool UsbSendBuffer(const void *buf, size_t len, size_t *out_sent) {

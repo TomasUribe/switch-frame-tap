@@ -56,6 +56,7 @@ static int read_exact(libusb_device_handle *h, uint8_t *dst, size_t n, int timeo
             done += (size_t)got;
             continue;
         }
+        if (rc == LIBUSB_ERROR_NO_DEVICE) { g_quit = 1; return -3; }
         fprintf(stderr, "bulk read failed: %s\n", libusb_error_name(rc));
         return -1;
     }
@@ -65,8 +66,10 @@ static int read_exact(libusb_device_handle *h, uint8_t *dst, size_t n, int timeo
 int main(int argc, char **argv)
 {
     const char *prefix = "frame";
+    int to_stdout = 0;   /* stream payloads to stdout for a live player */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-o") && i + 1 < argc) prefix = argv[++i];
+        else if (!strcmp(argv[i], "--stdout")) to_stdout = 1;
     }
 
     signal(SIGINT, on_sigint);
@@ -122,9 +125,11 @@ int main(int argc, char **argv)
             payload = p; payload_cap = hdr.length;
         }
 
-        fprintf(stderr, "frame %d: %ux%u stride=%u kind=0x%02x blk_h_log2=%u payload=%u B ... ",
-                n_frames, hdr.width, hdr.height, hdr.stride, hdr.kind, hdr.block_h_log2, hdr.length);
-        fflush(stderr);
+        if (!to_stdout || n_frames == 0) {
+            fprintf(stderr, "frame %d: %ux%u stride=%u kind=0x%02x blk_h_log2=%u payload=%u B\n",
+                    n_frames, hdr.width, hdr.height, hdr.stride, hdr.kind, hdr.block_h_log2, hdr.length);
+            fflush(stderr);
+        }
 
         r = read_exact(h, payload, hdr.length, 5000);
         if (r != (int)hdr.length) {
@@ -132,13 +137,20 @@ int main(int argc, char **argv)
             continue;
         }
 
-        char path[512];
-        snprintf(path, sizeof(path), "%s_%03d.bin", prefix, n_frames);
-        FILE *f = fopen(path, "wb");
-        if (!f) { perror("fopen"); break; }
-        fwrite(payload, 1, hdr.length, f);
-        fclose(f);
-        fprintf(stderr, "wrote %s\n", path);
+        if (to_stdout) {
+            /* raw frames only - the player is told the geometry on its own
+             * command line, so the header stays out of the pipe */
+            if (fwrite(payload, 1, hdr.length, stdout) != hdr.length) break;
+            fflush(stdout);
+        } else {
+            char path[512];
+            snprintf(path, sizeof(path), "%s_%03d.bin", prefix, n_frames);
+            FILE *f = fopen(path, "wb");
+            if (!f) { perror("fopen"); break; }
+            fwrite(payload, 1, hdr.length, f);
+            fclose(f);
+            fprintf(stderr, "wrote %s\n", path);
+        }
         n_frames++;
     }
 
