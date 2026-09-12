@@ -45,6 +45,7 @@ namespace ams::mitm::applet {
      * CACHED memory. Uncached nvmap memory is rejected (the 0xd401
      * InvalidCurrentMemory class of failure); g_ind_buf satisfies both. */
     bool UsbReady();
+    bool UsbIsSuperSpeed();
     bool UsbSendBuffer(const void *buf, size_t len, size_t *out_sent);
 
     /* M59 - asynchronous single-URB post, so a frame's transfer overlaps the

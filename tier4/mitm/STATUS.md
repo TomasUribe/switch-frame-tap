@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M70**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M71**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,6 +88,85 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M71: the NVENC ladder answers it - the engine never completes ***
+
+M69's magic sweep taught nothing because every case, including a deliberately
+invalid control, behaved identically. That is the signature of a job that never
+runs, and varying the CONTENTS of a job that never runs cannot explain why.
+
+So M71 stopped varying content and varied **structure**: five submits on one
+channel, each adding exactly one layer, the first four ending with an IMMEDIATE
+syncpoint increment that host1x performs as it retires the opcode regardless of
+the engine. A fence that moves means "host1x got this far".
+
+```
+L0  bare INCR_SYNCPT (no class, no engine)   words= 2  fence 4009/4009  REACHED
+L1  + SETCL class 0x21                       words= 3  fence 4011/4011  REACHED
+L2  + SET_APPLICATION_ID                     words= 6  fence 4013/4013  REACHED
+L3  + full surfaces + EXECUTE                words=39  fence 4015/4015  REACHED
+L4  same, INCR on OP_DONE                    words=39  fence 4015/4017  STALLED
+```
+
+L3 and L4 are the **same 39 words** and differ only in the increment condition.
+L3 retires; L4 never fires. So:
+
+- host1x runs our cmdbufs on the msenc channel, and the class switch, the
+  methods and the full job are all accepted and retired.
+- The engine receives fully-formed work and **never signals OP_DONE**.
+
+### Two of the three M68 hypotheses are now dead
+
+L3/L4 carried a complete H.264 all-intra IDR setup at 256x128 - populated
+sps/pps/rc/pic_control, slice+ME+MD+quant control blocks at their offsets, and
+every surface the firmware can dereference (input NV12, reference luma and
+chroma, IO history, bitstream, status). Bitstream stayed all-zero, `bits=0`.
+
+- **(3) "the engine validates surfaces before starting" is DISPROVEN.** Giving
+  it every surface changed nothing at all.
+- **(2) "EXECUTE is encoded wrongly" is unlikely.** The identical word retires
+  fine through host1x; a malformed EXECUTE would be a method write like any
+  other, and L2 proves method writes land.
+- **(1) "the Falcon microcode is not booted" is what is left**, and it now fits
+  every observation: a live channel, a live host1x path, and an engine behind it
+  running no ucode, which therefore can never produce an OP_DONE.
+
+`SET_UCODE_STATE` (0x50C) is still unused. The next experiment is firmware boot,
+not job configuration.
+
+### SuperSpeed: the BOS was missing, and it was still not enough
+
+M58 declared USB 3.0 device and endpoint descriptors and the link kept training
+to High; I read that as a cable or console limit. It was neither in the sense I
+meant: USB 3.0 enumeration requires a Binary Object Store carrying a SuperSpeed
+Device Capability descriptor, and `usbDsSetBinaryObjectStore` was **never called
+at all**. Atmosphere's haze calls it at usb_session.cpp:220 and negotiates SS.
+
+Added, accepted, and the link **still trains to High**:
+
+```
+usbDsSetBinaryObjectStore rc=0x0
+*** NEGOTIATED SPEED = 3 (High(480Mbps)) *** rc=0x0
+```
+
+Our descriptor set now matches haze's, so the device side is no longer a
+candidate. That leaves the cable (or the port), which is the one variable this
+project has never controlled. **Untested, and cheap to test.**
+
+### 800x450 corrupts, and the reason is alignment
+
+The link-speed picker chose 800x450 (the largest size M70's 37 MB/s wall
+supports at 60 fps) and it ran at **59.7 fps** - the frame rate target is met.
+But the picture tore into vertical bands and horizontal stripes.
+
+768 and 1280 were both clean. 768 = 64 x 12, 1280 = 64 x 20, and **800 = 64 x
+12.5**. The Tegra GOB is 64 bytes wide, so a width that is not a multiple of 64
+puts the VIC's output stride out of step with the copy. This is a width
+constraint the pipeline has always had and never had to notice, because every
+size tried until now happened to satisfy it.
+
+**Every stream width must be a multiple of 64.** Nearest legal sizes bracketing
+the 60 fps budget: 768x432 (497,664 B, 29.9 MB/s) and 832x468 (584,064 B,
+35.0 MB/s, marginal). The honest best-known-good 60 fps config stays 768x432.
 ## *** M70: the USB 2.0 ceiling, measured - raw pixels are finished ***
 
 One run, five resolutions, 300 frames each, live gameplay:

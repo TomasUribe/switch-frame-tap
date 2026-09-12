@@ -278,6 +278,40 @@ namespace ams {
             mitm::applet::LogLine("   device descriptors (Full+High+Super) rc=0x%x", rc);
             if (R_FAILED(rc)) { return; }
 
+            /* M71: the Binary Object Store - the piece M58 was missing.
+             *
+             * M58 declared SuperSpeed device and endpoint descriptors and the
+             * link still trained to High every time. I read that as a cable or
+             * a console limit. It was neither: USB 3.0 enumeration requires a
+             * BOS containing a SuperSpeed USB Device Capability descriptor, and
+             * we never called usbDsSetBinaryObjectStore at all. Atmosphere's
+             * haze does (usb_session.cpp:220) immediately after its Super
+             * device descriptor, and haze negotiates SuperSpeed.
+             *
+             * wSpeedSupported 0x000c = bit2 (High) | bit3 (Super).
+             * bFunctionalitySupport 3 = full functionality from High upward. */
+            {
+                const u8 bos[0x16] = {
+                    0x05, USB_DT_BOS, 0x16, 0x00, 0x02,
+
+                    /* USB 2.0 extension */
+                    0x07, USB_DT_DEVICE_CAPABILITY, 0x02,
+                    0x02, 0x00, 0x00, 0x00,
+
+                    /* SuperSpeed USB device capability */
+                    0x0a, USB_DT_DEVICE_CAPABILITY, 0x03,
+                    0x00,
+                    0x0c, 0x00,
+                    0x03,
+                    0x00,
+                    0x00, 0x00,
+                };
+                rc = usbDsSetBinaryObjectStore(bos, sizeof(bos));
+                mitm::applet::LogLine("   usbDsSetBinaryObjectStore rc=0x%x%s", rc,
+                                      R_SUCCEEDED(rc) ? "" : "  <- SuperSpeed will not be offered");
+                if (R_FAILED(rc)) { return; }
+            }
+
             /* bound to the file-scope handles so the transport can post to
              * ep_in long after boot; the rest of this function is unchanged */
             UsbDsInterface *&iface  = g_usb_iface;
@@ -479,18 +513,27 @@ namespace ams {
         mitm::applet::g_matrix_armed  = ArmFileContains("mtx");
         mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);
         mitm::applet::g_stream_armed  = ArmFileContains("stream");
-        mitm::applet::g_stream_w      = ArmFileNumber("sw", 480);
-        mitm::applet::g_stream_h      = ArmFileNumber("sh", 270);
+        mitm::applet::g_stream_w      = ArmFileNumber("sw", 0);
+        mitm::applet::g_stream_h      = ArmFileNumber("sh", 0);
+        /* an explicit sw=/sh= overrides the link-speed picker; without one the
+         * stream sizes itself to whatever the negotiated link can carry */
+        mitm::applet::g_stream_auto   = (mitm::applet::g_stream_w == 0 ||
+                                         mitm::applet::g_stream_h == 0);
         mitm::applet::g_stream_frames = ArmFileNumber("sframes", 600);
         mitm::applet::g_probe_delay_s = ArmFileNumber("wait", 120);
         mitm::applet::LogLine("arm file (sdmc:/applet-mitm.armed): vic=%s exec=%s",
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
         if (mitm::applet::g_stream_armed) {
-            mitm::applet::LogLine("stream ARMED: %ux%u packed-420, %u frames (%u B/frame); 60 fps needs <=16667 us/frame",
-                                  mitm::applet::g_stream_w, mitm::applet::g_stream_h,
-                                  mitm::applet::g_stream_frames,
-                                  mitm::applet::g_stream_w * mitm::applet::g_stream_h * 3 / 2);
+            if (mitm::applet::g_stream_auto) {
+                mitm::applet::LogLine("stream ARMED: size AUTO (from the negotiated link speed), %u frames",
+                                      mitm::applet::g_stream_frames);
+            } else {
+                mitm::applet::LogLine("stream ARMED: %ux%u packed-420, %u frames (%u B/frame); 60 fps needs <=16667 us/frame",
+                                      mitm::applet::g_stream_w, mitm::applet::g_stream_h,
+                                      mitm::applet::g_stream_frames,
+                                      mitm::applet::g_stream_w * mitm::applet::g_stream_h * 3 / 2);
+            }
         }
         LogMemoryPools();
         TryUsbEnumerate();
@@ -537,6 +580,16 @@ namespace ams {
  * usb_session.cpp:250,256-258): PostBufferAsync -> wait CompletionEvent ->
  * eventClear -> GetReportData -> ParseReportData. */
 namespace ams::mitm::applet {
+
+    /* M71: the negotiated link speed, asked of the kernel rather than
+     * assumed. The stream picks its resolution from this: SuperSpeed lifts
+     * the ~37 MB/s wall M70 measured, and there is no point aiming a
+     * 129 MB/s frame rate at a High-Speed link. */
+    bool UsbIsSuperSpeed() {
+        UsbDeviceSpeed sp = UsbDeviceSpeed_None;
+        if (R_FAILED(usbDsGetSpeed(std::addressof(sp)))) { return false; }
+        return sp == UsbDeviceSpeed_Super;
+    }
 
     bool UsbReady() {
         if (::ams::g_usb_ep_in == nullptr) { return false; }

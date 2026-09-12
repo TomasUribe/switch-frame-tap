@@ -52,6 +52,7 @@ namespace ams::mitm::applet {
     constinit bool g_bench_armed   = false;
     constinit bool g_nvenc_armed   = false;
     constinit bool g_sweep_armed   = false;
+    constinit bool g_stream_auto   = true;   /* pick the size from the link speed */
     constinit bool g_matrix_armed  = false;
     constinit u32  g_matrix_mode   = 0;
     constinit bool g_stream_armed  = false;
@@ -2337,7 +2338,34 @@ namespace ams::mitm::applet {
                                                  steps[si].w, steps[si].h, 300);
                                 }
                             } else {
-                                StreamFrames(dbg, cand.addr, vfd, cmd_handle, syncpt, cfg_addr, dst_addr, sa);
+                                /* M71: let the negotiated link choose the size.
+                                 *
+                                 * M70 measured the High-Speed wall at ~37 MB/s,
+                                 * which puts 60 fps at ~800x450 and nothing
+                                 * larger. If the BOS descriptor added this
+                                 * build actually gets us SuperSpeed, that wall
+                                 * moves by roughly an order of magnitude and
+                                 * the right answer is completely different -
+                                 * so ask, do not assume.
+                                 *
+                                 * 1600x900 rather than 1920x1080 on purpose:
+                                 * StreamStageSize is 0x220000, which holds
+                                 * 1,485,482 packed-420 pixels. 1600x900 is
+                                 * 1,440,000 and fits; 1080p is 2,073,600 and
+                                 * does not. Going native needs the staging
+                                 * re-layout, and that is a change worth making
+                                 * only once SuperSpeed is confirmed. */
+                                const bool ss = UsbIsSuperSpeed();
+                                u32 sW = g_stream_w, sH = g_stream_h;
+                                if (g_stream_auto) {
+                                    if (ss) { sW = 1600; sH = 900; }
+                                    else    { sW =  800; sH = 450; }
+                                }
+                                LogLine("   stream: link=%s -> %ux%u (%u B/frame, %u MB/s at 60 fps)",
+                                        ss ? "SUPERSPEED" : "high-speed", sW, sH,
+                                        sW * sH * 3 / 2, (sW * sH * 3 / 2) * 60 / 1000000);
+                                StreamFrames(dbg, cand.addr, vfd, cmd_handle, syncpt,
+                                             cfg_addr, dst_addr, sa, sW, sH);
                             }
                             VicStage("st:3_done");
                         }
@@ -2719,6 +2747,157 @@ namespace ams::mitm::applet {
          * already nvmap'd; they only need pinning onto the msenc channel, since
          * MAP_CMD_BUFFER is per-channel. The setup struct must be 256-byte
          * aligned, which offset 0 of a page-aligned buffer satisfies. */
+        /* M71: the NVENC ladder.
+         *
+         * M69 swept candidate magics and learned nothing, because every case -
+         * including a deliberately invalid control - behaved identically. That
+         * is the signature of a job that never runs, and no amount of varying
+         * the CONTENTS of a job that never runs will say why.
+         *
+         * So stop varying the content and vary the STRUCTURE instead. Five
+         * submits on one channel, each adding exactly one layer:
+         *
+         *   L0  bare INCR_SYNCPT, IMMEDIATE      does host1x run our cmdbuf here?
+         *   L1  + SETCL to class 0x21            does the class switch survive?
+         *   L2  + one method write               are methods accepted?
+         *   L3  + full method set + EXECUTE      is the job handed to the engine?
+         *   L4  same, but INCR on OP_DONE        does the engine COMPLETE it?
+         *
+         * L0-L3 end with an IMMEDIATE increment, which host1x performs as it
+         * retires the opcode regardless of what the engine does. So a fence that
+         * moves means "host1x got this far". The first level whose fence does
+         * NOT move is the layer that is broken, and that is a fact rather than
+         * an inference. If all of L0-L3 pass and only L4 stalls, the engine is
+         * receiving fully-formed work and failing to finish it - which is a
+         * completely different problem from the one we have been chasing.
+         *
+         * L3/L4 carry a real, fully populated H.264 all-intra IDR setup with
+         * every surface the engine can dereference, at a deliberately tiny
+         * 256x128 so the encode is trivial. That is hypothesis (3) from M68-M69,
+         * tested for free inside the ladder rather than as a separate run. */
+        constexpr u32 NvEncW = 256;      /* 16 MBs across */
+        constexpr u32 NvEncH = 128;      /*  8 MBs down   */
+
+        /* all 256-aligned: every method below takes an address >> 8 */
+        constexpr u32 EncSetupOff  = 0x000000;   /* drv_pic_setup      512 B */
+        constexpr u32 EncSliceOff  = 0x000200;   /* slice_control      128 B */
+        constexpr u32 EncMeOff     = 0x000280;   /* me_control         192 B */
+        constexpr u32 EncMdOff     = 0x000340;   /* md_control         128 B */
+        constexpr u32 EncQOff      = 0x0003C0;   /* quant_control      192 B */
+        constexpr u32 EncStatOff   = 0x001000;   /* pic_stat           128 B */
+        constexpr u32 EncBitsOff   = 0x002000;   /* bitstream          256 K */
+        constexpr u32 EncBitsSize  = 0x040000;
+        constexpr u32 EncHistOff   = 0x042000;   /* IO history          64 K */
+        constexpr u32 EncHistSize  = 0x010000;
+        constexpr u32 EncInYOff    = 0x060000;
+        constexpr u32 EncInUVOff   = EncInYOff  + NvEncW * NvEncH;
+        constexpr u32 EncRefYOff   = EncInUVOff + NvEncW * NvEncH / 2;
+        constexpr u32 EncRefUVOff  = EncRefYOff + NvEncW * NvEncH;
+        constexpr u32 EncEnd       = EncRefUVOff + NvEncW * NvEncH / 2;
+        static_assert(EncEnd <= VicDstSize, "NVENC probe surfaces do not fit the VIC dst buffer");
+
+        /* One surface_cfg. `tiled` is the 16x16 tiling the header says reference
+         * pictures must use; input comes from the VIC as plain pitch-linear. */
+        void FillEncSurface(nvenc_h264_surface_cfg_s *c, u32 w, u32 h, bool tiled) {
+            std::memset(c, 0, sizeof(*c));
+            c->frame_width_minus1  = static_cast<unsigned short>(w - 1);
+            c->frame_height_minus1 = static_cast<unsigned short>(h - 1);
+            c->sfc_pitch           = static_cast<unsigned short>(w);
+            c->sfc_pitch_chroma    = static_cast<unsigned short>(w);
+            c->sfc_trans_mode      = 0;
+            c->luma_top_frm_offset   = 0;
+            c->luma_bot_offset       = 0;
+            c->chroma_top_frm_offset = 0;
+            c->chroma_bot_offset     = 0;
+            c->block_height   = 0;
+            c->tiled_16x16    = tiled ? 1 : 0;
+            c->memory_mode    = 0;      /* semi-planar NV12 */
+            c->nv21_enable    = 0;
+            c->input_bl_mode  = 0;
+        }
+
+        /* A complete single-frame IDR configuration: baseline profile, CAVLC,
+         * constant QP, one slice, no references consulted. Everything the
+         * firmware might dereference is present and in range. */
+        void FillEncSetup(u8 *base) {
+            auto *st = reinterpret_cast<nvenc_h264_drv_pic_setup_s *>(base + EncSetupOff);
+            std::memset(base + EncSetupOff, 0, EncQOff + 192 - EncSetupOff);
+
+            st->magic = NV_NVENC_DRV_MAGIC_VALUE;
+            FillEncSurface(std::addressof(st->input_cfg),     NvEncW, NvEncH, false);
+            FillEncSurface(std::addressof(st->refpic_cfg),    NvEncW, NvEncH, true);
+            FillEncSurface(std::addressof(st->outputpic_cfg), NvEncW, NvEncH, true);
+            FillEncSurface(std::addressof(st->half_scaled_outputpic_cfg), NvEncW / 2, NvEncH / 2, true);
+
+            st->sps_data.profile_idc               = 66;    /* baseline */
+            st->sps_data.level_idc                 = 42;
+            st->sps_data.chroma_format_idc         = 1;     /* 4:2:0 */
+            st->sps_data.pic_order_cnt_type        = 2;     /* all-intra: simplest */
+            st->sps_data.log2_max_frame_num_minus4 = 0;
+            st->sps_data.frame_mbs_only            = 1;
+
+            st->pps_data.pic_param_set_id                        = 0;
+            st->pps_data.entropy_coding_mode_flag                = 0;   /* CAVLC */
+            st->pps_data.num_ref_idx_l0_active_minus1            = 0;
+            st->pps_data.num_ref_idx_l1_active_minus1            = 0;
+            st->pps_data.pic_init_qp_minus26                     = 0;   /* QP 26 */
+            st->pps_data.deblocking_filter_control_present_flag  = 1;
+
+            auto *rc = std::addressof(st->rate_control);
+            rc->hrd_type  = 2;
+            rc->QP[0] = rc->QP[1] = rc->QP[2] = 26;
+            rc->minQP[0] = rc->minQP[1] = rc->minQP[2] = 10;
+            rc->maxQP[0] = rc->maxQP[1] = rc->maxQP[2] = 51;
+            rc->framerate  = 60;
+            rc->gop_length = 0xFFFFFFFFu;           /* infinite: every frame IDR */
+            rc->rhopbi[0] = rc->rhopbi[1] = rc->rhopbi[2] = 256;
+
+            auto *pc = std::addressof(st->pic_control);
+            pc->pic_struct            = 0;          /* frame */
+            pc->pic_type              = 3;          /* IDR   */
+            pc->ref_pic_flag          = 1;
+            pc->slice_mode            = 1;          /* static, from the array below */
+            pc->codec                 = nvenc::CONTROL_CODEC_H264;
+            pc->frame_num             = 0;
+            pc->pic_order_cnt_lsb     = 0;
+            pc->idr_pic_id            = 0;
+            pc->num_forced_slices_minus1 = 0;
+            pc->num_me_controls_minus1   = 0;
+            pc->num_md_controls_minus1   = 0;
+            pc->num_q_controls_minus1    = 0;
+            pc->slice_control_offset  = EncSliceOff - EncSetupOff;
+            pc->me_control_offset     = EncMeOff    - EncSetupOff;
+            pc->md_control_offset     = EncMdOff    - EncSetupOff;
+            pc->q_control_offset      = EncQOff     - EncSetupOff;
+            pc->hist_buf_size         = EncHistSize;
+            pc->bitstream_buf_size    = EncBitsSize;
+            pc->bitstream_start_pos   = 0;
+            pc->max_slice_size        = EncBitsSize;
+
+            auto *sl = reinterpret_cast<nvenc_h264_slice_control_s *>(base + EncSliceOff);
+            std::memset(sl, 0, sizeof(*sl));
+            sl->num_mb       = (NvEncW / 16) * (NvEncH / 16);   /* the whole picture */
+            sl->qp_avr       = 26;
+            sl->qp_slice_min = 10;
+            sl->qp_slice_max = 51;
+            sl->force_intra  = 1;
+
+            auto *me = reinterpret_cast<nvenc_h264_me_control_s *>(base + EncMeOff);
+            std::memset(me, 0, sizeof(*me));
+            me->refinement_mode = 1;    /* qpel */
+
+            auto *md = reinterpret_cast<nvenc_h264_md_control_s *>(base + EncMdOff);
+            std::memset(md, 0, sizeof(*md));
+            md->intra_luma4x4_mode_enable   = 0x1FF;   /* all nine 4x4 modes   */
+            md->intra_luma8x8_mode_enable   = 0x1FF;
+            md->intra_luma16x16_mode_enable = 0xF;     /* all four 16x16 modes */
+            md->intra_chroma_mode_enable    = 0xF;
+
+            auto *q = reinterpret_cast<nvenc_h264_quant_control_s *>(base + EncQOff);
+            std::memset(q, 0, sizeof(*q));
+            q->qpp_mode = 0;   /* no coefficient pruning */
+        }
+
         void TryNvencProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle) {
             VicStage("nvp:1_open");
             u32 efd = 0, nverr = 0;
@@ -2726,8 +2905,8 @@ namespace ams::mitm::applet {
                 LogLine("   nvenc-probe: /dev/nvhost-msenc open failed nverr=%u", nverr);
                 return;
             }
-            LogLine("   ---- NVENC MAGIC PROBE (expecting magic 0x%08x) ----",
-                    static_cast<unsigned>(NV_NVENC_DRV_MAGIC_VALUE));
+            LogLine("   ---- NVENC LADDER (magic 0x%08x, %ux%u) ----",
+                    static_cast<unsigned>(NV_NVENC_DRV_MAGIC_VALUE), NvEncW, NvEncH);
 
             u32 esyncpt = 0;
             {
@@ -2738,81 +2917,95 @@ namespace ams::mitm::applet {
             }
             { struct { u32 fd; } sn = { nvmap_fd }; nverr = 0;
               NvIoctl(efd, NvHostIocChannelSetNvmapFd, std::addressof(sn), sizeof(sn), std::addressof(nverr)); }
+            /* bound so a level that genuinely hangs the engine does not hold the
+             * channel down for the levels after it */
+            { struct { u32 ms; } to = { 1000 }; nverr = 0;
+              NvIoctl(efd, NvHostIocChannelSetSubmitTo, std::addressof(to), sizeof(to), std::addressof(nverr)); }
 
-            /* pin the buffers onto THIS channel */
             VicStage("nvp:2_pin");
             u32 buf_addr = 0, cmd_addr = 0;
             MapCmdBuffer(efd, dst_handle, std::addressof(buf_addr), "nvenc-buf", 0);
             MapCmdBuffer(efd, cmd_handle, std::addressof(cmd_addr), "nvenc-cmd", 0);
-            LogLine("   nvenc-probe: syncpt=%u buf=0x%08x cmd=0x%08x", esyncpt, buf_addr, cmd_addr);
-            if (buf_addr == 0) { LogLine("   nvenc-probe: buffer pin failed - refusing to submit"); NvClose(efd); return; }
+            LogLine("   syncpt=%u (the VIC uses 12) buf=0x%08x cmd=0x%08x", esyncpt, buf_addr, cmd_addr);
+            if (buf_addr == 0) { LogLine("   buffer pin failed - refusing to submit"); NvClose(efd); return; }
 
-            /* M68b: sweep candidate magics, INCLUDING a deliberately invalid
-             * control. The first run was ambiguous: the firmware wrote
-             * error_status=1 with ucode_error_status=0, which is neither
-             * BAD_MAGIC nor a success, and a zero cannot be read as "accepted".
-             *
-             * If the control (0xDEADBEEF) comes back BAD_MAGIC while 5.0 does
-             * not, then the field is meaningful, the check is running, and ours
-             * passed. If everything returns the same thing, the firmware never
-             * got as far as the magic and the result says nothing either way. */
-            struct MagicCase { const char *name; unsigned int magic; };
-            const MagicCase magics[] = {
-                { "5.0  (expected: Tegra X1 / nvenc050)", 0xd0b70006u },
-                { "6.0",                                  0xc1b70006u },
-                { "1.0",                                  0xc0b70006u },
-                { "MSENC 2.0",                            0xa0b70006u },
-                { "CONTROL - deliberately invalid",       0xDEADBEEFu },
+            /* Grey input, so the encoder has something legal to read even before
+             * a real frame ever lands here. */
+            std::memset(g_vic_dst_buf + EncInYOff,  0x80, NvEncW * NvEncH);
+            std::memset(g_vic_dst_buf + EncInUVOff, 0x80, NvEncW * NvEncH / 2);
+            std::memset(g_vic_dst_buf + EncRefYOff, 0x00, EncEnd - EncRefYOff);
+            std::memset(g_vic_dst_buf + EncHistOff, 0x00, EncHistSize);
+
+            auto *stat = reinterpret_cast<nvenc_pic_stat_s *>(g_vic_dst_buf + EncStatOff);
+
+            struct Level { const char *name; u32 depth; bool op_done; };
+            const Level levels[] = {
+                { "L0  bare INCR_SYNCPT (no class, no engine)", 0, false },
+                { "L1  + SETCL class 0x21",                     1, false },
+                { "L2  + SET_APPLICATION_ID",                   2, false },
+                { "L3  + full surfaces + EXECUTE",              3, false },
+                { "L4  same, INCR on OP_DONE",                  3, true  },
             };
 
-            /* layout inside the (already allocated) VIC destination buffer */
-            constexpr u32 SetupOff = 0x0000;      /* 512 B, 256-aligned   */
-            constexpr u32 StatOff  = 0x1000;      /* 128 B                */
-            constexpr u32 BitsOff  = 0x2000;      /* bitstream            */
-            constexpr u32 BitsSize = 0x40000;
+            for (u32 li = 0; li < sizeof(levels) / sizeof(levels[0]); ++li) {
+                const Level &L = levels[li];
 
-            auto *setup = reinterpret_cast<nvenc_h264_drv_pic_setup_s *>(g_vic_dst_buf + SetupOff);
-            auto *stat  = reinterpret_cast<nvenc_pic_stat_s *>(g_vic_dst_buf + StatOff);
+                std::memset(g_vic_dst_buf + EncStatOff, 0, sizeof(nvenc_pic_stat_s));
+                if (L.depth >= 3) {
+                    FillEncSetup(g_vic_dst_buf);
+                    std::memset(g_vic_dst_buf + EncBitsOff, 0, 0x1000);
+                }
+                armDCacheFlush(g_vic_dst_buf, EncEnd);
 
-            for (u32 mi = 0; mi < sizeof(magics) / sizeof(magics[0]); ++mi) {
-            std::memset(g_vic_dst_buf, 0, BitsOff + 0x1000);
-            setup->magic = magics[mi].magic;
-            armDCacheFlush(g_vic_dst_buf, BitsOff + 0x1000);
+                VicStage("nvp:3_submit");
+                auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
+                u32 n = 0;
+                auto m = [&](u32 method, u32 value) {
+                    w[n++] = Host1xIncr0x10x2; w[n++] = method >> 2; w[n++] = value;
+                };
+                if (L.depth >= 1) {
+                    w[n++] = vic::Host1xOpcodeSetClass(0, nvenc::HOST1X_CLASS_NVENC, 0);
+                }
+                if (L.depth >= 2) {
+                    m(nvenc::SET_APPLICATION_ID, nvenc::APPLICATION_ID_H264);
+                }
+                if (L.depth >= 3) {
+                    m(nvenc::SET_CONTROL_PARAMS,      nvenc::CONTROL_CODEC_H264);
+                    m(nvenc::SET_PICTURE_INDEX,       0);
+                    m(nvenc::SET_IN_DRV_PIC_SETUP,    (buf_addr + EncSetupOff) >> 8);
+                    m(nvenc::SET_IN_CUR_PIC,          (buf_addr + EncInYOff)   >> 8);
+                    m(nvenc::SET_IN_CUR_PIC_CHROMA_U, (buf_addr + EncInUVOff)  >> 8);
+                    m(nvenc::SET_OUT_REF_PIC_LUMA,    (buf_addr + EncRefYOff)  >> 8);
+                    m(nvenc::SET_OUT_REF_PIC_CHROMA,  (buf_addr + EncRefUVOff) >> 8);
+                    m(nvenc::SET_IOHISTORY,           (buf_addr + EncHistOff)  >> 8);
+                    m(nvenc::SET_OUT_ENC_STATUS,      (buf_addr + EncStatOff)  >> 8);
+                    m(nvenc::SET_OUT_BITSTREAM,       (buf_addr + EncBitsOff)  >> 8);
+                    m(nvenc::EXECUTE,                 1u << 8);
+                }
+                n = AppendIncrSyncpt(w, n, esyncpt, L.op_done);
+                armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
 
-            VicStage("nvp:3_submit");
-            auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
-            u32 n = 0;
-            w[n++] = vic::Host1xOpcodeSetClass(0, nvenc::HOST1X_CLASS_NVENC, 0);
-            auto m = [&](u32 method, u32 value) {
-                w[n++] = Host1xIncr0x10x2; w[n++] = method >> 2; w[n++] = value;
-            };
-            m(nvenc::SET_APPLICATION_ID,   nvenc::APPLICATION_ID_H264);
-            m(nvenc::SET_CONTROL_PARAMS,   nvenc::CONTROL_CODEC_H264);
-            m(nvenc::SET_PICTURE_INDEX,    0);
-            m(nvenc::SET_IN_DRV_PIC_SETUP, (buf_addr + SetupOff) >> 8);
-            m(nvenc::SET_OUT_ENC_STATUS,   (buf_addr + StatOff)  >> 8);
-            m(nvenc::SET_OUT_BITSTREAM,    (buf_addr + BitsOff)  >> 8);
-            m(nvenc::EXECUTE,              1u << 8);
-            n = AppendIncrSyncpt(w, n, esyncpt, true);
-            armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
+                alignas(8) u8 sb[16 + 12 + 20 + 4] = {};
+                u32 off = 0;
+                auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
+                put(1); put(0); put(1); put(1);
+                put(cmd_handle); put(0); put(n);
+                put(esyncpt); put(1); put(0); put(0); put(0);
+                const u32 fence_off = off; put(0);
+                const u32 sz = off;
+                const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
+                u32 fence_val = 0; nverr = 0;
+                const auto rc = NvIoctl(efd, req, sb, sz, std::addressof(nverr));
+                std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
 
-            alignas(8) u8 sb[16 + 12 + 20 + 4] = {};
-            u32 off = 0;
-            auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
-            put(1); put(0); put(1); put(1);
-            put(cmd_handle); put(0); put(n);
-            put(esyncpt); put(1); put(0); put(0); put(0);
-            const u32 fence_off = off; put(0);
-            const u32 sz = off;
-            const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
-            u32 fence_val = 0; nverr = 0;
-            const auto rc = NvIoctl(efd, req, sb, sz, std::addressof(nverr));
-            std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
-            LogLine("   nvenc-probe: submit words=%u rc=0x%x nverr=%u -> fence=%u", n, rc, nverr, fence_val);
+                if (R_FAILED(rc) || nverr != 0) {
+                    LogLine("   %-44s SUBMIT REJECTED rc=0x%x nverr=%u", L.name, rc, nverr);
+                    continue;
+                }
 
-            if (R_SUCCEEDED(rc) && nverr == 0) {
                 const u32 cfd = CtrlFd();
                 bool done = false;
+                u32 seen = 0;
                 if (cfd != 0) {
                     struct { u32 id; u32 thresh; u32 timeout; } a = { esyncpt, fence_val, 200 };
                     u32 we = 0;
@@ -2821,31 +3014,30 @@ namespace ams::mitm::applet {
                     for (u32 spin = 0; spin < 400 && !done; ++spin) {
                         u32 e2 = 0; r.value = 0;
                         NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
-                        done = (r.value >= fence_val);
+                        seen = r.value;
+                        done = (seen >= fence_val);
                         if (!done) { os::SleepThread(TimeSpan::FromMicroSeconds(200)); }
                     }
                 }
-                armDCacheFlush(g_vic_dst_buf, BitsOff + 0x1000);
-                const u32 ucode = stat->ucode_error_status;
-                const u32 est   = stat->error_status;
-                /* Do NOT read ucode==0 as success when the fence never moved:
-                 * an unwritten buffer is zero too. Only say "accepted" when the
-                 * engine actually signalled completion. */
-                const char *verdict =
-                    (ucode == nvenc::ERR_H264_BAD_MAGIC) ? "BAD_MAGIC - this generation is rejected"
-                  : (ucode != 0)                         ? nvenc::ErrName(ucode)
-                  : done                                 ? "completed with ucode 0"
-                  :                                        "no ucode error reported AND fence never moved - inconclusive";
-                LogLine("   nvenc magic %-38s -> fence %-11s error_status=%u ucode=0x%08x  %s",
-                        magics[mi].name, done ? "reached" : "NOT reached", est, ucode, verdict);
-            } else {
-                LogLine("   nvenc magic %-38s -> SUBMIT REJECTED nverr=%u", magics[mi].name, nverr);
+                armDCacheFlush(g_vic_dst_buf, EncEnd);
+
+                if (L.depth < 3) {
+                    LogLine("   %-44s words=%2u fence %u/%u  %s", L.name, n, seen, fence_val,
+                            done ? "REACHED" : "*** STALLED - this layer is the problem ***");
+                } else {
+                    const u32 ucode = stat->ucode_error_status;
+                    const u32 est   = stat->error_status;
+                    u32 nz = 0;
+                    for (u32 i = 0; i < 4096; ++i) { if (g_vic_dst_buf[EncBitsOff + i] != 0) { ++nz; } }
+                    LogLine("   %-44s words=%2u fence %u/%u %s  err=%u ucode=0x%08x (%s)  bitstream %u/4096 B nonzero  bits=%u",
+                            L.name, n, seen, fence_val, done ? "REACHED" : "STALLED",
+                            est, ucode, nvenc::ErrName(ucode), nz, stat->total_bit_count);
+                }
             }
-            }  /* end magic sweep */
+
             UnmapCmdBuffer(efd, dst_handle);
             NvClose(efd);
             VicStage("nvp:done");
-            static_cast<void>(BitsSize);
         }
 
         void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle) {
