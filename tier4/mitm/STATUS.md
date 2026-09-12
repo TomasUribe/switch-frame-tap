@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M60**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M62**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -87,6 +87,81 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M61-M62: the stream runs, and the bottleneck is now the cable ***
+
+M61 is the run that made it usable, and the bug it fixed was ours, not the
+platform's.
+
+### M60's stream froze the game, and it was CPU starvation
+
+```
+[62.112] hb:17  txn=3259      game presenting normally
+[63.861] st:1_loop            stream starts
+[65.152] hb:18  txn=3511      frozen
+[71.188] hb:20  txn=3511      still frozen, 8 s later
+[72.209] stream stops
+[74.208] hb:21  txn=3717      presenting again, instantly
+```
+
+The game stopped for exactly the duration of the loop and resumed the moment it
+ended. Not a debug-event stall - `GAME FROZEN FOR 0 ms` and `drained 35 debug
+events` show the resume worked.
+
+**Every thread in this process is pinned to core 3** (`kernel_flags`
+`lowest_cpu_id 3, highest_cpu_id 3`), *including the mitm IPC thread that
+answers the game's `vi:u` calls*. The stream loop burned ~10 ms of solid CPU per
+iteration at the **same priority** as that IPC thread and immediately looped, so
+the game blocked on a binder call we were never scheduled to answer.
+
+Three fixes:
+
+1. **Worker priority = main + 4** (higher number is lower priority on Horizon),
+   so IPC preempts the worker the instant a request arrives.
+2. **An explicit 2 ms sleep per iteration**, guaranteeing a scheduling window.
+3. **Removed `armDCacheFlush(g_ind_buf, FbSlotSize)`** - 8.8 MB, i.e. 138,240
+   cache-line operations, 60 times a second. It existed so the VIC could see our
+   writes through the SMMU; the CPU point-sampler reads its own cached writes
+   coherently. Pure waste since M60.
+
+Confirmed working on hardware at 480x270.
+
+### M62: 640x360, and the honest ceiling
+
+`StreamStageSize` raised 0x100000 -> 0x220000 so 960x540 (2,073,600 B) fits,
+guarded by a `static_assert` against the 16 MB heap. `wait=0` starts the stream
+on the game's first presented frame.
+
+| output | B/frame | USB-limited | CPU-limited | measured |
+|---|---|---|---|---|
+| 480x270 (4x) | 518,400 | ~60 fps | ~85 fps | **59.4 fps** |
+| 640x360 (3x) | 921,600 | 34-43 fps | ~65 fps | **lags** |
+| 960x540 (2x) | 2,073,600 | ~15 fps | ~43 fps | not tried |
+
+**USB 2.0 bulk is now the only constraint.** 518,400 B x 59.4 = 30.8 MB/s is
+about what the link delivers, and no arrangement of raw pixels gets 720p60
+(83 MB/s in NV12, 221 MB/s in RGBA) through it.
+
+The point sampler needs an exact uniform divisor of 1920x1080, so only 4x, 3x
+and 2x are available - that constraint is the sampler's, not the transport's.
+
+### Where the remaining speed has to come from
+
+Raw pixels are finished as a strategy. The two doors, neither opened yet:
+
+- **SuperSpeed.** Descriptors are accepted (`rc=0x0`) and the link still
+  negotiates High. The PC is ruled out - its root hubs report 10000/20000 Mbps -
+  so it is the cable or the console's device-mode capability. One USB 3.0 device
+  would settle it in thirty seconds.
+- **Compression (NVENC).** H.264 at 20 Mbps is 2.4 MB/s, which fits USB 2.0
+  sixteen times over. Class id 0x21 is known, the method table is not, and
+  nouveau has no Tegra NVENC support - so REing nvservices is the route.
+
+Note the awkward interaction: **NVENC wants NV12 input and the VIC is the
+natural way to produce it, but M59 proved the VIC cannot be used per-frame**
+without starving the compositor it shares. A CPU RGBA->NV12 conversion, or a
+VIC job cheap enough not to contend, is an unsolved sub-problem of the encode
+path.
 
 ## *** M58-M60: A WORKING 60 fps STREAM ***
 

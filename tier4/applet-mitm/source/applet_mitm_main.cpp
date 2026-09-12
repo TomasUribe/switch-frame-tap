@@ -466,7 +466,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M60: up. STREAMING - CPU downscale, no VIC (it cost 119 ms/frame).");
+        mitm::applet::LogLine("applet-mitm M62: up. STREAMING at 640x360, no start delay.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

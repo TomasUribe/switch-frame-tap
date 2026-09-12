@@ -4,12 +4,15 @@ Building a Nintendo Switch → PC screen streamer that runs at **native
 resolution and 60 fps**, and the research needed to get there. Homebrew,
 developed on and for the author's own console.
 
-> **This is a work in progress, not a finished tool.** The goal is the full
-> streamer — capture, hardware encode, transport, PC client. The encode and
-> transport halves exist; the capture half is the hard part, and it is where
-> the work currently is. What is finished is finished properly and verified on
-> hardware; what is not is marked as such throughout. See
-> [Roadmap](#roadmap) for what is left.
+> **There is a working end-to-end stream.** Live video from the console to a PC
+> over USB at **480x270 / 59.4 fps**, with a one-process libusb + SDL2 viewer.
+> Capture, downscale and transport are solved and measured on hardware.
+>
+> **It is still not a finished tool.** The goal is native resolution at 60 fps,
+> and raw pixels cannot get there: USB 2.0 bulk delivers ~31 MB/s, while 720p60
+> needs 83 MB/s even in NV12. The remaining work is **compression**, or
+> SuperSpeed. What is finished is finished properly and verified on hardware;
+> what is not is marked as such throughout. See [Roadmap](#roadmap).
 
 **Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
 47 hardware test cycles.
@@ -202,11 +205,30 @@ Reading mesosphere settles most of it in advance:
   ContinueAll)` resumes the target while the debug handle is held — that is how
   dmnt reads at 60 Hz, and it is what a streaming implementation would need.
 
-**Run on hardware: it works.** The swapchain is located at runtime by exact-size match, `ContinueDebugEvent` keeps the game running while we stay attached, and whole frames read at 1100-1800 MB/s. What follows is
-implementation with no open unknowns: strip-wise capture (one block-row is
-120 blocks × 8192 B = 983,040 B and covers the full 1920 px width × 128 rows,
-contiguous; nine of them are exactly one 8,847,360-byte slot), VIC blit, NVENC,
-transport.
+**Run on hardware: it works, and it now streams.** The swapchain is located at
+runtime by exact-size match, `ContinueDebugEvent` keeps the game running while
+we stay attached, and a whole 8,847,360-byte slot reads in **5.6 ms** against a
+16.67 ms frame budget.
+
+The full pipeline runs end to end:
+
+```
+queueBuffer intercept -> svcReadDebugProcessMemory (5.6 ms)
+  -> CPU point-sample downscale (4.3 ms) -> USB bulk IN -> SDL2 viewer
+```
+
+Two findings shaped it, both the hard way:
+
+- **The VIC cannot be used per-frame.** A full-frame blit cost **119 ms**, and
+  worse, nvnflinger composites on the same engine and syncpoint: a tight blit
+  loop starved the compositor and the game fell to 3.8 fps. The VIC is fine for
+  a one-shot blit. The stream uses a CPU point-sampler instead — at an exact 4x
+  reduction every output pixel lands on a 16-byte group boundary, so it is one
+  aligned read per pixel with no engine involved.
+- **Every thread here is pinned to core 3**, including the mitm's own IPC
+  thread. A stream loop at equal priority starves it and the game blocks on a
+  binder call nobody answers. The worker runs below IPC priority and yields
+  each iteration.
 
 The full research log, in reverse chronological order with every dead end and
 its evidence, is [`tier4/mitm/STATUS.md`](tier4/mitm/STATUS.md). The narrative
@@ -220,12 +242,22 @@ version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
 | Swapchain geometry from binder traffic | **done, on hardware** |
 | VIC: block-linear → linear, scale, format convert | **done, byte-exact on hardware** |
 | **Get the game's pixels into our address space** | **done, on hardware** — three graphics routes closed; the kernel debug-SVC route works. 120 consecutive native 1080p frames, 0 missed, 59 fps, ~9 ms of a 16.67 ms budget |
-| NVENC H.264 encode | channel opens; encode not written yet |
-| Transport (USB / TCP) | protocol and PC receiver exist from the earlier `switch-stream/` work; not yet wired to this module |
+| USB transport, device side | **done, on hardware** — enumerates as `1209:5f1e`, bulk IN, byte-exact |
+| Live PC viewer | **done** — [`tools/raw-recv/raw-view.c`](tools/raw-recv/raw-view.c), libusb + SDL2 in one process |
+| **End-to-end stream** | **done, on hardware** — 480x270 at **59.4 fps**; 640x360 at ~40 fps |
+| Native resolution at 60 fps | **blocked on bandwidth.** USB 2.0 gives ~31 MB/s; 720p60 needs 83 MB/s in NV12, 221 in RGBA |
+| NVENC H.264 encode | channel opens and takes a submit; the method table is unknown and undocumented |
+| USB 3.0 SuperSpeed | descriptors accepted, link still negotiates High — cable or console, not the PC |
 | Capture the home menu and system overlays | wanted, and not possible through any route found so far |
 
-The gate is the one marked in progress. Everything downstream of it is
-implementation against known ABIs; everything upstream of it is done.
+Capture is no longer the gate — **bandwidth is**. Everything upstream of the
+cable is done and measured; the next move is compression, or proving
+SuperSpeed.
+
+A wrinkle worth knowing before starting the encoder: NVENC wants NV12 input and
+the VIC is the natural way to produce it, but the VIC cannot be used per-frame
+without starving the compositor. Producing NV12 cheaply is an unsolved
+sub-problem of the encode path.
 
 ## Layout
 

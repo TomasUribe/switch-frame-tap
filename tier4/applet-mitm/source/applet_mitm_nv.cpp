@@ -86,7 +86,12 @@ namespace ams::mitm::applet {
          * full frame (8,294,400 B). It now starts past a whole slot. */
         constexpr size_t FbSlotBytes     = 8847360;
         constexpr size_t FbBlockRowStage = FbSlotBytes;
-        constexpr size_t StreamStageSize = 0x100000;   /* per stream stage buffer */
+        /* M62: 0x220000 so a 960x540 frame (2,073,600 B) fits. Ceiling is the
+         * 16 MB heap: VicBufsEnd + FbSlotBytes + 3 * StreamStageSize must stay
+         * under g_ind_size (15,597,568), which caps this at ~2,250,000. */
+        constexpr size_t StreamStageSize = 0x220000;   /* per stream stage buffer */
+        static_assert(0x120000 + 8847360 + 3 * StreamStageSize <= 16777216,
+                      "stage buffers must fit the 16 MB heap");
         constinit size_t g_vic_heap_size = 0;
 
         /* The capture buffer stays on the HEAP, deliberately.
@@ -1630,7 +1635,10 @@ namespace ams::mitm::applet {
                                                                 dbg, slot_base + off, FbSlotSize))) {
                     LogLine("   stream: slot read failed at frame %u", i); break;
                 }
-                armDCacheFlush(g_ind_buf, FbSlotSize);
+                /* M60b: NO cache flush. It existed so the VIC could see our
+                 * writes through the SMMU; the CPU point-sampler reads its own
+                 * cached writes coherently. Flushing 8.8 MB per frame was
+                 * 138,240 cache-line ops 60x a second, for nothing. */
                 const u64 f1 = armTicksToNs(armGetSystemTick());
 
                 DownscalePoint(g_ind_buf, g_stream_stage[parity], W, H, 1920u / W);
@@ -1657,6 +1665,16 @@ namespace ams::mitm::applet {
                 }
                 pending = true;
                 parity ^= 1;
+
+                /* M60b: hand the core back. Every thread in this process is
+                 * pinned to core 3 (kernel_flags lowest/highest_cpu_id 3),
+                 * INCLUDING the mitm IPC thread that answers the game's vi:u
+                 * calls. M60's first long run burned ~10 ms of solid CPU per
+                 * iteration and starved it: the game stopped presenting for the
+                 * entire 8.3 s stream (txn frozen at 3511) and resumed the
+                 * instant we stopped. Sleeping is not politeness here, it is
+                 * what keeps the game alive. */
+                os::SleepThread(TimeSpan::FromMilliSeconds(2));
 
                 t_read += f1 - f0; t_vic += f2 - f1; t_copy += f3 - f2; t_wait += f4 - f3;
                 const u64 dt = f4 - f0;
@@ -2373,9 +2391,15 @@ namespace ams::mitm::applet {
 
     void StartVicWorker() {
         if (!g_vic_armed) { return; }
+        /* M60b: deliberately LOWER priority than main/IPC (higher number is
+         * lower priority on Horizon). All our threads share core 3, so a worker
+         * at equal priority round-robins against the IPC thread and the game
+         * blocks on binder calls we never get scheduled to answer. Below it,
+         * IPC preempts us the moment a request arrives and the worker simply
+         * uses what is left. */
+        const s32 worker_prio = os::GetThreadPriority(os::GetCurrentThread()) + 4;
         R_ABORT_UNLESS(os::CreateThread(std::addressof(g_vic_thread), VicWorkerThread, nullptr,
-                                        g_vic_stack, sizeof(g_vic_stack),
-                                        os::GetThreadPriority(os::GetCurrentThread())));
+                                        g_vic_stack, sizeof(g_vic_stack), worker_prio));
         os::SetThreadNamePointer(std::addressof(g_vic_thread), "applet-mitm.VIC");
         os::StartThread(std::addressof(g_vic_thread));
         g_vic_stage.store("waiting", std::memory_order_relaxed);
