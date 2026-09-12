@@ -466,7 +466,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M63: up. VIC BENCH - the 119 ms was our own logging.");
+        mitm::applet::LogLine("applet-mitm M66: up. VIC 1.1 ms confirmed; chasing the colour matrix.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
@@ -474,6 +474,8 @@ namespace ams {
         mitm::applet::g_dump_armed  = ArmFileContains("dump");
         g_usb_armed                 = ArmFileContains("usb");
         mitm::applet::g_bench_armed   = ArmFileContains("bench");
+        mitm::applet::g_matrix_armed  = ArmFileContains("mtx");
+        mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);
         mitm::applet::g_stream_armed  = ArmFileContains("stream");
         mitm::applet::g_stream_w      = ArmFileNumber("sw", 480);
         mitm::applet::g_stream_h      = ArmFileNumber("sh", 270);

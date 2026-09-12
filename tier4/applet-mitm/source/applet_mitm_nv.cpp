@@ -49,6 +49,8 @@ namespace ams::mitm::applet {
      * on USB 2.0 (518,400 B/frame = 12.4 ms transfer against a 16.67 ms budget).
      * 640x360 is selectable but caps near 45 fps until NV12 or SuperSpeed. */
     constinit bool g_bench_armed   = false;
+    constinit bool g_matrix_armed  = false;
+    constinit u32  g_matrix_mode   = 0;
     constinit bool g_stream_armed  = false;
     constinit u32  g_stream_w      = 480;
     constinit u32  g_stream_h      = 270;
@@ -344,9 +346,18 @@ namespace ams::mitm::applet {
         static_assert(__builtin_offsetof(MapCmdBufArgs, handle_id_in) == 12);
 
         /* breadcrumb + stage, so the heartbeat can name where a hang happened */
+        /* M64b: LogMark does WriteWhole(applet-mitm.last) AND LogLine - two SD
+         * writes per call. RunOneJob calls this on entry, so the stage
+         * breadcrumb alone cost ~41 ms/job: the bench measured 0.83 ms of
+         * engine time inside a 39,418 us wall clock. The atomic store is free
+         * and the heartbeat still reports it, so quiet mode keeps the store and
+         * drops the write. */
+        /* declared here because VicStage below is the first user */
+        constinit bool g_vic_quiet = false;
+
         void VicStage(const char *s) {
             g_vic_stage.store(s, std::memory_order_relaxed);
-            LogMark(s);
+            if (!g_vic_quiet) { LogMark(s); }
         }
 
         ::Result NvIoctl(u32 fd, u32 request, void *argp, size_t argsz, u32 *out_err) {
@@ -607,7 +618,74 @@ namespace ams::mitm::applet {
             if (vic::IsNv12(out.fmt)) {
                 c->outputSurfaceConfig.OutChromaWidth  = (out.stride_px / 2) - 1;
                 c->outputSurfaceConfig.OutChromaHeight = (out.h / 2) - 1;
+
+                /* ---- RGB -> YUV, the missing half of NV12 -----------------
+                 * The first NV12 run produced a correct Y plane and a green
+                 * image: green is what a decoder shows when U and V are both
+                 * ~0, i.e. luma written and chroma left untouched. The engine
+                 * will not do a colour-space conversion unless this matrix is
+                 * enabled, and nothing in the project had ever set it - every
+                 * prior blit was RGBA -> RGBA, where none is needed.
+                 *
+                 * VIC 4.0 packs the 3x4 matrix COLUMN-major: word j carries
+                 * c0j, c1j, c2j, so word 3 is the offset column.
+                 *   out_i = (sum_j c_ij * in_j + c_i3) >> r_shift
+                 *
+                 * BT.601 limited range at r_shift = 8:
+                 *   Y =  ( 66R + 129G +  25B)/256 + 16
+                 *   U =  (-38R -  74G + 112B)/256 + 128
+                 *   V =  (112R -  94G -  18B)/256 + 128
+                 * Offsets are carried at the same fixed-point scale (x256).
+                 *
+                 * Coefficients are 20-bit signed, so negatives are encoded two's
+                 * complement in 20 bits. Getting these wrong is SAFE - it is
+                 * arithmetic, not an address, so the worst case is wrong colour
+                 * rather than a hung engine. */
+                /* M64b: DISABLED BY DEFAULT. Enabling this matrix turned a
+                 * correct luma plane (M63: recognisable image, chroma zero)
+                 * into a constant 4 (M64: nothing at all). So the VIC already
+                 * applies a sensible default RGB->YUV when the output format is
+                 * YUV, and this override replaced it with something wrong -
+                 * most likely the column-major packing or the fixed-point scale
+                 * of the offset column is not what I inferred from the field
+                 * names. Kept, behind "mtx" in the arm file, so the hypothesis
+                 * can be retested without a rebuild. */
+                auto s20 = [](int v) -> u64 { return static_cast<u64>(static_cast<u32>(v) & 0xFFFFFu); };
+                auto &m = c->outColorMatrixStruct;
+                /* M65b: the matrix goes on the SLOT, not the output.
+                 *
+                 * Evidence from the M65 dump: chroma IS written (U and V differ,
+                 * correlation +0.888) but their means are 47 and 70 where
+                 * neutral is 128, both spanning 0..255. That is raw channel
+                 * pass-through, not a conversion - so the VIC does no implicit
+                 * RGB->YUV and the matrix is mandatory.
+                 *
+                 * M64 enabled outColorMatrixStruct and luma collapsed to a
+                 * constant 4. The VIC pipeline converts INPUT to its internal
+                 * space at the slot (slotStruct[i].colorMatrixStruct) and only
+                 * converts again on the way out; feeding RGB to a YUV output
+                 * wants the conversion on the way IN. */
+                if (!g_matrix_armed) { m.matrix_enable = 0; } else {
+                m.matrix_coeff00 = s20(  66); m.matrix_coeff10 = s20( -38); m.matrix_coeff20 = s20( 112);
+                m.matrix_coeff01 = s20( 129); m.matrix_coeff11 = s20( -74); m.matrix_coeff21 = s20( -94);
+                m.matrix_coeff02 = s20(  25); m.matrix_coeff12 = s20( 112); m.matrix_coeff22 = s20( -18);
+                m.matrix_coeff03 = s20(4096); m.matrix_coeff13 = s20(32768); m.matrix_coeff23 = s20(32768);
+                m.matrix_r_shift = 8;
+                m.matrix_enable  = 1;
+                }
+                /* the slot-side attempt, selected with mtx=2 in the arm file */
+                if (g_matrix_mode == 2) {
+                    m.matrix_enable = 0;              /* output matrix off */
+                    auto &sm = c->slotStruct[0].colorMatrixStruct;
+                    sm.matrix_coeff00 = s20(  66); sm.matrix_coeff10 = s20( -38); sm.matrix_coeff20 = s20( 112);
+                    sm.matrix_coeff01 = s20( 129); sm.matrix_coeff11 = s20( -74); sm.matrix_coeff21 = s20( -94);
+                    sm.matrix_coeff02 = s20(  25); sm.matrix_coeff12 = s20( 112); sm.matrix_coeff22 = s20( -18);
+                    sm.matrix_coeff03 = s20(4096); sm.matrix_coeff13 = s20(32768); sm.matrix_coeff23 = s20(32768);
+                    sm.matrix_r_shift = 8;
+                    sm.matrix_enable  = 1;
+                }
             } else {
+                c->outColorMatrixStruct.matrix_enable = 0;
                 c->outputSurfaceConfig.OutChromaWidth   = 16383;
                 c->outputSurfaceConfig.OutChromaHeight  = 16383;
             }
@@ -749,11 +827,11 @@ namespace ams::mitm::applet {
          * g_vic_quiet turns all of it off for streaming. The diagnostic path is
          * unchanged when quiet is false, so the one-shot probes still produce
          * exactly the evidence they used to. */
-        constinit bool g_vic_quiet     = false;
         constinit u32  g_ctrl_fd       = 0;
         constinit u64  g_vic_ns_total  = 0;
         constinit u64  g_vic_ns_worst  = 0;
         constinit u32  g_vic_jobs      = 0;
+        constinit u32  g_vic_timeouts  = 0;
 
         /* One open for the life of the process, instead of one per job. */
         u32 CtrlFd() {
@@ -868,14 +946,40 @@ namespace ams::mitm::applet {
                 u32 e2 = 0;
                 NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
                 completed = (r.value >= fence_val);
+
+                /* M63b: SYNCPT_WAIT returns before the threshold is met. The
+                 * loud path only ever "worked" because ~15 ms of SD-flushing log
+                 * calls sat between the submit and this read, giving the engine
+                 * time to finish - the bench made that obvious the moment the
+                 * logging went away (warm-up OK, then 1/60 and 0/60).
+                 *
+                 * Poll instead. This does not depend on the wait ioctl's
+                 * semantics, and the elapsed time it reports IS the engine time,
+                 * which is the number M59 never actually measured. */
+                if (!completed) {
+                    for (u32 spin = 0; spin < 300 && !completed; ++spin) {
+                        os::SleepThread(TimeSpan::FromMicroSeconds(100));
+                        r.value = 0;
+                        NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
+                        completed = (r.value >= fence_val);
+                    }
+                    if (!completed) { ++g_vic_timeouts; }
+                }
                 if (!g_vic_quiet) {
                     LogLine("   [%s] WAIT nverr=%u  syncpt=%u (want >= %u)%s",
                             stage, nverr, r.value, fence_val,
                             completed ? "  OP_DONE fired" : "  ENGINE DID NOT COMPLETE");
                 }
 
-                /* Never leave a shared syncpoint short of its declared max. */
-                if (r.value < fence_val) {
+                /* Never leave a shared syncpoint short of its declared max.
+                 *
+                 * M63b: NOT in quiet mode. This ran 59 times in the bench, each
+                 * pushing up to 64 manual increments into syncpoint 12 - the one
+                 * nvnflinger composites on. Thousands of spurious increments
+                 * into the compositor's syncpoint is almost certainly what froze
+                 * the game, and it is a far worse failure than leaving a fence
+                 * short. A one-shot probe can still rescue; a loop must not. */
+                if (!g_vic_quiet && r.value < fence_val) {
                     VicStage("vb:RESCUE_INCR");
                     u32 ireq = NvHostIocCtrlSyncptIncrW;
                     for (u32 k = 0, missing = fence_val - r.value; k < missing && k < 64; k++) {
@@ -2069,7 +2173,7 @@ namespace ams::mitm::applet {
                                     if (!warm) { continue; }
 
                                     g_vic_quiet    = true;
-                                    g_vic_ns_total = 0; g_vic_ns_worst = 0; g_vic_jobs = 0;
+                                    g_vic_ns_total = 0; g_vic_ns_worst = 0; g_vic_jobs = 0; g_vic_timeouts = 0;
                                     u32 ok = 0;
                                     const u64 t0 = armTicksToNs(armGetSystemTick());
                                     for (u32 i = 0; i < BenchN; ++i) {
@@ -2079,6 +2183,8 @@ namespace ams::mitm::applet {
                                     g_vic_quiet = false;
 
                                     const u32 n = (g_vic_jobs > 0) ? g_vic_jobs : 1;
+                                    LogLine("   bench %s: %u timeouts (syncpt never reached the fence)",
+                                            cases[ci].name, g_vic_timeouts);
                                     LogLine("   bench %s %ux%u: %u/%u jobs, submit+wait avg %llu us, worst %llu us",
                                             cases[ci].name, BenchW, BenchH, ok, BenchN,
                                             static_cast<unsigned long long>(g_vic_ns_total / 1000 / n),
@@ -2097,6 +2203,26 @@ namespace ams::mitm::applet {
                                     const size_t nv12_sz = static_cast<size_t>(BenchW) * BenchH * 3 / 2;
                                     if (g_stage_buf != nullptr && nv12_sz <= StreamStageSize) {
                                         std::memcpy(g_stage_buf, g_vic_dst_buf, nv12_sz);
+                                        /* Does the engine write the UV plane at
+                                         * all? Luma and chroma reported apart,
+                                         * so "green image" stops being ambiguous
+                                         * between a bad matrix and an unwritten
+                                         * second plane. */
+                                        const size_t ysz = static_cast<size_t>(BenchW) * BenchH;
+                                        u8 ymin = 255, ymax = 0, cmin = 255, cmax = 0;
+                                        for (size_t i = 0; i < ysz; ++i) {
+                                            const u8 v = g_stage_buf[i];
+                                            if (v < ymin) { ymin = v; }
+                                            if (v > ymax) { ymax = v; }
+                                        }
+                                        for (size_t i = ysz; i < nv12_sz; ++i) {
+                                            const u8 v = g_stage_buf[i];
+                                            if (v < cmin) { cmin = v; }
+                                            if (v > cmax) { cmax = v; }
+                                        }
+                                        LogLine("   bench: luma %u..%u   chroma %u..%u   %s",
+                                                ymin, ymax, cmin, cmax,
+                                                (cmin == cmax) ? "*** CHROMA PLANE NOT WRITTEN ***" : "chroma varies");
                                         const bool w = WriteBufToSd("sdmc:/applet-mitm-nv12.bin", g_stage_buf, nv12_sz);
                                         LogLine("   bench: nv12 dump %s (%zu B, %ux%u)",
                                                 w ? "OK -> sdmc:/applet-mitm-nv12.bin" : "FAILED", nv12_sz, BenchW, BenchH);
