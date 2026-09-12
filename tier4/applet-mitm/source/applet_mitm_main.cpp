@@ -466,7 +466,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M68: up. NVENC MAGIC PROBE - is Tegra X1 NVENC 5.0?");
+        mitm::applet::LogLine("applet-mitm M69: up. NVENC magic sweep, with an invalid control.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

@@ -2722,6 +2722,24 @@ namespace ams::mitm::applet {
             LogLine("   nvenc-probe: syncpt=%u buf=0x%08x cmd=0x%08x", esyncpt, buf_addr, cmd_addr);
             if (buf_addr == 0) { LogLine("   nvenc-probe: buffer pin failed - refusing to submit"); NvClose(efd); return; }
 
+            /* M68b: sweep candidate magics, INCLUDING a deliberately invalid
+             * control. The first run was ambiguous: the firmware wrote
+             * error_status=1 with ucode_error_status=0, which is neither
+             * BAD_MAGIC nor a success, and a zero cannot be read as "accepted".
+             *
+             * If the control (0xDEADBEEF) comes back BAD_MAGIC while 5.0 does
+             * not, then the field is meaningful, the check is running, and ours
+             * passed. If everything returns the same thing, the firmware never
+             * got as far as the magic and the result says nothing either way. */
+            struct MagicCase { const char *name; unsigned int magic; };
+            const MagicCase magics[] = {
+                { "5.0  (expected: Tegra X1 / nvenc050)", 0xd0b70006u },
+                { "6.0",                                  0xc1b70006u },
+                { "1.0",                                  0xc0b70006u },
+                { "MSENC 2.0",                            0xa0b70006u },
+                { "CONTROL - deliberately invalid",       0xDEADBEEFu },
+            };
+
             /* layout inside the (already allocated) VIC destination buffer */
             constexpr u32 SetupOff = 0x0000;      /* 512 B, 256-aligned   */
             constexpr u32 StatOff  = 0x1000;      /* 128 B                */
@@ -2730,8 +2748,10 @@ namespace ams::mitm::applet {
 
             auto *setup = reinterpret_cast<nvenc_h264_drv_pic_setup_s *>(g_vic_dst_buf + SetupOff);
             auto *stat  = reinterpret_cast<nvenc_pic_stat_s *>(g_vic_dst_buf + StatOff);
+
+            for (u32 mi = 0; mi < sizeof(magics) / sizeof(magics[0]); ++mi) {
             std::memset(g_vic_dst_buf, 0, BitsOff + 0x1000);
-            setup->magic = NV_NVENC_DRV_MAGIC_VALUE;
+            setup->magic = magics[mi].magic;
             armDCacheFlush(g_vic_dst_buf, BitsOff + 0x1000);
 
             VicStage("nvp:3_submit");
@@ -2783,14 +2803,20 @@ namespace ams::mitm::applet {
                 armDCacheFlush(g_vic_dst_buf, BitsOff + 0x1000);
                 const u32 ucode = stat->ucode_error_status;
                 const u32 est   = stat->error_status;
-                LogLine("   nvenc-probe: fence %s;  error_status=%u  ucode_error_status=0x%08x",
-                        done ? "reached" : "NOT reached", est, ucode);
-                LogLine("   nvenc-probe: *** %s ***", nvenc::ErrName(ucode));
-                LogLine("   nvenc-probe: total_bit_count=%u  bitstream_start_pos=%u",
-                        stat->total_bit_count, stat->bitstream_start_pos);
+                /* Do NOT read ucode==0 as success when the fence never moved:
+                 * an unwritten buffer is zero too. Only say "accepted" when the
+                 * engine actually signalled completion. */
+                const char *verdict =
+                    (ucode == nvenc::ERR_H264_BAD_MAGIC) ? "BAD_MAGIC - this generation is rejected"
+                  : (ucode != 0)                         ? nvenc::ErrName(ucode)
+                  : done                                 ? "completed with ucode 0"
+                  :                                        "no ucode error reported AND fence never moved - inconclusive";
+                LogLine("   nvenc magic %-38s -> fence %-11s error_status=%u ucode=0x%08x  %s",
+                        magics[mi].name, done ? "reached" : "NOT reached", est, ucode, verdict);
             } else {
-                LogLine("   nvenc-probe: submit rejected - the msenc channel did not take this cmdbuf");
+                LogLine("   nvenc magic %-38s -> SUBMIT REJECTED nverr=%u", magics[mi].name, nverr);
             }
+            }  /* end magic sweep */
             UnmapCmdBuffer(efd, dst_handle);
             NvClose(efd);
             VicStage("nvp:done");

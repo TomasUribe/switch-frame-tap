@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M67**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M69**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,6 +88,71 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M68-M69: NVENC accepts cmdbufs but does not execute ***
+
+NVIDIA's `nvenc_drv.h` is MIT, so the H.264 half is **vendored verbatim** rather
+than transcribed - `nvenc_h264_drv_pic_setup_s` is 512 bytes of bitfields with
+five sub-structures at offsets, and a hand-copy error would surface only as a
+firmware rejection with no clue which field was wrong. Every struct size matches
+NVIDIA's own comments under our compiler:
+
+```
+surface_cfg 32   rc 88   slice_control 128   me_control 192
+md_control 128   quant_control 192   pic_control 276   drv_pic_setup 512
+```
+
+### The probe, and why the control mattered
+
+M68 filled the setup struct with nothing but the magic, submitted on the msenc
+channel with the class-0x21 method table, and read back:
+
+```
+fence NOT reached;  error_status=1  ucode_error_status=0x00000000
+```
+
+and logged *"NONE - the engine accepted the job"*. **That line was wrong.** An
+unwritten status buffer reads as zero too, and the fence had not moved, so the
+zero meant nothing. Same failure of reasoning as the 119 ms VIC claim: treating
+an absence of evidence as evidence.
+
+M69 swept every candidate magic **plus a deliberately invalid control**:
+
+| magic | fence | ucode |
+|---|---|---|
+| 5.0 `0xd0b70006` | NOT reached | 0 |
+| 6.0 `0xc1b70006` | NOT reached | 0 |
+| 1.0 `0xc0b70006` | NOT reached | 0 |
+| MSENC 2.0 `0xa0b70006` | NOT reached | 0 |
+| **CONTROL `0xDEADBEEF`** | **NOT reached** | **0** |
+
+The invalid control behaves **identically** to every real candidate. The
+firmware never reaches the magic check, so the job is not executing at all and
+the sweep says nothing about which generation this engine is.
+
+### What is actually established
+
+- The msenc channel accepts our submits: `rc=0 nverr=0`, a fence is issued.
+- The engine never signals completion - the syncpoint does not advance.
+- Probing is **safe**: five submits with garbage configs, and the game presented
+  continuously throughout (`txn` 3991 -> 6167 across the sweep). Unlike the VIC,
+  a malformed NVENC job does not take the compositor down.
+
+### Candidate explanations, untested
+
+1. **The Falcon firmware is not booted.** NVENC runs microcode that nvservices
+   loads when a real client opens the channel; opening `/dev/nvhost-msenc` and
+   submitting may not be enough. `SET_UCODE_STATE` (0x50C) exists in the method
+   table and is unused here.
+2. **EXECUTE is encoded wrongly.** `1u << 8` was copied from the VIC convention;
+   NVC5B7_EXECUTE has its own NOTIFY/AWAKEN field layout.
+3. **The engine validates all surfaces before anything else**, so a job with no
+   input picture, no reference pictures and no IO history never starts. This is
+   the most likely of the three, and the cheapest to test: point
+   `SET_IN_CUR_PIC` at the NV12 the VIC already produces, give it reference and
+   history buffers, and see whether the fence moves.
+
+(3) is the next experiment. Note it needs NV12 input - which M67 already makes
+at 2.5 ms/frame, so that dependency is satisfied.
 ## *** M67: A PLAYABLE STREAM - 768x432 at 59.6 fps ***
 
 ```
