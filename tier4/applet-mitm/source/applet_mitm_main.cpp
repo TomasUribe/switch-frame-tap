@@ -466,7 +466,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M66: up. VIC 1.1 ms confirmed; chasing the colour matrix.");
+        mitm::applet::LogLine("applet-mitm M67: up. STREAMING THROUGH THE VIC - 1.5 bytes/pixel.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
@@ -485,10 +485,10 @@ namespace ams {
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
         if (mitm::applet::g_stream_armed) {
-            mitm::applet::LogLine("stream ARMED: %ux%u RGBA, %u frames (%u B/frame); 60 fps needs <=16667 us/frame",
+            mitm::applet::LogLine("stream ARMED: %ux%u packed-420, %u frames (%u B/frame); 60 fps needs <=16667 us/frame",
                                   mitm::applet::g_stream_w, mitm::applet::g_stream_h,
                                   mitm::applet::g_stream_frames,
-                                  mitm::applet::g_stream_w * mitm::applet::g_stream_h * 4);
+                                  mitm::applet::g_stream_w * mitm::applet::g_stream_h * 3 / 2);
         }
         LogMemoryPools();
         TryUsbEnumerate();

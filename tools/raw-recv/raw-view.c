@@ -82,6 +82,8 @@ int main(int argc, char **argv)
     SDL_Window *win = NULL; SDL_Renderer *ren = NULL; SDL_Texture *tex = NULL;
     uint32_t W = 0, H = 0;
     uint8_t *payload = NULL; size_t cap = 0;
+    uint8_t *rgb = NULL; size_t rgbcap = 0;   /* unpacked RGB24 for the texture */
+    int packed420 = 0;
     int frames = 0;
     Uint64 t_first = 0, t_prev = 0, freq = SDL_GetPerformanceFrequency();
     double worst_gap = 0.0;
@@ -107,19 +109,50 @@ int main(int argc, char **argv)
         }
         if (read_exact(h, payload, hdr.length, 5000) != (int)hdr.length) continue;
 
+        /* flags bit 0: the VIC's packed 4:2:0 RGB. It writes the NV12 plane
+         * layout but performs no colour conversion, so the planes carry raw
+         * channels: luma = B at full res, chroma even/odd = R/G at half res in
+         * both axes. Undoing that here costs one pass and buys 2.67x on the
+         * wire against RGBA. */
+        packed420 = (hdr.flags & 1u) != 0;
+
         if (!win) {
             W = hdr.width; H = hdr.height;
             if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); break; }
             win = SDL_CreateWindow("switch-frame-tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                    (int)(W*scale), (int)(H*scale), SDL_WINDOW_SHOWN);
             ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
-            tex = SDL_CreateTexture(ren, swap_rb ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_ABGR8888,
+            tex = SDL_CreateTexture(ren,
+                                    packed420 ? SDL_PIXELFORMAT_RGB24
+                                              : (swap_rb ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_ABGR8888),
                                     SDL_TEXTUREACCESS_STREAMING, (int)W, (int)H);
             fprintf(stderr, "stream: %ux%u, %u B/frame\n", W, H, hdr.length);
             t_first = SDL_GetPerformanceCounter(); t_prev = t_first;
         }
 
-        SDL_UpdateTexture(tex, NULL, payload, (int)hdr.stride);
+        if (packed420) {
+            const size_t need = (size_t)W * H * 3;
+            if (need > rgbcap) {
+                uint8_t *p = realloc(rgb, need);
+                if (!p) break;
+                rgb = p; rgbcap = need;
+            }
+            const uint8_t *bpl = payload;                 /* B, full resolution */
+            const uint8_t *uv  = payload + (size_t)W * H; /* R,G interleaved at half res */
+            for (uint32_t j = 0; j < H; j++) {
+                const uint8_t *uvrow = uv + (size_t)(j >> 1) * W;
+                uint8_t *dst = rgb + (size_t)j * W * 3;
+                for (uint32_t i = 0; i < W; i++) {
+                    const uint32_t k = i & ~1u;
+                    dst[i*3+0] = uvrow[k];                /* R */
+                    dst[i*3+1] = uvrow[k+1];              /* G */
+                    dst[i*3+2] = bpl[(size_t)j * W + i];  /* B */
+                }
+            }
+            SDL_UpdateTexture(tex, NULL, rgb, (int)(W * 3));
+        } else {
+            SDL_UpdateTexture(tex, NULL, payload, (int)hdr.stride);
+        }
         SDL_RenderClear(ren);
         SDL_RenderCopy(ren, tex, NULL, NULL);
         SDL_RenderPresent(ren);
@@ -150,6 +183,7 @@ int main(int argc, char **argv)
     if (win) SDL_DestroyWindow(win);
     SDL_Quit();
     free(payload);
+    free(rgb);
     libusb_release_interface(h, SFT_IFACE);
     libusb_close(h); libusb_exit(ctx);
     return 0;

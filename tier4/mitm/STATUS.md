@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M63**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M67**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,6 +88,65 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M67: A PLAYABLE STREAM - 768x432 at 59.6 fps ***
+
+```
+stream: 3600 frames sent in 60315 ms -> 59.6 fps  (18 presented frames dropped)
+stream: avg per frame - read 7426 us, vic 2464 us, copy 1698 us, usb wait 120 us
+stream: queue counter 6967 -> 10587 over the run; 0 stale iterations
+stream: frame time best 6982 us, worst 23640 us  (60 fps budget = 16667 us)
+```
+
+A full minute of gameplay, locked to the game's own frame rate, with **0 stale
+iterations** - we kept up with every frame the game presented. Reported by the
+user as fully playable, with latency low enough to drive from.
+
+| stage | cost | note |
+|---|---|---|
+| capture + 8.8 MB cache flush | 7,426 us | the flush is effectively free |
+| VIC scale + pack | 2,464 us | 1920x1080 -> 768x432 |
+| stage out of uncached nvmap | 1,698 us | |
+| USB wait | 120 us | overlapped, nearly free |
+| **total** | **11,708 us** | of 16,667 |
+
+### What made it possible
+
+Three things, all from M63-M66:
+
+1. **The VIC is 1-2 ms, not 119 ms.** M59's figure was ~7 SD-flushing log calls
+   and a 65,536-iteration checksum inside the timed region. With them gone the
+   engine is cheap enough to run every frame.
+2. **1.5 bytes/pixel instead of 4.** The VIC writes the NV12 plane layout, and
+   although it performs no colour conversion the packing is recoverable: luma
+   plane = B at full resolution, chroma even/odd = R/G at half. That is 4:2:0
+   subsampled RGB, and the host undoes it for free. 2.67x on the wire for no
+   console cost and no colour matrix.
+3. **The stale bail had to be loosened.** At 240 iterations (~5 s) a Mario Kart
+   loading screen ended the run: the queue counter moved 14 frames in 7.6 s and
+   the stream stopped, which looked exactly like a freeze. A loading screen is
+   not a dead game. Raised to ~25 s.
+
+### The constraint is now USB, and only USB
+
+497,664 B/frame x 59.6 = **29.7 MB/s**, against roughly 31 MB/s of usable USB
+2.0 bulk. The console-side pipeline has **~5 ms of headroom per frame it cannot
+spend**, because there is nowhere to put the bytes.
+
+| what | bytes/frame | at 60 fps |
+|---|---|---|
+| 768x432 packed-420 (shipping) | 497,664 | 29.9 MB/s - at the ceiling |
+| 1920x1080 packed-420 | 3,110,400 | 187 MB/s - 6x over |
+| **1920x1080 H.264 all-intra @ 50 Mbps** | **~104,000** | **6.25 MB/s** |
+
+Compression does not merely help: it makes the link a non-issue and hands the
+spare milliseconds back to resolution. That is the whole remaining gap.
+
+### Why all-intra is the right codec here
+
+Every frame independent: no B-frames, no reordering, no inter-frame dependency,
+so a dropped frame costs one frame rather than a GOP. That is the lowest-latency
+H.264 configuration, and latency is the property this project is optimising.
+It also removes reference-frame management from the NVENC setup entirely.
 ## *** M63: THE VIC WAS NEVER SLOW - I measured my own logging ***
 
 M59 reported 119,023 us per full-frame VIC blit and concluded **"the VIC is

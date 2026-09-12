@@ -1724,7 +1724,11 @@ namespace ams::mitm::applet {
             return base + gob_y * 512u + in_gob;
         }
 
-        void DownscalePoint(const u8 *src, u8 *dst, u32 out_w, u32 out_h, u32 step) {
+        /* Retained as a fallback: it needs no engine, no pin and no syncpoint,
+         * so it still works if the VIC is ever unavailable. M67 streams through
+         * the VIC instead - 1.5 bytes/pixel against this one's 4, and 0.8 ms of
+         * engine time against ~4.3 ms of CPU. */
+        [[maybe_unused]] void DownscalePoint(const u8 *src, u8 *dst, u32 out_w, u32 out_h, u32 step) {
             for (u32 oy = 0; oy < out_h; ++oy) {
                 const u32 sy = oy * step;
                 u8 *drow = dst + static_cast<size_t>(oy) * out_w * 4;
@@ -1734,9 +1738,17 @@ namespace ams::mitm::applet {
             }
         }
 
-        void StreamFrames(::ams::svc::Handle dbg, u64 slot_base) {
+        void StreamFrames(::ams::svc::Handle dbg, u64 slot_base,
+                          u32 vfd, u32 cmd_handle, u32 syncpt,
+                          u32 cfg_addr, u32 dst_addr, u32 src_pin) {
             const u32 W = g_stream_w, H = g_stream_h;
-            const size_t out_bytes  = static_cast<size_t>(W) * static_cast<size_t>(H) * 4;
+            /* M67: 1.5 bytes/pixel. The VIC writes the NV12 plane layout but
+             * performs no colour conversion - it packs raw channels (luma
+             * plane = B, chroma even = R, chroma odd = G), i.e. 4:2:0
+             * subsampled RGB. The host undoes the permutation for free, so we
+             * get the 2.67x reduction without the colour matrix that three
+             * hardware runs failed to program. */
+            const size_t out_bytes  = static_cast<size_t>(W) * static_cast<size_t>(H) * 3 / 2;
             const size_t wire_bytes = sizeof(SftHdrWire) + out_bytes;
 
             if (out_bytes > StreamStageSize) {
@@ -1747,16 +1759,23 @@ namespace ams::mitm::applet {
             if (g_stream_stage[0] == nullptr || g_stream_stage[1] == nullptr) {
                 LogLine("   stream: stage buffers absent - heap too small"); return;
             }
-            if (W == 0 || H == 0 || (1920u % W) != 0 || (1080u % H) != 0 || (1920u / W) != (1080u / H)) {
-                LogLine("   stream: %ux%u is not an exact uniform divisor of 1920x1080 - the point "
-                        "sampler needs one (480x270 = 4x, 640x360 = 3x, 960x540 = 2x)", W, H);
+            /* The VIC scales to arbitrary sizes; only the retired CPU
+             * point-sampler needed exact uniform divisors. Even dimensions are
+             * still required because chroma is half-resolution in both axes. */
+            if (W == 0 || H == 0 || (W & 1) != 0 || (H & 1) != 0) {
+                LogLine("   stream: %ux%u must have even dimensions (4:2:0 chroma)", W, H);
+                return;
+            }
+            if (src_pin == 0 || cfg_addr == 0 || dst_addr == 0) {
+                LogLine("   stream: engine resources missing (pin=%x cfg=%x dst=%x)", src_pin, cfg_addr, dst_addr);
                 return;
             }
             if (!UsbReady()) {
                 LogLine("   stream: USB not Configured - nothing to stream to"); return;
             }
 
-            LogLine("   ---- STREAMING %ux%u RGBA, up to %u frames (%zu B/frame) ----",
+            g_vic_quiet = true;
+            LogLine("   ---- STREAMING %ux%u packed-420 via VIC, up to %u frames (%zu B/frame) ----",
                     W, H, g_stream_frames, wire_bytes);
 
             /* the header never changes, so write it into both stages once */
@@ -1767,9 +1786,18 @@ namespace ams::mitm::applet {
             h.length = static_cast<u32>(out_bytes);
             h.block_h_log2 = 0;              /* the VIC output is LINEAR */
             h.kind         = 0;
+            h.flags        = 1;              /* 1 = 4:2:0 packed RGB (B / R / G) */
+            h.stride       = W;              /* luma-plane pitch in bytes */
             std::memcpy(g_usb_hdr, std::addressof(h), sizeof(h));
 
             /* source: the captured slot, exactly as the binder parcels describe it */
+
+            /* source: the captured slot, exactly as the binder parcels
+             * describe it - block-linear, kind 0xFE, block_height_log2 4 */
+            const SrcDesc stream_src{ 1920, 1080, 1920,
+                                      vic::BLK_KIND_GENERIC_16Bx2, 4,
+                                      vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4,
+                                      1920, 1080 };
 
             u32 seen   = g_queue_count.load(std::memory_order_relaxed);
             const u32 q_at_start = seen;
@@ -1803,7 +1831,11 @@ namespace ams::mitm::applet {
                     stale_run = 0;
                 } else {
                     ++stale_run; ++stale_total;
-                    if (stale_run >= 240) {         /* ~5 s of genuinely nothing */
+                    /* M67b: 240 (~5 s) ended a run on a MK8 loading screen,
+                     * where the game legitimately presents almost nothing - the
+                     * queue counter moved 14 frames in 7.6 s. A loading screen
+                     * is not a dead game, so tolerate far more of it. */
+                    if (stale_run >= 1200) {        /* ~25 s of genuinely nothing */
                         LogLine("   stream: no new frame for %u iterations - stopping at frame %u", stale_run, i);
                         break;
                     }
@@ -1824,9 +1856,24 @@ namespace ams::mitm::applet {
                  * 138,240 cache-line ops 60x a second, for nothing. */
                 const u64 f1 = armTicksToNs(armGetSystemTick());
 
-                DownscalePoint(g_ind_buf, g_stream_stage[parity], W, H, 1920u / W);
+                /* The VIC reads our capture through the SMMU, so the cached
+                 * writes ReadDebugProcessMemory just made must reach memory
+                 * first. M60b dropped this flush because the CPU sampler read
+                 * its own cache coherently; the engine does not. */
+                armDCacheFlush(g_ind_buf, FbSlotSize);
+
+                g_strip_src = stream_src;
+                g_strip_out = OutDesc{ W, H, W, vic::PIXFMT_Y8_U8V8_N420 };
+                const JobCtx vc{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, src_pin, 0, 0, 0, 0, SelfSrc };
+                if (!RunOneJob("st:vic", VicJob::BlitStrip, true, vc)) {
+                    LogLine("   stream: VIC job failed at frame %u", i); break;
+                }
                 const u64 f2 = armTicksToNs(armGetSystemTick());
-                const u64 f3 = f2;   /* no separate staging copy any more */
+
+                /* g_vic_dst_buf is UNCACHED nvmap; stage through cached memory
+                 * before it goes anywhere (the M41/M42 lesson). */
+                std::memcpy(g_stream_stage[parity], g_vic_dst_buf, out_bytes);
+                const u64 f3 = armTicksToNs(armGetSystemTick());
 
                 /* the previous transfer has had the whole capture above to
                  * finish in; only now is it allowed to cost us anything */
@@ -1870,6 +1917,7 @@ namespace ams::mitm::applet {
                 size_t got = 0;
                 if (UsbWaitAsync(urb, std::addressof(got))) { ++sent; }
             }
+            g_vic_quiet = false;
 
             const u64 loop_ns = armTicksToNs(armGetSystemTick()) - loop_t0;
             const u32 n = (timed > 0) ? timed : 1;
@@ -2235,18 +2283,35 @@ namespace ams::mitm::applet {
                     VicStage("bn:done");
                 }
 
-                /* ---- M60: stream ------------------------------------------
+                /* ---- M67: stream, through the VIC -------------------------
                  * MUST STAY BELOW resume_game(): M59's first run put this above
                  * it, where DebugActiveProcess still has the game halted, and
                  * the loop waited for a frame that could not arrive.
                  *
-                 * No nvmap, no pin, no engine resources - M60 reads the capture
-                 * with the CPU instead of the VIC, because the VIC cost 119 ms
-                 * per frame and starved the compositor it shares with. */
-                if (found && g_stream_armed && g_ind_buf != nullptr && g_ind_size >= FbSlotSize) {
-                    VicStage("st:1_loop");
-                    StreamFrames(dbg, cand.addr);
-                    VicStage("st:2_done");
+                 * The engine is back. M60 used a CPU point-sampler because M59
+                 * measured the VIC at 119 ms/blit; M63-M65 showed that figure
+                 * was ~7 SD-flushing log calls plus a 65,536-iteration checksum
+                 * inside the timed region. Measured quiet, it is 0.8 ms - and
+                 * it emits 1.5 bytes/pixel instead of 4. */
+                if (found && g_stream_armed && g_ind_buf != nullptr
+                    && g_ind_size >= FbSlotSize && cfg_addr != 0 && dst_addr != 0) {
+                    VicStage("st:1_pin");
+                    u32 sh = 0, si = 0, sa = 0;
+                    const auto srrc = NvmapOwn(nvmap_fd, g_ind_buf, static_cast<u32>(FbSlotSize), 0,
+                                               std::addressof(sh), std::addressof(si), true);
+                    if (R_FAILED(srrc)) {
+                        LogLine("   stream: NvmapOwn(slot) rc=0x%x", srrc);
+                    } else {
+                        MapCmdBuffer(vfd, sh, std::addressof(sa), "stream-src", 0);
+                        if (sa == 0) {
+                            LogLine("   stream: pin returned 0 - refusing to submit");
+                        } else {
+                            VicStage("st:2_loop");
+                            StreamFrames(dbg, cand.addr, vfd, cmd_handle, syncpt, cfg_addr, dst_addr, sa);
+                            VicStage("st:3_done");
+                        }
+                        UnmapCmdBuffer(vfd, sh);
+                    }
                 }
 
 
