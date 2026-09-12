@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M69**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M70**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,6 +88,69 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M70: the USB 2.0 ceiling, measured - raw pixels are finished ***
+
+One run, five resolutions, 300 frames each, live gameplay:
+
+| resolution | B/frame | fps | usb wait | effective |
+|---|---|---|---|---|
+| 768x432 | 497,696 | **58.0** | 140 us | 28.9 MB/s |
+| 896x504 | 677,408 | 52.2 | 1,064 us | 35.4 MB/s |
+| 960x540 | 777,632 | 46.4 | 1,925 us | 36.1 MB/s |
+| 1152x648 | 1,119,776 | 32.1 | 7,823 us | 35.9 MB/s |
+| 1280x720 | 1,382,432 | 27.4 | 12,796 us | 37.9 MB/s |
+
+**The link saturates at ~37 MB/s.** M67's "usb wait = 120 us therefore >= 43
+MB/s" was a lower bound from a wait that never blocked, and it was optimistic;
+the true figure is lower. Watch `usb wait` go from 140 us to 12,796 us across
+the sweep - at 720p a third of every frame is spent waiting on the cable.
+
+The console side barely moves: read stays ~7 ms at every size, VIC 2.1 -> 3.0 ms.
+Only `copy` grows (1,476 -> 5,282 us), and that is the memcpy out of the
+UNCACHED VIC destination - uncached reads are slow, and it is worth making that
+buffer cacheable.
+
+### The 60 fps ceiling
+
+60 fps needs <= ~33 MB/s sustained, i.e. ~550,000 B/frame, i.e. ~366,000 pixels:
+
+```
+768x432  497,664 B  29.9 MB/s  OK      832x468  584,064 B  35.0 MB/s  over
+800x450  540,000 B  32.4 MB/s  OK      854x480  614,880 B  36.9 MB/s  over
+```
+
+So **~800x450 is the maximum at 60 fps**, 1.09x the pixels of what already
+ships. There is no meaningful resolution left to win this way.
+
+And at 768x432 we are no longer transport-limited at all: 11.3 ms of work
+against a 16.7 ms budget, so the 58 fps IS the game's own rate. The pipeline has
+headroom it cannot spend.
+
+### The picture quality problem, named
+
+The user's word for 1280x720 was "pixelated", and that is a real artifact of the
+packed-420 trick rather than of the resolution. **We subsample R and G, not
+chroma.** Proper 4:2:0 discards colour detail the eye barely registers; we are
+discarding two thirds of the red and green signal, which it very much does.
+
+So the colour matrix is not only a correctness question - it is worth real
+perceived quality at identical bandwidth. Three attempts failed (M64 output
+matrix, M66 slot matrix, both collapsing luma to a constant), and the constants
+4096>>10=4 and 32768>>10=32 say the offset column lands while every coefficient
+term reads as zero. That is a coefficient-encoding problem, still unsolved.
+
+### Where native resolution has to come from
+
+Raw 1080p60 packed-420 is 186.6 MB/s against a measured 37. Nothing about the
+capture, the engine or the CPU is in the way - 1080p60 H.264 all-intra at
+50 Mbps is 6.25 MB/s, a sixth of what the cable already carries.
+
+Two doors, both still shut:
+- **NVENC** - accepts cmdbufs, never executes (M68-M69). Next test: give it a
+  real input surface, reference pictures and IO history, on the theory that it
+  validates all surfaces before starting.
+- **SuperSpeed** - descriptors accepted, link still negotiates High. Untested
+  against a known USB 3.0 cable.
 ## *** M68-M69: NVENC accepts cmdbufs but does not execute ***
 
 NVIDIA's `nvenc_drv.h` is MIT, so the H.264 half is **vendored verbatim** rather

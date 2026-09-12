@@ -116,6 +116,20 @@ int main(int argc, char **argv)
          * wire against RGBA. */
         packed420 = (hdr.flags & 1u) != 0;
 
+        /* M70: the console can sweep resolutions inside one run, so rebuild
+         * the texture and window whenever the header geometry changes. */
+        if (win && (hdr.width != W || hdr.height != H)) {
+            fprintf(stderr, "\nresolution -> %ux%u\n", hdr.width, hdr.height);
+            if (tex) SDL_DestroyTexture(tex);
+            W = hdr.width; H = hdr.height;
+            SDL_SetWindowSize(win, (int)(W*scale), (int)(H*scale));
+            tex = SDL_CreateTexture(ren,
+                                    packed420 ? SDL_PIXELFORMAT_RGB24
+                                              : (swap_rb ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_ABGR8888),
+                                    SDL_TEXTUREACCESS_STREAMING, (int)W, (int)H);
+            frames = 0; t_first = SDL_GetPerformanceCounter(); t_prev = t_first; worst_gap = 0.0;
+        }
+
         if (!win) {
             W = hdr.width; H = hdr.height;
             if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); break; }

@@ -51,6 +51,7 @@ namespace ams::mitm::applet {
      * 640x360 is selectable but caps near 45 fps until NV12 or SuperSpeed. */
     constinit bool g_bench_armed   = false;
     constinit bool g_nvenc_armed   = false;
+    constinit bool g_sweep_armed   = false;
     constinit bool g_matrix_armed  = false;
     constinit u32  g_matrix_mode   = 0;
     constinit bool g_stream_armed  = false;
@@ -1746,8 +1747,11 @@ namespace ams::mitm::applet {
 
         void StreamFrames(::ams::svc::Handle dbg, u64 slot_base,
                           u32 vfd, u32 cmd_handle, u32 syncpt,
-                          u32 cfg_addr, u32 dst_addr, u32 src_pin) {
-            const u32 W = g_stream_w, H = g_stream_h;
+                          u32 cfg_addr, u32 dst_addr, u32 src_pin,
+                          u32 wantW = 0, u32 wantH = 0, u32 wantFrames = 0) {
+            const u32 W = (wantW != 0) ? wantW : g_stream_w;
+            const u32 H = (wantH != 0) ? wantH : g_stream_h;
+            const u32 nframes = (wantFrames != 0) ? wantFrames : g_stream_frames;
             /* M67: 1.5 bytes/pixel. The VIC writes the NV12 plane layout but
              * performs no colour conversion - it packs raw channels (luma
              * plane = B, chroma even = R, chroma odd = G), i.e. 4:2:0
@@ -1782,7 +1786,7 @@ namespace ams::mitm::applet {
 
             g_vic_quiet = true;
             LogLine("   ---- STREAMING %ux%u packed-420 via VIC, up to %u frames (%zu B/frame) ----",
-                    W, H, g_stream_frames, wire_bytes);
+                    W, H, nframes, wire_bytes);
 
             /* the header never changes, so write it into both stages once */
             SftHdrWire h = {};
@@ -1815,7 +1819,7 @@ namespace ams::mitm::applet {
             u32 timed = 0;
             const u64 loop_t0 = armTicksToNs(armGetSystemTick());
 
-            for (u32 i = 0; i < g_stream_frames; ++i) {
+            for (u32 i = 0; i < nframes; ++i) {
                 /* M59b: capture is NOT gated on the counter any more.
                  * Both M59 runs bailed here with "game stopped presenting"
                  * while the heartbeat showed the game emitting ~109 binder
@@ -2313,7 +2317,28 @@ namespace ams::mitm::applet {
                             LogLine("   stream: pin returned 0 - refusing to submit");
                         } else {
                             VicStage("st:2_loop");
-                            StreamFrames(dbg, cand.addr, vfd, cmd_handle, syncpt, cfg_addr, dst_addr, sa);
+                            if (g_sweep_armed) {
+                                /* M70: the whole resolution/fps curve in one
+                                 * hardware cycle. M67 showed usb wait averaging
+                                 * 120 us, i.e. each 497,664 B frame had already
+                                 * landed during the preceding ~11.5 ms of CPU
+                                 * work - so the link does >= 43 MB/s and the
+                                 * 29.9 MB/s we were sending was our own ceiling,
+                                 * not its. Measure where it actually runs out
+                                 * instead of guessing one size per run. */
+                                struct Step { u32 w, h; };
+                                const Step steps[] = {
+                                    {  768, 432 }, {  896, 504 }, {  960, 540 },
+                                    { 1152, 648 }, { 1280, 720 },
+                                };
+                                for (u32 si = 0; si < sizeof(steps)/sizeof(steps[0]); ++si) {
+                                    StreamFrames(dbg, cand.addr, vfd, cmd_handle, syncpt,
+                                                 cfg_addr, dst_addr, sa,
+                                                 steps[si].w, steps[si].h, 300);
+                                }
+                            } else {
+                                StreamFrames(dbg, cand.addr, vfd, cmd_handle, syncpt, cfg_addr, dst_addr, sa);
+                            }
                             VicStage("st:3_done");
                         }
                         UnmapCmdBuffer(vfd, sh);

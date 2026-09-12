@@ -466,7 +466,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M69: up. NVENC magic sweep, with an invalid control.");
+        mitm::applet::LogLine("applet-mitm M70: up. RESOLUTION SWEEP - where does USB actually run out?");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
@@ -475,6 +475,7 @@ namespace ams {
         g_usb_armed                 = ArmFileContains("usb");
         mitm::applet::g_bench_armed   = ArmFileContains("bench");
         mitm::applet::g_nvenc_armed   = ArmFileContains("nvenc");
+        mitm::applet::g_sweep_armed   = ArmFileContains("sweep");
         mitm::applet::g_matrix_armed  = ArmFileContains("mtx");
         mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);
         mitm::applet::g_stream_armed  = ArmFileContains("stream");
