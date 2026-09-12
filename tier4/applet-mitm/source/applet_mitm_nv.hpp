@@ -72,6 +72,7 @@ namespace ams::mitm::applet {
      * NV12 output works. M59's 119 ms/blit was measured with ~7 SD-flushing log
      * calls and a 65,536-iteration checksum inside the timed region. */
     extern bool g_bench_armed;
+    extern bool g_nvenc_armed;
     extern bool g_matrix_armed;
     extern u32  g_matrix_mode;
     extern bool g_stream_armed;

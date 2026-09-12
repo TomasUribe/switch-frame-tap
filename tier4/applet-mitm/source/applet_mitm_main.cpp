@@ -466,7 +466,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M67: up. STREAMING THROUGH THE VIC - 1.5 bytes/pixel.");
+        mitm::applet::LogLine("applet-mitm M68: up. NVENC MAGIC PROBE - is Tegra X1 NVENC 5.0?");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
@@ -474,6 +474,7 @@ namespace ams {
         mitm::applet::g_dump_armed  = ArmFileContains("dump");
         g_usb_armed                 = ArmFileContains("usb");
         mitm::applet::g_bench_armed   = ArmFileContains("bench");
+        mitm::applet::g_nvenc_armed   = ArmFileContains("nvenc");
         mitm::applet::g_matrix_armed  = ArmFileContains("mtx");
         mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);
         mitm::applet::g_stream_armed  = ArmFileContains("stream");

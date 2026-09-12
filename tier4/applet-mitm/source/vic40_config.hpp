@@ -11,6 +11,49 @@
 #pragma once
 #include <stratosphere.hpp>
 
+/* ---- NVENC (host1x class 0x21) ------------------------------------------
+ * Method addresses from NVIDIA's published clc5b7.h. They are usable on our
+ * far older engine for the same reason the VIC ones are: NVCEB6's
+ * SET_OUTPUT_SURFACE_LUMA_OFFSET is byte-identical to the 0x720 we proved on
+ * NVB0B6, i.e. the host1x method ABI is stable across generations. */
+namespace ams::mitm::applet::nvenc {
+
+    constexpr u32 HOST1X_CLASS_NVENC      = 0x21;
+
+    constexpr u32 SET_APPLICATION_ID      = 0x00000200;
+    constexpr u32 APPLICATION_ID_H264     = 1;
+    constexpr u32 EXECUTE                 = 0x00000300;
+    constexpr u32 SET_CONTROL_PARAMS      = 0x00000700;
+    constexpr u32 CONTROL_CODEC_H264      = 3;
+    constexpr u32 SET_PICTURE_INDEX       = 0x00000704;
+    constexpr u32 SET_IN_DRV_PIC_SETUP    = 0x00000710;
+    constexpr u32 SET_OUT_ENC_STATUS      = 0x00000718;
+    constexpr u32 SET_OUT_BITSTREAM       = 0x0000071C;
+    constexpr u32 SET_IOHISTORY           = 0x00000720;
+    constexpr u32 SET_OUT_REF_PIC_LUMA    = 0x00000730;
+    constexpr u32 SET_IN_CUR_PIC          = 0x00000734;
+    constexpr u32 SET_IN_CUR_PIC_CHROMA_U = 0x00000740;
+    constexpr u32 SET_OUT_REF_PIC_CHROMA  = 0x0000074C;
+
+    /* The firmware validates the magic and REPORTS rather than hanging, which
+     * is what makes probing the generation safe by construction. */
+    constexpr u32 ERR_NONE                = 0x00000000;
+    constexpr u32 ERR_H264_INVALID_INPUT  = 0x30000002;
+    constexpr u32 ERR_H264_BAD_MAGIC      = 0x30000004;
+
+    inline const char *ErrName(u32 e) {
+        switch (e) {
+            case ERR_NONE:               return "NONE - the engine accepted the job";
+            case 0x30000001:             return "APPTIMER_EXPIRED";
+            case ERR_H264_INVALID_INPUT: return "INVALID_INPUT - magic ACCEPTED, config incomplete";
+            case 0x30000003:             return "HWERR_INTERRUPT";
+            case ERR_H264_BAD_MAGIC:     return "BAD_MAGIC - wrong NVENC generation";
+            default:                     return "unknown";
+        }
+    }
+
+}
+
 namespace ams::mitm::applet::vic {
 
     /* method register byte-offsets (value pushed as method >> 2) */

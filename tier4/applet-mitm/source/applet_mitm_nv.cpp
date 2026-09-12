@@ -31,6 +31,7 @@
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_log.hpp"
 #include "vic40_config.hpp"
+#include "nvenc_drv_h264.h"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -49,6 +50,7 @@ namespace ams::mitm::applet {
      * on USB 2.0 (518,400 B/frame = 12.4 ms transfer against a 16.67 ms budget).
      * 640x360 is selectable but caps near 45 fps until NV12 or SuperSpeed. */
     constinit bool g_bench_armed   = false;
+    constinit bool g_nvenc_armed   = false;
     constinit bool g_matrix_armed  = false;
     constinit u32  g_matrix_mode   = 0;
     constinit bool g_stream_armed  = false;
@@ -799,6 +801,9 @@ namespace ams::mitm::applet {
          * channel and submit ABI are usable and the encode config is the only
          * thing left unknown. */
         void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle);
+        void TryNvencProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
+
+
 
         struct JobCtx {
             u32 vfd, cmd_handle, syncpt;
@@ -1306,6 +1311,7 @@ namespace ams::mitm::applet {
         TryIndirectCapture();
         TryDebugCapture(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, dst_addr);
         TryNvencPhaseA(nvmap_fd, cmd_handle);
+        if (g_nvenc_armed) { TryNvencProbe(nvmap_fd, cmd_handle, dst_handle); }
 
     close_vic:
         if (cfg_addr != 0) { UnmapCmdBuffer(vfd, cfg_handle); }
@@ -2666,6 +2672,129 @@ namespace ams::mitm::applet {
                 LogLine("   frame dump did not complete (%u chunks)", dump_chunks);
                 VicStage("dbg:dump_failed");
             }
+        }
+
+        /* ---- M68: NVENC magic probe ---------------------------------------
+         * The cheapest test that validates the whole encode approach. It fills
+         * nvenc_h264_drv_pic_setup_s with nothing but the magic and submits,
+         * then reads back what the firmware thought:
+         *
+         *   BAD_MAGIC     (0x30000004) -> wrong generation, try 6.0 next
+         *   INVALID_INPUT (0x30000002) -> magic ACCEPTED, config incomplete.
+         *                                 That is the expected result here and
+         *                                 means the method table, the class id
+         *                                 and the struct layout are all right.
+         *   NONE          (0)          -> it encoded something
+         *
+         * Safe by construction: the firmware validates the magic and reports an
+         * error rather than hanging, unlike the VIC where a bad surface address
+         * takes the compositor down.
+         *
+         * Buffers are carved out of the VIC destination allocation, which is
+         * already nvmap'd; they only need pinning onto the msenc channel, since
+         * MAP_CMD_BUFFER is per-channel. The setup struct must be 256-byte
+         * aligned, which offset 0 of a page-aligned buffer satisfies. */
+        void TryNvencProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle) {
+            VicStage("nvp:1_open");
+            u32 efd = 0, nverr = 0;
+            if (R_FAILED(NvOpen("/dev/nvhost-msenc", std::addressof(efd), std::addressof(nverr))) || nverr != 0) {
+                LogLine("   nvenc-probe: /dev/nvhost-msenc open failed nverr=%u", nverr);
+                return;
+            }
+            LogLine("   ---- NVENC MAGIC PROBE (expecting magic 0x%08x) ----",
+                    static_cast<unsigned>(NV_NVENC_DRV_MAGIC_VALUE));
+
+            u32 esyncpt = 0;
+            {
+                struct { u32 module_id; u32 syncpt; } gs = { 0, 0 };
+                nverr = 0;
+                NvIoctl(efd, NvHostIocChannelGetSyncpoint, std::addressof(gs), sizeof(gs), std::addressof(nverr));
+                esyncpt = gs.syncpt;
+            }
+            { struct { u32 fd; } sn = { nvmap_fd }; nverr = 0;
+              NvIoctl(efd, NvHostIocChannelSetNvmapFd, std::addressof(sn), sizeof(sn), std::addressof(nverr)); }
+
+            /* pin the buffers onto THIS channel */
+            VicStage("nvp:2_pin");
+            u32 buf_addr = 0, cmd_addr = 0;
+            MapCmdBuffer(efd, dst_handle, std::addressof(buf_addr), "nvenc-buf", 0);
+            MapCmdBuffer(efd, cmd_handle, std::addressof(cmd_addr), "nvenc-cmd", 0);
+            LogLine("   nvenc-probe: syncpt=%u buf=0x%08x cmd=0x%08x", esyncpt, buf_addr, cmd_addr);
+            if (buf_addr == 0) { LogLine("   nvenc-probe: buffer pin failed - refusing to submit"); NvClose(efd); return; }
+
+            /* layout inside the (already allocated) VIC destination buffer */
+            constexpr u32 SetupOff = 0x0000;      /* 512 B, 256-aligned   */
+            constexpr u32 StatOff  = 0x1000;      /* 128 B                */
+            constexpr u32 BitsOff  = 0x2000;      /* bitstream            */
+            constexpr u32 BitsSize = 0x40000;
+
+            auto *setup = reinterpret_cast<nvenc_h264_drv_pic_setup_s *>(g_vic_dst_buf + SetupOff);
+            auto *stat  = reinterpret_cast<nvenc_pic_stat_s *>(g_vic_dst_buf + StatOff);
+            std::memset(g_vic_dst_buf, 0, BitsOff + 0x1000);
+            setup->magic = NV_NVENC_DRV_MAGIC_VALUE;
+            armDCacheFlush(g_vic_dst_buf, BitsOff + 0x1000);
+
+            VicStage("nvp:3_submit");
+            auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
+            u32 n = 0;
+            w[n++] = vic::Host1xOpcodeSetClass(0, nvenc::HOST1X_CLASS_NVENC, 0);
+            auto m = [&](u32 method, u32 value) {
+                w[n++] = Host1xIncr0x10x2; w[n++] = method >> 2; w[n++] = value;
+            };
+            m(nvenc::SET_APPLICATION_ID,   nvenc::APPLICATION_ID_H264);
+            m(nvenc::SET_CONTROL_PARAMS,   nvenc::CONTROL_CODEC_H264);
+            m(nvenc::SET_PICTURE_INDEX,    0);
+            m(nvenc::SET_IN_DRV_PIC_SETUP, (buf_addr + SetupOff) >> 8);
+            m(nvenc::SET_OUT_ENC_STATUS,   (buf_addr + StatOff)  >> 8);
+            m(nvenc::SET_OUT_BITSTREAM,    (buf_addr + BitsOff)  >> 8);
+            m(nvenc::EXECUTE,              1u << 8);
+            n = AppendIncrSyncpt(w, n, esyncpt, true);
+            armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
+
+            alignas(8) u8 sb[16 + 12 + 20 + 4] = {};
+            u32 off = 0;
+            auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
+            put(1); put(0); put(1); put(1);
+            put(cmd_handle); put(0); put(n);
+            put(esyncpt); put(1); put(0); put(0); put(0);
+            const u32 fence_off = off; put(0);
+            const u32 sz = off;
+            const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
+            u32 fence_val = 0; nverr = 0;
+            const auto rc = NvIoctl(efd, req, sb, sz, std::addressof(nverr));
+            std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
+            LogLine("   nvenc-probe: submit words=%u rc=0x%x nverr=%u -> fence=%u", n, rc, nverr, fence_val);
+
+            if (R_SUCCEEDED(rc) && nverr == 0) {
+                const u32 cfd = CtrlFd();
+                bool done = false;
+                if (cfd != 0) {
+                    struct { u32 id; u32 thresh; u32 timeout; } a = { esyncpt, fence_val, 200 };
+                    u32 we = 0;
+                    NvIoctl(cfd, NvHostIocCtrlSyncptWait, std::addressof(a), sizeof(a), std::addressof(we));
+                    struct { u32 id; u32 value; } r = { esyncpt, 0 };
+                    for (u32 spin = 0; spin < 400 && !done; ++spin) {
+                        u32 e2 = 0; r.value = 0;
+                        NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
+                        done = (r.value >= fence_val);
+                        if (!done) { os::SleepThread(TimeSpan::FromMicroSeconds(200)); }
+                    }
+                }
+                armDCacheFlush(g_vic_dst_buf, BitsOff + 0x1000);
+                const u32 ucode = stat->ucode_error_status;
+                const u32 est   = stat->error_status;
+                LogLine("   nvenc-probe: fence %s;  error_status=%u  ucode_error_status=0x%08x",
+                        done ? "reached" : "NOT reached", est, ucode);
+                LogLine("   nvenc-probe: *** %s ***", nvenc::ErrName(ucode));
+                LogLine("   nvenc-probe: total_bit_count=%u  bitstream_start_pos=%u",
+                        stat->total_bit_count, stat->bitstream_start_pos);
+            } else {
+                LogLine("   nvenc-probe: submit rejected - the msenc channel did not take this cmdbuf");
+            }
+            UnmapCmdBuffer(efd, dst_handle);
+            NvClose(efd);
+            VicStage("nvp:done");
+            static_cast<void>(BitsSize);
         }
 
         void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle) {
