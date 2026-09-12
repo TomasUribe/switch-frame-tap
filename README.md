@@ -4,23 +4,33 @@ Building a Nintendo Switch → PC screen streamer that runs at **native
 resolution and 60 fps**, and the research needed to get there. Homebrew,
 developed on and for the author's own console.
 
-> **There is a working end-to-end stream.** Live video from the console to a PC
-> over USB at **480x270 / 59.4 fps**, with a one-process libusb + SDL2 viewer.
-> Capture, downscale and transport are solved and measured on hardware.
+> **There is a working, playable stream.** Live video from the console to a PC
+> over USB at **768x432 / 59.6 fps**, through the Tegra VIC, into a one-process
+> libusb + SDL2 viewer. 3600 frames with zero stale iterations. Low enough
+> latency to play from the PC window.
 >
-> **It is still not a finished tool.** The goal is native resolution at 60 fps,
-> and raw pixels cannot get there: USB 2.0 bulk delivers ~31 MB/s, while 720p60
-> needs 83 MB/s even in NV12. The remaining work is **compression**, or
+> **It is still not a finished tool**, and the reason is now measured rather
+> than estimated. The goal is native resolution at 60 fps, and **raw pixels
+> cannot get there**: the USB 2.0 link saturates at **~37 MB/s**, which puts the
+> 60 fps ceiling at about 800x450. Raw 1080p60 needs 186.6 MB/s even at 1.5
+> bytes/pixel. The remaining work is **compression** (1080p60 H.264 all-intra at
+> 50 Mbps is 6.25 MB/s — a sixth of what the cable already carries), or
 > SuperSpeed. What is finished is finished properly and verified on hardware;
 > what is not is marked as such throughout. See [Roadmap](#roadmap).
 
 **Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
-47 hardware test cycles.
+71 hardware test cycles.
 
 ![Mario Kart 8 Deluxe captured at native 1920x1080 from the game's own swapchain](docs/frame-1080p.png)
 
 *A real capture: read out of the game's swapchain by the sysmodule, de-swizzled
 from Tegra block-linear on the PC. Native 1920x1080, docked.*
+
+![A frame off the live stream, VIC-scaled and packed 4:2:0, decoded on the PC](docs/frame-stream-packed420.png)
+
+*A frame off the **live stream**: scaled and format-converted by the VIC on the
+console, sent over USB at 1.5 bytes/pixel, reassembled by the viewer. No codec
+and no colour matrix involved — see [packed 4:2:0](#the-vic-does-no-colour-conversion-and-that-turned-out-to-be-useful).*
 
 
 ## How this was built — with an AI, openly
@@ -32,7 +42,7 @@ how you read and trust what's here.
 - **Claude** wrote nearly all of the code and the documentation, did the
   source-reading (Atmosphère and its kernel mesosphere, libdrm, switchbrew),
   designed each hardware probe, and interpreted the logs that came back.
-- **I** set the goal and the direction, ran every one of the 47 hardware tests
+- **I** set the goal and the direction, ran every one of the 71 hardware tests
   on my own console, read the logs back off the SD card, decided which routes to
   keep pushing and when to drop one, and decided what to publish.
 
@@ -213,8 +223,9 @@ we stay attached, and a whole 8,847,360-byte slot reads in **5.6 ms** against a
 The full pipeline runs end to end:
 
 ```
-queueBuffer intercept -> svcReadDebugProcessMemory (5.6 ms)
-  -> CPU point-sample downscale (4.3 ms) -> USB bulk IN -> SDL2 viewer
+queueBuffer intercept -> svcReadDebugProcessMemory (7.6 ms)
+  -> VIC scale + pack to 4:2:0 (2.1 ms) -> copy out (1.5 ms)
+  -> USB bulk IN (async, 0.14 ms wait) -> SDL2 viewer
 ```
 
 Two findings shaped it, both the hard way:
@@ -225,13 +236,106 @@ Two findings shaped it, both the hard way:
   calls, each an SD-card open/write/**flush**/close, plus a 65,536-iteration
   checksum. Seven SD flushes is 35–140 ms on its own. The engine was never
   measured. `g_vic_quiet` now gates the diagnostics; the real cost is being
-  measured rather than inferred. The shipping stream still uses a CPU
-  point-sampler — at an exact 4x reduction every output pixel lands on a 16-byte
-  group boundary, so it is one aligned read per pixel.
+  measured rather than inferred. **The real cost is 0.8–1.1 ms**, about 6% of a
+  60 fps frame, and the shipping stream now scales on the VIC rather than on the
+  CPU. This figure was published here and in a public forum thread as a hardware
+  finding before it was checked; both have been corrected in place.
 - **Every thread here is pinned to core 3**, including the mitm's own IPC
   thread. A stream loop at equal priority starves it and the game blocks on a
   binder call nobody answers. The worker runs below IPC priority and yields
   each iteration.
+
+### The VIC does no colour conversion, and that turned out to be useful
+
+Set the VIC's output format to `Y8_U8V8_N420` and it writes the NV12 **plane
+layout** — but it does not convert colour at all. The planes come back carrying
+raw channels:
+
+| plane | contents | resolution |
+|---|---|---|
+| luma | **B** | full |
+| chroma, even bytes | **R** | half in both axes |
+| chroma, odd bytes | **G** | half in both axes |
+
+That is 4:2:0-subsampled RGB, and the host reassembles it for free. **1.5
+bytes/pixel instead of 4** — a 2.67x reduction with no codec, no colour matrix
+and no measurable cost. `tools/nv12topng.py` decodes it; `raw-view.c` does the
+same thing live when `hdr.flags & 1`.
+
+The honest cost: because this subsamples **R and G** rather than real chroma, it
+looks worse than proper 4:2:0 at identical bandwidth. The eye barely registers
+missing chroma detail; it very much registers missing red and green. Fixing that
+needs the VIC's colour matrix, and three attempts have failed — the offset
+column lands and every coefficient reads back zero (4096>>10 = 4, 32768>>10 =
+32). If you have programmed a Tegra VIC matrix successfully, please open an
+issue.
+
+### The USB 2.0 wall, measured
+
+One run, five resolutions, 300 frames each, live gameplay:
+
+| resolution | B/frame | fps | usb wait | effective |
+|---|---|---|---|---|
+| 768x432 | 497,696 | **58.0** | 140 us | 28.9 MB/s |
+| 896x504 | 677,408 | 52.2 | 1,064 us | 35.4 MB/s |
+| 960x540 | 777,632 | 46.4 | 1,925 us | 36.1 MB/s |
+| 1152x648 | 1,119,776 | 32.1 | 7,823 us | 35.9 MB/s |
+| 1280x720 | 1,382,432 | 27.4 | 12,796 us | 37.9 MB/s |
+
+**The link saturates at ~37 MB/s.** The console side barely moves across that
+sweep — the framebuffer read stays ~7 ms at every size and the VIC only goes 2.1
+→ 3.0 ms — so the cable is conclusively the binding constraint. `usb wait`
+growing from 140 us to 12,796 us is the wall being hit.
+
+At 768x432 the pipeline is not even transport-limited: 11.3 ms of work against a
+16.67 ms budget means **58 fps is the game's own rate, not ours.**
+
+### NVENC: the engine takes the work and never finishes it
+
+The channel is real and submits are accepted, but the syncpoint never advances.
+An early probe swept every candidate firmware magic and learned nothing, because
+a deliberately invalid control magic behaved exactly like the real ones — the
+signature of a job that never runs. So the next probe stopped varying the job's
+*contents* and varied its *structure*: five submits, each adding one layer, the
+first four ending with an IMMEDIATE syncpoint increment that host1x performs as
+it retires the opcode regardless of the engine.
+
+```
+L0  bare INCR_SYNCPT (no class, no engine)   words= 2  fence 4009/4009  REACHED
+L1  + SETCL class 0x21                       words= 3  fence 4011/4011  REACHED
+L2  + SET_APPLICATION_ID                     words= 6  fence 4013/4013  REACHED
+L3  + full surfaces + EXECUTE                words=39  fence 4015/4015  REACHED
+L4  same, INCR on OP_DONE                    words=39  fence 4015/4017  STALLED
+```
+
+L3 and L4 are the **same 39 words** and differ only in the increment condition,
+so the split is exact: **host1x accepts and retires the full job, and the engine
+never signals completion.** L3/L4 carried a complete H.264 all-intra IDR setup
+at 256x128 — populated SPS/PPS/RC/pic_control, slice + ME + MD + quant control
+blocks at their offsets, and every surface the firmware can dereference. The
+bitstream came back all zeros, which kills "the engine is stalling for want of
+surfaces".
+
+What is left is that the Falcon microcode is not booted: a live channel, a live
+host1x path, and nothing running behind it. `SET_UCODE_STATE` (0x50C) is unused.
+**If you have driven Tegra NVENC from userspace on either Horizon or L4T, how
+the firmware gets booted is the open question** — and it is the whole difference
+between 800x450 and native resolution.
+
+### Two constraints worth knowing
+
+- **`usbDsSetBinaryObjectStore` is required for SuperSpeed.** Declaring USB 3.0
+  device and endpoint descriptors is not enough: enumeration needs a Binary
+  Object Store carrying a SuperSpeed Device Capability descriptor. Atmosphère's
+  own haze calls it immediately after its SuperSpeed device descriptor
+  (`usb_session.cpp:220`). We had never called it at all. Adding it did **not**
+  make the link train to SuperSpeed, so it was a real hole but not the whole
+  story — the descriptor set now matches haze's, leaving the cable as the one
+  untested variable.
+- **Stream width must be a multiple of 64.** 768 (64x12) and 1280 (64x20) are
+  pixel-clean; 800 (64x12.5) runs at 59.7 fps and tears into vertical bands. The
+  Tegra GOB is 64 bytes wide. The pipeline always had this constraint and every
+  size tried until then happened to satisfy it by accident.
 
 The full research log, in reverse chronological order with every dead end and
 its evidence, is [`tier4/mitm/STATUS.md`](tier4/mitm/STATUS.md). The narrative
@@ -247,19 +351,22 @@ version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
 | **Get the game's pixels into our address space** | **done, on hardware** — three graphics routes closed; the kernel debug-SVC route works. 120 consecutive native 1080p frames, 0 missed, 59 fps, ~9 ms of a 16.67 ms budget |
 | USB transport, device side | **done, on hardware** — enumerates as `1209:5f1e`, bulk IN, byte-exact |
 | Live PC viewer | **done** — [`tools/raw-recv/raw-view.c`](tools/raw-recv/raw-view.c), libusb + SDL2 in one process |
-| **End-to-end stream** | **done, on hardware** — 480x270 at **59.4 fps**; 640x360 at ~40 fps |
-| Native resolution at 60 fps | **blocked on bandwidth.** USB 2.0 gives ~31 MB/s; 720p60 needs 83 MB/s in NV12, 221 in RGBA |
-| NVENC H.264 encode | channel opens and takes a submit; the method table is unknown and undocumented |
-| USB 3.0 SuperSpeed | descriptors accepted, link still negotiates High — cable or console, not the PC |
+| **End-to-end stream** | **done, on hardware** — **768x432 at 59.6 fps**, 3600 frames, 0 stale; user-confirmed playable |
+| VIC scale + packed 4:2:0 in the stream path | **done, on hardware** — 2.1 ms/frame, 1.5 B/px, no codec |
+| Native resolution at 60 fps | **blocked on bandwidth, now measured.** The link saturates at ~37 MB/s, capping 60 fps at ~800x450. Raw 1080p60 needs 186.6 MB/s |
+| NVENC H.264 encode | **channel proven, engine silent.** host1x retires a full 39-word job with every surface populated; the OP_DONE increment never fires. Falcon firmware boot is the remaining suspect |
+| USB 3.0 SuperSpeed | descriptors **and BOS** accepted, link still negotiates High. Device side now matches haze exactly; the cable is the one untested variable |
 | Capture the home menu and system overlays | wanted, and not possible through any route found so far |
 
-Capture is no longer the gate — **bandwidth is**. Everything upstream of the
-cable is done and measured; the next move is compression, or proving
-SuperSpeed.
+Capture is no longer the gate — **bandwidth is**, and the figure is now measured
+rather than estimated: ~37 MB/s. Everything upstream of the cable is done; at
+768x432 the console finishes a frame in 11.3 ms of a 16.67 ms budget, so the
+pipeline has headroom it cannot spend. The next move is compression, or proving
+SuperSpeed with a known-good USB 3.0 cable.
 
-NVENC wants NV12 input and the VIC is the natural way to produce it. M59 thought
-that door was closed; M63 found the 119 ms was instrumentation, so it is open
-again. NVIDIA's own [open-gpu-doc](https://github.com/NVIDIA/open-gpu-doc)
+NVENC wants NV12 input and the VIC is the natural way to produce it — that
+dependency is satisfied, at 2.1 ms/frame. What is not satisfied is the engine
+itself executing anything (see [above](#nvenc-the-engine-takes-the-work-and-never-finishes-it)). NVIDIA's own [open-gpu-doc](https://github.com/NVIDIA/open-gpu-doc)
 supplies what was missing: the VIC output chroma offsets (0x724/0x728, alongside
 a luma offset byte-identical to one we proved on hardware), the full NVENC
 method table, and `nvenc_drv.h` version-gated back to the generation Tegra X1
