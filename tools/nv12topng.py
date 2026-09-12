@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Turn an NV12 dump from the VIC into a PNG, to check the conversion is real.
+"""Turn a VIC "NV12" dump into a PNG.
+
+IMPORTANT (M66): the VIC does NOT perform an RGB->YUV conversion. With no
+colour matrix it packs the raw channels into the NV12 plane layout:
+
+    luma plane   = B, full resolution
+    chroma even  = R, half resolution in both axes
+    chroma odd   = G, half resolution in both axes
+
+So the output is 4:2:0-subsampled RGB, not YUV - and the colour is fully
+recoverable on the PC with a channel permutation and no matrix at all. Pass
+--yuv to decode as true BT.601 YUV instead (for when NVENC output is involved).
 
 NV12 is semi-planar YUV 4:2:0:
     Y plane   w*h bytes,      one luma sample per pixel
@@ -51,6 +62,23 @@ def write_png(path, rows, w, h):
     open(path, "wb").write(png)
 
 
+def rgb_packed_to_rgb(data, w, h):
+    """The VIC's actual output: raw channels in NV12 plane layout."""
+    ysize = w * h
+    bplane, uv = data[:ysize], data[ysize:]
+    rows = []
+    for j in range(h):
+        row = bytearray(w * 3)
+        uvrow = (j >> 1) * w
+        for i in range(w):
+            k = uvrow + (i & ~1)
+            row[i*3+0] = uv[k]            # R
+            row[i*3+1] = uv[k+1]          # G
+            row[i*3+2] = bplane[j*w+i]    # B
+        rows.append(bytes(row))
+    return rows
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -62,7 +90,8 @@ def main():
     data = open(src, "rb").read()
     print(f"{src}: {len(data):,} B, decoding as {w}x{h} NV12 "
           f"(expect {w*h*3//2:,})")
-    rows = nv12_to_rgb(data, w, h)
+    rows = (nv12_to_rgb(data, w, h) if "--yuv" in sys.argv
+            else rgb_packed_to_rgb(data, w, h))
     write_png(out, rows, w, h)
     # a flat grey image means the engine wrote nothing useful
     ys = data[:w*h]
