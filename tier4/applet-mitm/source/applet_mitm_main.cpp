@@ -211,6 +211,18 @@ namespace ams {
         alignas(0x1000) constinit u8 g_usb_ep_out_buf[0x1000] = {};
         constinit bool g_usb_armed = false;
 
+        /* M57: the endpoint handles have to outlive TryUsbEnumerate. Until now
+         * they were locals inside it and were discarded the moment it returned,
+         * which is why the transport could enumerate but never transmit a byte. */
+        constinit UsbDsInterface *g_usb_iface  = nullptr;
+        constinit UsbDsEndpoint  *g_usb_ep_in  = nullptr;
+        constinit UsbDsEndpoint  *g_usb_ep_out = nullptr;
+
+        /* One bulk post per iteration. 256 KB is a multiple of 0x1000, so every
+         * chunk boundary stays aligned for the next PostBufferAsync. */
+        constexpr size_t UsbChunk     = 0x40000;
+        constexpr u64    UsbTimeoutNs = UINT64_C(5000000000);
+
         void TryUsbEnumerate() {
             if (!g_usb_armed) {
                 mitm::applet::LogLine("   usb: not armed (add \"usb\" to the arm file)");
@@ -255,9 +267,12 @@ namespace ams {
             mitm::applet::LogLine("   device descriptors (Full+High) rc=0x%x", rc);
             if (R_FAILED(rc)) { return; }
 
-            UsbDsInterface *iface  = nullptr;
-            UsbDsEndpoint  *ep_in  = nullptr;
-            UsbDsEndpoint  *ep_out = nullptr;
+            /* bound to the file-scope handles so the transport can post to
+             * ep_in long after boot; the rest of this function is unchanged */
+            UsbDsInterface *&iface  = g_usb_iface;
+            UsbDsEndpoint  *&ep_in  = g_usb_ep_in;
+            UsbDsEndpoint  *&ep_out = g_usb_ep_out;
+            iface = nullptr; ep_in = nullptr; ep_out = nullptr;
 
             struct usb_interface_descriptor id = {
                 .bLength            = USB_DT_INTERFACE_SIZE,
@@ -406,7 +421,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M56: up. both gates on Applet - now actually TAKE a frame-sized heap.");
+        mitm::applet::LogLine("applet-mitm M57: up. TRANSPORT - push a real 1080p frame over USB to the PC.");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");
@@ -443,6 +458,86 @@ namespace ams {
         mitm::applet::LogMark("main:LoopProcess");
         g_server_manager.LoopProcess();
         mitm::applet::LogMark("main:LoopProcess_RETURNED");
+    }
+
+}
+
+/* ---- M57: USB bulk transport ------------------------------------------------
+ * Defined out here, not in the anonymous namespace above, because
+ * applet_mitm_nv.cpp calls these and internal linkage would not reach it.
+ * The anonymous namespace's members are still visible from this block: an
+ * unnamed namespace inside `namespace ams` injects its names into `ams`, so
+ * ::ams::g_usb_ep_in resolves within this translation unit.
+ *
+ * Every usbDs and event call returns libnx's ::Result - a bare u32, NOT
+ * ams::Result. Calling .GetValue() on one does not compile, which has already
+ * cost this project a build cycle once. They are printed with %x directly.
+ *
+ * The sequence follows Atmosphere's own haze (troposphere/haze/source/
+ * usb_session.cpp:250,256-258): PostBufferAsync -> wait CompletionEvent ->
+ * eventClear -> GetReportData -> ParseReportData. */
+namespace ams::mitm::applet {
+
+    bool UsbReady() {
+        if (::ams::g_usb_ep_in == nullptr) { return false; }
+        UsbState st = UsbState_Detached;
+        if (R_FAILED(usbDsGetState(std::addressof(st)))) { return false; }
+        return st == UsbState_Configured;
+    }
+
+    bool UsbSendBuffer(const void *buf, size_t len, size_t *out_sent) {
+        if (out_sent != nullptr) { *out_sent = 0; }
+        if (::ams::g_usb_ep_in == nullptr) { return false; }
+
+        const u8 *p = static_cast<const u8 *>(buf);
+        size_t done = 0;
+
+        while (done < len) {
+            const size_t chunk = ((len - done) < ::ams::UsbChunk) ? (len - done) : ::ams::UsbChunk;
+
+            u32 urb_id = 0;
+            ::Result rc = usbDsEndpoint_PostBufferAsync(::ams::g_usb_ep_in,
+                              const_cast<u8 *>(p + done), static_cast<u32>(chunk),
+                              std::addressof(urb_id));
+            if (R_FAILED(rc)) {
+                LogLine("   usb: PostBufferAsync(+%zu, %zu B) rc=0x%x", done, chunk, rc);
+                return false;
+            }
+
+            rc = eventWait(std::addressof(::ams::g_usb_ep_in->CompletionEvent), ::ams::UsbTimeoutNs);
+            if (R_FAILED(rc)) {
+                LogLine("   usb: completion wait timed out at +%zu rc=0x%x (host not reading?)", done, rc);
+                return false;
+            }
+            eventClear(std::addressof(::ams::g_usb_ep_in->CompletionEvent));
+
+            UsbDsReportData report = {};
+            rc = usbDsEndpoint_GetReportData(::ams::g_usb_ep_in, std::addressof(report));
+            if (R_FAILED(rc)) { LogLine("   usb: GetReportData rc=0x%x", rc); return false; }
+
+            u32 transferred = 0;
+            rc = usbDsParseReportData(std::addressof(report), urb_id, nullptr, std::addressof(transferred));
+            if (R_FAILED(rc)) { LogLine("   usb: ParseReportData rc=0x%x", rc); return false; }
+
+            if (transferred == 0) {
+                LogLine("   usb: zero-length completion at +%zu - host is not draining", done);
+                return false;
+            }
+            if (transferred != chunk) {
+                /* A short completion would push the next post off 0x1000
+                 * alignment, which usbDs rejects. Report it rather than send
+                 * a silently corrupt frame. */
+                done += transferred;
+                if (out_sent != nullptr) { *out_sent = done; }
+                LogLine("   usb: short completion %u/%zu at +%zu - stopping (would break alignment)",
+                        transferred, chunk, done - transferred);
+                return false;
+            }
+
+            done += transferred;
+            if (out_sent != nullptr) { *out_sent = done; }
+        }
+        return true;
     }
 
 }

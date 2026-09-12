@@ -1,0 +1,4 @@
+# switch-frame-tap USB gadget (1209:5f1e, pid.codes open range).
+# Install:  sudo cp 99-switch-frame-tap.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="5f1e", MODE="0660", TAG+="uaccess"

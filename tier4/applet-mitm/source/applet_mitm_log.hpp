@@ -32,4 +32,19 @@ namespace ams::mitm::applet {
     /* breadcrumb: overwrite sdmc:/applet-mitm.last, then LogLine("-> what") */
     void LogMark(const char *what);
 
+    /* M57 - USB bulk transport. Implemented in applet_mitm_main.cpp, where the
+     * usb:ds session and the endpoint handles live. Declared here because that
+     * file keeps its USB state in an anonymous namespace, which has internal
+     * linkage and cannot be reached by an extern declaration from another
+     * translation unit - the lesson LogMemoryPools taught in M54.
+     *
+     * UsbReady() asks the kernel for the live UsbState rather than caching a
+     * boot-time flag, so a cable seated after boot still counts.
+     *
+     * The buffer passed to UsbSendBuffer MUST be 0x1000-aligned and in normal
+     * CACHED memory. Uncached nvmap memory is rejected (the 0xd401
+     * InvalidCurrentMemory class of failure); g_ind_buf satisfies both. */
+    bool UsbReady();
+    bool UsbSendBuffer(const void *buf, size_t len, size_t *out_sent);
+
 }

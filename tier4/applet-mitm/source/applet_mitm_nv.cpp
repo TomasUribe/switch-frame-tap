@@ -96,6 +96,10 @@ namespace ams::mitm::applet {
          * output before it goes to the filesystem */
         constinit u8       *g_stage_buf   = nullptr;
 
+        /* M57: usbDs requires a 0x1000-aligned buffer, so the 32-byte frame
+         * header cannot be posted from the stack. */
+        alignas(0x1000) constinit u8 g_usb_hdr[0x1000] = {};
+
         /* M54: the decisive measurement. LogMemoryPools() in applet_mitm_main.cpp
          * is in an anonymous namespace, so it cannot be reached from here - this
          * is the same survey, taken either side of the heap grab.
@@ -1732,6 +1736,85 @@ namespace ams::mitm::applet {
                                 ++full_strips;
                             }
                             full_ns = armTicksToNs(armGetSystemTick()) - t1;
+                        }
+
+                        /* ---- M57: THE TRANSPORT ---------------------------
+                         * Every piece below is already proven separately; this
+                         * is the first time they are joined end to end.
+                         *
+                         * The loop above reuses g_ind_buf at offset 0 and keeps
+                         * nothing - it only times the read. This one reads into
+                         * SUCCESSIVE offsets so the whole slot stays resident,
+                         * which only became possible once M56 demonstrated a
+                         * 16 MB heap (g_ind_size 16,580,608 vs FbSlotSize
+                         * 8,847,360).
+                         *
+                         * resume_game() ran at the top of this block, so the
+                         * game is already running: the send costs it nothing and
+                         * there is no freeze to budget for.
+                         *
+                         * g_ind_buf is normal CACHED memory - the uncached
+                         * SetMemoryAttribute calls cover only the four VIC
+                         * buffers below VicBufsEnd - and sits at addr+0x30000,
+                         * so it satisfies both of usbDs's requirements. Sending
+                         * from the uncached VIC buffers would fail the way
+                         * fs::WriteFile did with 0xd401. */
+                        if (g_ind_size >= FbSlotSize) {
+                            if (!UsbReady()) {
+                                LogLine("   usb: not Configured (no host, or \"usb\" absent from the arm file) - skipping transport");
+                            } else {
+                                const u64 u0 = armTicksToNs(armGetSystemTick());
+                                bool read_ok = true;
+                                for (u64 done = 0; done < FbSlotSize; done += 0x10000) {
+                                    const u64 n = (FbSlotSize - done < 0x10000) ? (FbSlotSize - done) : 0x10000;
+                                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf + done), dbg, cand.addr + done, n))) { read_ok = false; break; }
+                                }
+                                const u64 read_ns = armTicksToNs(armGetSystemTick()) - u0;
+                                LogLine("   usb: resident slot read %s in %llu ms (%llu B)",
+                                        read_ok ? "OK" : "FAILED",
+                                        static_cast<unsigned long long>(read_ns / 1000000),
+                                        static_cast<unsigned long long>(FbSlotSize));
+
+                                if (read_ok) {
+                                    /* must match sft_hdr_t in tools/raw-recv/raw-recv.c */
+                                    struct __attribute__((packed)) SftHdr {
+                                        u32 magic; u16 version; u16 flags;
+                                        u32 width, height, stride, length, block_h_log2, kind;
+                                    };
+                                    static_assert(sizeof(SftHdr) == 32, "header must match the PC receiver");
+
+                                    SftHdr h = {};
+                                    h.magic        = 0x52544653u;   /* "SFTR" */
+                                    h.version      = 1;
+                                    h.flags        = 0;
+                                    h.width        = 1920;
+                                    h.height       = 1080;
+                                    h.stride       = 7680;
+                                    h.length       = static_cast<u32>(FbSlotSize);
+                                    h.block_h_log2 = 4;
+                                    h.kind         = 0xFE;
+                                    std::memcpy(g_usb_hdr, std::addressof(h), sizeof(h));
+
+                                    const u64 s0 = armTicksToNs(armGetSystemTick());
+                                    size_t hdr_sent = 0, body_sent = 0;
+                                    const bool hdr_ok = UsbSendBuffer(g_usb_hdr, sizeof(SftHdr), std::addressof(hdr_sent));
+                                    const bool body_ok = hdr_ok && UsbSendBuffer(g_ind_buf, FbSlotSize, std::addressof(body_sent));
+                                    const u64 send_ns = armTicksToNs(armGetSystemTick()) - s0;
+
+                                    const u64 mbps = (send_ns > 0)
+                                        ? (static_cast<u64>(body_sent) * UINT64_C(1000)) / (send_ns / UINT64_C(1000) + 1) / UINT64_C(1024)
+                                        : 0;
+                                    LogLine("   usb: header %s (%zu B), body %s (%zu / %llu B) in %llu ms ~ %llu KB/s",
+                                            hdr_ok ? "sent" : "FAILED", hdr_sent,
+                                            body_ok ? "sent" : "FAILED", body_sent,
+                                            static_cast<unsigned long long>(FbSlotSize),
+                                            static_cast<unsigned long long>(send_ns / 1000000),
+                                            static_cast<unsigned long long>(mbps));
+                                    LogLine("   usb: %s", (hdr_ok && body_ok)
+                                            ? "*** A 1080p FRAME LEFT THE CONSOLE OVER USB ***"
+                                            : "transport incomplete - see the rc above");
+                                }
+                            }
                         }
 
                         /* ---- sustained per-frame capture ------------------

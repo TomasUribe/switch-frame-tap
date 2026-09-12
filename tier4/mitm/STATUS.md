@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M56**.
+`0100000000000C20`. 47 hardware test cycles. Current build: **M57**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -87,6 +87,116 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M57 RUN: a real frame left the console over USB ***
+
+Capture, the 16 MB heap and the USB transport joined end to end for the first
+time. `/tmp/sft_000.bin` arrived at **8,847,360 bytes - exactly FbSlotSize, not
+one byte short**, so the transport is lossless. De-swizzled it is a clean
+Mario Kart 8 Deluxe frame: correct colours, no channel swap, no swizzle
+artefacts, HUD and minimap intact.
+
+```
+frame 0: 1920x1080 stride=7680 kind=0xfe blk_h_log2=4 payload=8847360 B
+/tmp/sft_000.bin: 8,847,360 bytes (9.00 block-rows)
+wrote /tmp/frame.png  (1920x1080, 3,683,587 nonzero bytes)
+```
+
+### The game was rendering 720p, not 1080p
+
+Measured, not eyeballed: the non-black bounding box is **exactly 1280x720** in
+the top-left of the 1920x1080 surface - a 0.667 ratio on both axes, far too
+clean to be coincidence. MK8D renders 720p **undocked** into a swapchain
+allocated at 1080p, and the compositor scales on output.
+
+So M57 proves the pipeline, **not** native-res capture. What we capture is the
+game's render target, and that is whatever the game chose. A docked re-run is
+the test that settles it, and it needs no rebuild.
+
+### Two verification lessons
+
+**`strings` on a .nsp proves nothing.** All five M57 literals showed 0 hits in
+the shipped NSP and 1-6 hits in the ELF. The NSO header reads `flags 0x3f` -
+text, rodata and data all compressed. Same false alarm as M53's split banner,
+opposite direction. **Check the ELF, never the NSP.**
+
+**A grep against a missing binary reports success.** `aarch64-none-elf-objdump`
+exists only inside the devkitPro container, so my host-side call-site check ran
+against a failed command; `grep -c` printed `0` and exited 0, so the `||`
+fallback never fired. I nearly read that as "the transport was dead-stripped".
+Run objdump **in the container**:
+
+```
+docker run --rm -v $PWD/ref/Atmosphere:/ams devkitpro/devkita64:latest \
+  bash -lc '$DEVKITPRO/devkitA64/bin/aarch64-none-elf-objdump -d /ams/<elf> | grep bl'
+```
+
+It found the three real call sites - one `UsbReady` guard, two `UsbSendBuffer`
+(header, then body).
+
+### Transport plumbing
+
+- `iface`/`ep_in`/`ep_out` were **locals** in `TryUsbEnumerate`, discarded on
+  return. That is why M52/M53 could enumerate but never transmit. Now file-scope.
+- `UsbReady()`/`UsbSendBuffer()` live outside the anonymous namespace so
+  `applet_mitm_nv.cpp` can reach them - the `LogMemoryPools` lesson from M54.
+- Send sequence follows haze (`usb_session.cpp:250,256-258`): `PostBufferAsync`
+  -> wait `CompletionEvent` -> `eventClear` -> `GetReportData` -> `ParseReportData`.
+- 256 KB chunks: a multiple of 0x1000, so every boundary stays aligned. A short
+  completion is treated as fatal rather than silently misaligning the next post.
+- `g_ind_buf` is normal **cached** memory (the uncached `SetMemoryAttribute`
+  calls cover only the four VIC buffers below `VicBufsEnd`) and sits at
+  `addr+0x30000`, satisfying both usbDs requirements. Sending from the uncached
+  VIC buffers would fail the way `fs::WriteFile` did with `0xd401`.
+- The game is already resumed before the transport runs, so the send costs it
+  nothing.
+
+## The 60 fps bandwidth problem, with numbers
+
+This is the whole remaining question, so here is the arithmetic rather than
+adjectives. One 1080p frame = 1920x1080 = 2,073,600 px.
+
+| format | bytes/frame | 1080p60 needs |
+|---|---|---|
+| RGBA (what we send today) | 8,294,400 | **474 MiB/s** (3.98 Gbps) |
+| NV12 / YUV420 (VIC can output this) | 3,110,400 | **178 MiB/s** |
+| H.264 @ 20 Mbps | ~41,000 | **2.4 MiB/s** |
+
+Against the transports:
+
+| transport | realistic | verdict |
+|---|---|---|
+| USB 2.0 High Speed (what we have) | ~40 MB/s | RGBA 1080p = **5 fps**; NV12 1080p = 13 fps; **NV12 720p30 fits** |
+| USB 3.0 SuperSpeed | ~350 MB/s | **NV12 1080p60 fits with 2x headroom** |
+| 802.11ac Wi-Fi | 12-25 MB/s | **worse than USB 2.0** |
+| H.264 over USB 2.0 | 2.4 MB/s needed | fits with ~16x headroom |
+
+### Wi-Fi Direct is a downgrade, not an option
+
+The console's 802.11ac tops out around 100-200 Mbps real-world, i.e. 12-25 MB/s
+- **less than half** of what USB 2.0 already gives us, with worse latency and
+jitter. `ldn` local wireless is more restricted still. Wi-Fi only becomes viable
+*after* compression, and once you have compression USB 2.0 is already plentiful.
+So it solves nothing that is not already solved by the thing it depends on.
+
+### Two real paths, and one of them is cheap to test
+
+**Path A - USB 3.0 + NV12, no encoder.** We have only ever declared
+`UsbDeviceSpeed_Full` and `UsbDeviceSpeed_High` in `TryUsbEnumerate`. We never
+offered `UsbDeviceSpeed_Super`. **The 480 Mbps we measured may be our own
+ceiling, not the platform's.** If SuperSpeed enumerates, NV12 1080p60 needs
+178 MiB/s against ~350 MB/s available - and the VIC already does RGBA->NV12
+conversion in hardware for free, which is a 2.67x reduction we are not taking.
+Test cost: add Super descriptors + endpoint companion, boot, read
+`/sys/bus/usb/devices/*/speed` for `5000`. Needs a USB 3.0 cable.
+
+**Path B - NVENC.** Class id 0x21 is known; the method table is not, and there
+is no public reference (nouveau has no Tegra NVENC support, as Souldbminer
+pointed out - REing nvservices is the honest route). NVENC also *wants* NV12
+input, so the VIC work in path A is a prerequisite either way.
+
+Do A first: it is one descriptor change against an unknown-method-table research
+problem, and it may remove the need for B entirely.
 
 ## *** M56 RUN: 16 MB held in a sysmodule - and it is not free ***
 

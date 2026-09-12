@@ -10,3 +10,6 @@ build/
 # Each tree has its own license and upstream; none of it is redistributed here.
 ref/*
 !ref/README.md
+
+# compiled PC-side receiver (build it with the one-liner in its README)
+tools/raw-recv/raw-recv
