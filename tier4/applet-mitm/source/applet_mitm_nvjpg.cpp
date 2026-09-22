@@ -36,7 +36,8 @@
 namespace ams::mitm::applet {
 
     constinit bool g_nvjpg_armed   = false;
-    constinit u32  g_nvjpg_quality = 85;
+    constinit u32  g_nvjpg_quality  = 85;
+    constinit u32  g_nvjpg_attempts = 90;
 
     namespace {
 

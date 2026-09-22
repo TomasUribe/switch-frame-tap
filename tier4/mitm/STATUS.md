@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 71 hardware test cycles. Current build: **M73**.
+`0100000000000C20`. 71 hardware test cycles. Current build: **M74**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,6 +88,71 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M74: one failed submit is enough to wedge the compositor ***
+
+M73 left one hypothesis standing: NVENC and NVJPG sit idle and are therefore
+clock/power-gated, while the VIC is driven continuously by nvnflinger. That is
+testable without guessing an ioctl - the system encodes every screenshot with
+NVJPG - so M74 submitted one well-formed job per second for 90 seconds while
+the user took screenshots.
+
+The test did not get to run. **Two attempts completed in 21 seconds**, not the
+90 planned, and the console wedged during the second.
+
+### The timing, which is the real finding
+
+```
+63.387  attempt 1 submitted -> STALLED
+63.5    hb:17  txn=3025
+66.6    hb:18  txn=3377   (+352 in 3 s - the game is running normally)
+69.7    hb:19  txn=3745   (+368)
+72.8    hb:20  txn=4103   (+358)
+75.8    hb:21  txn=4467   (+364)
+79.1    hb:22  txn=4610   (+143)  <- the game starts to stall
+82.1    hb:23  txn=4610   (  +0)  <- the game is frozen
+84.354  attempt 2 returns -> STALLED
+```
+
+Two things follow, and both matter more than the gating question:
+
+1. **Each attempt takes ~21 seconds, not the ~1.4 s designed.** The extra 20 s
+   is inside channel teardown: `NvClose` blocks waiting for a job that will
+   never finish, until nvservices' own default timeout fires and aborts. M74
+   deliberately removed the 1000 ms `SET_SUBMIT_TIMEOUT` that M73 set, on the
+   theory that frequent aborts were the danger. That was wrong - it did not
+   avoid the abort, only delayed it.
+
+2. **One stalled submit is enough.** The game froze at ~79 s, i.e. during the
+   teardown that followed attempt 1, long before attempt 2 returned. The retry
+   loop did not cause the damage; it only made it obvious. M73's four attempts
+   and M74's two produce the same outcome.
+
+### What this closes off
+
+Any submit to these engines that does not complete leaves the channel in a state
+whose teardown takes the compositor down with it. host1x is shared, and
+nvnflinger is on the other side of it. **So these engines cannot be probed this
+way at all** - not with a better config, not with fewer attempts, not with a
+different timeout. Three forced power-offs across M72b, M73 and M74 are three
+instances of the same mechanism.
+
+The gating hypothesis is neither confirmed nor refuted. Attempt 1 landed at
+63.4 s and attempt 2 at 84.4 s, and there is no way to know whether either
+coincided with a screenshot. The experiment was sound; the delivery mechanism
+made it unrunnable.
+
+### Correction: the S5.16 colour-matrix theory was wrong
+
+M73's writeup floated S5.16 coefficients as the likely cause of the three failed
+colour-matrix attempts, based on `OCsc0MatCoeff[3][4]` in NVIDIA's CEB6 header.
+**That does not apply to this chip.** CEB6 is a much later VIC; VIC 4.0's
+`MatrixStruct`, which is what this console has, is a 20-bit signed coefficient
+with a separate 4-bit `matrix_r_shift` - which is exactly the form the code
+already uses. So the scale error I proposed is not there, and the matrix failure
+remains unexplained.
+
+Worth recording precisely because it was stated to the user as a likely root
+cause before being checked against the right generation's header.
 ## *** M73: NVJPG fails identically to NVENC - the blocker is not the config ***
 
 The compression path needs a hardware encoder. NVENC had resisted four probes

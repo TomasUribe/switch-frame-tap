@@ -605,6 +605,7 @@ namespace ams {
         mitm::applet::g_nvenc_armed   = ArmFileContains("nvenc");
         mitm::applet::g_nvjpg_armed   = ArmFileContains("jpg");
         mitm::applet::g_nvjpg_quality = ArmFileNumber("q", 85);
+        mitm::applet::g_nvjpg_attempts = ArmFileNumber("jat", 90);
         mitm::applet::g_sweep_armed   = ArmFileContains("sweep");
         mitm::applet::g_matrix_armed  = ArmFileContains("mtx");
         mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);

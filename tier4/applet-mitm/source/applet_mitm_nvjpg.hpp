@@ -12,6 +12,7 @@ namespace ams::mitm::applet {
 
     extern bool g_nvjpg_armed;
     extern u32  g_nvjpg_quality;
+    extern u32  g_nvjpg_attempts;
 
     struct NvjpgLayout {
         u32 param_off, status_off, bits_off, bits_size;

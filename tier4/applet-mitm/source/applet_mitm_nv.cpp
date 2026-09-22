@@ -3076,10 +3076,21 @@ namespace ams::mitm::applet {
                 NvIoctl(jfd, NvHostIocChannelGetSyncpoint, std::addressof(gs), sizeof(gs), std::addressof(nverr));
                 syncpt = gs.syncpt;
             }
+            /* M73 never logged this. If nvjpg were handed the VIC's syncpoint
+             * (12), our increments would corrupt nvnflinger's - the M63
+             * RESCUE_INCR failure - so it needs to be on the record. */
+            if (syncpt == 12) {
+                LogLine("   nvjpg: syncpt is 12, the SAME one nvnflinger composites on - REFUSING");
+                NvClose(jfd);
+                return false;
+            }
             { struct { u32 fd; } sn = { nvmap_fd }; nverr = 0;
               NvIoctl(jfd, NvHostIocChannelSetNvmapFd, std::addressof(sn), sizeof(sn), std::addressof(nverr)); }
-            { struct { u32 ms; } to = { 1000 }; nverr = 0;
-              NvIoctl(jfd, NvHostIocChannelSetSubmitTo, std::addressof(to), sizeof(to), std::addressof(nverr)); }
+            /* M74: deliberately NOT setting SET_SUBMIT_TIMEOUT. M73 set 1000 ms,
+             * so every stalled attempt ended in a channel abort, and repeated
+             * engine resets are a plausible contributor to the compositor
+             * corruption that ended that run. nvservices' own default is
+             * gentler, and we close the channel ourselves anyway. */
 
             u32 buf_addr = 0, cmd_addr = 0;
             MapCmdBuffer(jfd, dst_handle, std::addressof(buf_addr), "nvjpg-buf", 0);
@@ -3090,19 +3101,33 @@ namespace ams::mitm::applet {
                 return false;
             }
 
+            /* M74: M27's lesson, applied to this engine at last. M73's fourth
+             * case ran a PLANAR encode with chroma_v_addr = 0, i.e. handed the
+             * engine a null surface - and a zero address does not fail
+             * politely, it wedges the pipe. It took the compositor with it and
+             * cost a forced power-off. Every address the engine will
+             * dereference is checked here, once. */
+            const u32 a_param = buf_addr + L.param_off,  a_status = buf_addr + L.status_off;
+            const u32 a_bits  = buf_addr + L.bits_off,   a_luma   = buf_addr + L.luma_off;
+            const u32 a_chroma = buf_addr + L.chroma_off;
+            const u32 a_chroma_v = (memory_mode == 1) ? (a_chroma + L.w * L.h / 4) : 0;
+            if (a_param == 0 || a_status == 0 || a_bits == 0 || a_luma == 0 || a_chroma == 0 ||
+                (memory_mode == 1 && a_chroma_v == 0)) {
+                LogLine("   nvjpg: REFUSING to submit, a surface address is zero "
+                        "(param=%#x status=%#x bits=%#x luma=%#x cu=%#x cv=%#x)",
+                        a_param, a_status, a_bits, a_luma, a_chroma, a_chroma_v);
+                UnmapCmdBuffer(jfd, dst_handle);
+                NvClose(jfd);
+                return false;
+            }
+
             NvjpgFillParams(g_vic_dst_buf, L, memory_mode, input_type);
             std::memset(g_vic_dst_buf + L.status_off, 0, sizeof(nvjpg_enc_status));
             std::memset(g_vic_dst_buf + L.bits_off, 0, 0x1000);
             armDCacheFlush(g_vic_dst_buf, VicDstSize);
 
             auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
-            u32 n = NvjpgBuildCmdbuf(w,
-                                     buf_addr + L.param_off,
-                                     buf_addr + L.status_off,
-                                     buf_addr + L.bits_off,
-                                     buf_addr + L.luma_off,
-                                     buf_addr + L.chroma_off,
-                                     0);
+            u32 n = NvjpgBuildCmdbuf(w, a_param, a_status, a_bits, a_luma, a_chroma, a_chroma_v);
             n = AppendIncrSyncpt(w, n, syncpt, true);
             armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
 
@@ -3156,7 +3181,6 @@ namespace ams::mitm::applet {
 
         void TryNvjpgProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle) {
             VicStage("jpg:1");
-            LogLine("   ---- NVJPG ENCODE PROBE (quality %u) ----", g_nvjpg_quality);
 
             NvjpgLayout L = {};
             L.param_off  = 0x000000;
@@ -3180,38 +3204,20 @@ namespace ams::mitm::applet {
             for (u32 y = 0; y < L.h / 2; ++y) {
                 u8 *row = g_vic_dst_buf + L.chroma_off + y * L.w;
                 for (u32 x = 0; x < L.w / 2; ++x) {
-                    row[2 * x + 0] = static_cast<u8>((x * 255) / (L.w / 2));   /* U */
-                    row[2 * x + 1] = static_cast<u8>((y * 255) / (L.h / 2));   /* V */
+                    row[2 * x + 0] = static_cast<u8>((x * 255) / (L.w / 2));
+                    row[2 * x + 1] = static_cast<u8>((y * 255) / (L.h / 2));
                 }
             }
 
-            struct Case { u32 mem_mode, input_type; };
-            const Case cases[] = { { 0, 0 }, { 0, 1 }, { 0, 2 }, { 1, 0 } };
-
-            for (u32 i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-                u32 scan_len = 0, err = 0;
-                const bool ok = NvjpgOneAttempt(nvmap_fd, cmd_handle, dst_handle, L,
-                                                cases[i].mem_mode, cases[i].input_type,
-                                                std::addressof(scan_len), std::addressof(err));
-                if (!ok) { continue; }
-
-                if (scan_len > L.bits_size) {
-                    LogLine("   nvjpg: reported %u bytes > %u buffer - not trusting it", scan_len, L.bits_size);
-                    continue;
-                }
-                /* Wrap into a viewable file. Headers go just below the scan so
-                 * nothing has to move: the container is written into the
-                 * staging area past the surfaces. */
+            auto wrap_and_save = [&](u32 scan_len, u32 attempt) {
+                if (scan_len == 0 || scan_len > L.bits_size) { return; }
                 u8 *out = g_vic_dst_buf + L.chroma_off + L.w * L.h / 2;
                 const u32 avail = VicDstSize - static_cast<u32>(out - g_vic_dst_buf);
-                if (scan_len + 0x400 > avail) {
-                    LogLine("   nvjpg: no room to wrap the container (%u needed, %u free)", scan_len + 0x400, avail);
-                    continue;
-                }
+                if (scan_len + 0x400 > avail) { return; }
                 const u32 total = NvjpgWriteContainer(out, L.w, L.h, L.quality,
                                                       g_vic_dst_buf + L.bits_off, scan_len);
                 char path[64];
-                std::snprintf(path, sizeof(path), "sdmc:/nvjpg-probe-%u%u.jpg", cases[i].mem_mode, cases[i].input_type);
+                std::snprintf(path, sizeof(path), "sdmc:/nvjpg-%03u.jpg", attempt);
                 fs::DeleteFile(path);
                 if (R_SUCCEEDED(fs::CreateFile(path, total))) {
                     fs::FileHandle f;
@@ -3221,6 +3227,64 @@ namespace ams::mitm::applet {
                         LogLine("   *** NVJPG ENCODED %u BYTES -> %s (%u B file) ***", scan_len, path, total);
                     }
                 }
+            };
+
+            /* ---- M74: the power-gating test ------------------------------
+             *
+             * M73 established that NVJPG fails exactly as NVENC does: channel
+             * real, submit accepted, engine never runs, cycles=0. Two engines,
+             * two unrelated configs, one with no version word to get wrong. So
+             * the blocker is not configuration.
+             *
+             * The one difference left between these engines and the VIC, which
+             * works for us, is that nvnflinger drives the VIC continuously. It
+             * is powered, clocked and initialised before we touch it. NVENC and
+             * NVJPG sit idle, and an idle Tegra engine is clock/power-gated - a
+             * gated engine behaves precisely like this.
+             *
+             * That is testable without guessing a single ioctl. The system uses
+             * NVJPG to encode screenshots. So: submit one well-formed job per
+             * second for a long window while the console's own software wakes
+             * the engine. If an attempt completes exactly when a screenshot is
+             * taken, gating is the answer and the fix is to find how nvservices
+             * ungates. If every attempt fails regardless, gating is ruled out
+             * and the cause is elsewhere.
+             *
+             * Either result is worth the run, which is the point. */
+            const u32 attempts = g_nvjpg_attempts;
+            LogLine("   ---- NVJPG POWER-GATING TEST (quality %u, %u attempts, ~1/s) ----",
+                    g_nvjpg_quality, attempts);
+            LogLine("   TAKE SCREENSHOTS NOW - press Capture repeatedly for the next ~%u seconds.", attempts);
+            LogLine("   The system encodes every screenshot with this engine; if one of our jobs");
+            LogLine("   completes in the same second, power gating is confirmed.");
+
+            u32 n_ok = 0, n_fail = 0, first_ok = 0;
+            for (u32 i = 0; i < attempts; ++i) {
+                u32 scan_len = 0, err = 0;
+                const bool ok = NvjpgOneAttempt(nvmap_fd, cmd_handle, dst_handle, L,
+                                                0 /* semi-planar, what the VIC makes */,
+                                                0 /* input_type: M73 showed 0,1,2 behave alike */,
+                                                std::addressof(scan_len), std::addressof(err));
+                if (ok) {
+                    if (n_ok == 0) { first_ok = i; }
+                    ++n_ok;
+                    wrap_and_save(scan_len, i);
+                    /* One success answers the question. Keep going a little so
+                     * the log shows whether it stays up or gates off again. */
+                    if (n_ok >= 3) { break; }
+                } else {
+                    ++n_fail;
+                }
+                os::SleepThread(TimeSpan::FromMilliSeconds(1000));
+            }
+
+            LogLine("   ---- GATING TEST RESULT: %u completed, %u failed%s ----",
+                    n_ok, n_fail,
+                    n_ok > 0 ? "  *** THE ENGINE CAN BE MADE TO RUN ***"
+                             : "  (no attempt ran - power gating is NOT the explanation)");
+            if (n_ok > 0) {
+                LogLine("   first success was attempt #%u - correlate that second with when "
+                        "a screenshot was taken", first_ok);
             }
             VicStage("jpg:done");
         }
