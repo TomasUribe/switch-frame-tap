@@ -1,0 +1,32 @@
+[    10.596] applet-mitm M72: up. GRC RECORDER - how does the system drive NVENC? (grc ARMED)
+[    10.774] arm file (sdmc:/applet-mitm.armed): vic=absent - observer only exec=PhaseA-noop-cmdbuf
+[    10.781] ---- physical memory pools (svcGetSystemInfo) ----
+[    10.788]    pool 0 Application  total= 3363840 KB  used=       0 KB  free=  3363840 KB   rc=0/0
+[    10.795]    pool 1 Applet       total=  512000 KB  used=    2312 KB  free=   509688 KB   rc=0/0
+[    10.805]    pool 2 System       total=  237728 KB  used=  222216 KB  free=    15512 KB   rc=0/0
+[    10.812]    pool 3 SystemUnsafe total=   45184 KB  used=   43180 KB  free=     2004 KB   rc=0/0
+[    10.819]    THIS PROCESS (pool_partition 1 = Applet, at boot): total=511936 KB used=2248 KB free=509688 KB
+[    10.826]    for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB
+[    10.833]    usb: not armed (add "usb" to the arm file)
+[    10.840] probe fires at t=120 s; frame dump to SD: off
+[    10.847] debug-capture route: off (add "dbg" to the arm file)   pmdmntInitialize rc=0x0
+[    10.896] -> main:heartbeat_started
+[    10.921] registered mitm server for vi:u
+[    10.964] -> main:LoopProcess
+[    13.890] -> hb:1 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    13.896]    nvdrv:s query #0 from 010000000000002d
+[    13.901]    nvdrv:s query #1 from 0100000000000023
+[    13.904]    nvdrv:s query #2 from 010000000000001c
+[    16.944] -> hb:2 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    21.255] -> hb:3 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    24.324] -> hb:4 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    27.355] -> hb:5 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    30.379] -> hb:6 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    36.485] -> hb:7 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    39.508] -> hb:8 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    42.528] -> hb:9 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    45.550] -> hb:10 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    48.568] -> hb:11 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    51.587] -> hb:12 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    54.611] -> hb:13 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    57.658] -> hb:14 sess=0 getdisp=0 relay=0 txn=0 vic=idle

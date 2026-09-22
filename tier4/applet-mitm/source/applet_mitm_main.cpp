@@ -16,6 +16,7 @@
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_nvdrv.hpp"
+#include "applet_mitm_nvjpg.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -73,7 +74,22 @@ namespace ams {
         constexpr size_t NvMaxSessions = 16;
         constexpr size_t NvThreads     = 4;
 
-        class NvServerManager final : public sf::hipc::ServerManager<NvPortIndex_Count, ServerOptions, NvMaxSessions> {
+        /* M72b: a mitm session's pointer buffer must be at least as large as the
+         * real service's (sf_hipc_server_session_manager.cpp:148 aborts
+         * otherwise). M72 reused vi:u's 0x1000, and the first grc session
+         * fataled the module the instant Mario Kart launched. nvservices'
+         * size is reported through QueryPointerBufferSize as a u16, so
+         * 0x10000 covers any value it can have. 16 sessions x 64 KB = 1 MB of
+         * .bss, from the Applet pool that had 509 MB free at boot. */
+        struct NvServerOptions {
+            static constexpr size_t PointerBufferSize   = 0x10000;
+            static constexpr size_t MaxDomains          = 0;
+            static constexpr size_t MaxDomainObjects    = 0;
+            static constexpr bool CanDeferInvokeRequest = false;
+            static constexpr bool CanManageMitmServers  = true;
+        };
+
+        class NvServerManager final : public sf::hipc::ServerManager<NvPortIndex_Count, NvServerOptions, NvMaxSessions> {
             private:
                 virtual Result OnNeedsToAccept(int port_index, Server *server) override;
         };
@@ -89,6 +105,16 @@ namespace ams {
          * this mitm in advance, so every nvdrv:s client in the system is waiting
          * on us until this returns. */
         void StartGrcRecorder() {
+            /* M73: opt-in. M72 registered this unconditionally, which meant
+             * every run carried the recorder's risk even when the run had
+             * nothing to do with grc. Without "grc" in the arm file nothing
+             * here is registered at all, so nvdrv:s is untouched. mitm.lst
+             * must also be absent, or boot2 blocks every nvdrv:s client
+             * waiting for a mitm that never registers. */
+            if (!mitm::applet::g_grc_armed) {
+                mitm::applet::LogLine("grc recorder: off (add \"grc\" to the arm file AND install mitm.lst)");
+                return;
+            }
             R_ABORT_UNLESS(g_nv_server_manager.RegisterMitmServer<mitm::applet::NvDrvMitm>(NvPortIndex_Nvdrv, NvdrvMitmServiceName));
             const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
             for (size_t i = 0; i < NvThreads; ++i) {
@@ -516,6 +542,11 @@ namespace ams {
             sm::MitmProcessInfo client_info;
             server->AcknowledgeMitmSession(std::addressof(fsrv), std::addressof(client_info));
             AMS_ABORT_UNLESS(port_index == NvPortIndex_Nvdrv);
+            /* logged BEFORE accepting, so a failure inside the accept still
+             * leaves the number that caused it on the SD card */
+            mitm::applet::LogLine("nvdrv:s accept program=%016llx forward pointer_buffer_size=%#x (ours %#zx)",
+                                  static_cast<unsigned long long>(client_info.program_id.value),
+                                  static_cast<unsigned>(fsrv->pointer_buffer_size), NvServerOptions::PointerBufferSize);
             R_RETURN(this->AcceptMitmImpl(server,
                 sf::CreateSharedObjectEmplaced<mitm::applet::INvDrvMitm, mitm::applet::NvDrvMitm>(decltype(fsrv)(fsrv), client_info),
                 fsrv));
@@ -561,7 +592,8 @@ namespace ams {
         mitm::applet::g_grc_armed = ArmFileContains("grc");
         StartGrcRecorder();
 
-        mitm::applet::LogLine("applet-mitm M72: up. GRC RECORDER - how does the system drive NVENC? (grc %s)",
+        mitm::applet::LogLine("applet-mitm M73: up. NVJPG - hardware JPEG, the compression path (jpg=%s grc=%s)",
+                              mitm::applet::g_nvjpg_armed ? "ARMED" : "off",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -571,6 +603,8 @@ namespace ams {
         g_usb_armed                 = ArmFileContains("usb");
         mitm::applet::g_bench_armed   = ArmFileContains("bench");
         mitm::applet::g_nvenc_armed   = ArmFileContains("nvenc");
+        mitm::applet::g_nvjpg_armed   = ArmFileContains("jpg");
+        mitm::applet::g_nvjpg_quality = ArmFileNumber("q", 85);
         mitm::applet::g_sweep_armed   = ArmFileContains("sweep");
         mitm::applet::g_matrix_armed  = ArmFileContains("mtx");
         mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);

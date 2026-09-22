@@ -1,0 +1,36 @@
+[    10.345] applet-mitm M72: up. GRC RECORDER - how does the system drive NVENC? (grc ARMED)
+[    10.500] arm file (sdmc:/applet-mitm.armed): vic=absent - observer only exec=PhaseA-noop-cmdbuf
+[    10.521] ---- physical memory pools (svcGetSystemInfo) ----
+[    10.525]    pool 0 Application  total= 3363840 KB  used=       0 KB  free=  3363840 KB   rc=0/0
+[    10.536]    pool 1 Applet       total=  512000 KB  used=    3272 KB  free=   508728 KB   rc=0/0
+[    10.578]    pool 2 System       total=  237728 KB  used=  221704 KB  free=    16024 KB   rc=0/0
+[    10.604]    pool 3 SystemUnsafe total=   45184 KB  used=   43180 KB  free=     2004 KB   rc=0/0
+[    10.632]    THIS PROCESS (pool_partition 1 = Applet, at boot): total=511936 KB used=3208 KB free=508728 KB
+[    10.637]    for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB
+[    10.646]    usb: not armed (add "usb" to the arm file)
+[    10.659] probe fires at t=120 s; frame dump to SD: off
+[    10.663] debug-capture route: off (add "dbg" to the arm file)   pmdmntInitialize rc=0x0
+[    10.721] -> main:heartbeat_started
+[    10.735] registered mitm server for vi:u
+[    10.759] -> main:LoopProcess
+[    13.723] -> hb:1 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    13.729]    nvdrv:s query #0 from 010000000000002d
+[    13.732]    nvdrv:s query #1 from 0100000000000023
+[    13.736]    nvdrv:s query #2 from 010000000000001c
+[    16.772] -> hb:2 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    20.286] -> hb:3 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    23.343] -> hb:4 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    26.379] -> hb:5 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    29.429] -> hb:6 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    30.370] nvdrv:s accept program=0100000000000035 forward pointer_buffer_size=0x8000 (ours 0x10000)
+[    31.085] OnNeedsToAccept port=0 program=0100152000022000
+[    31.097]   AcceptMitmImpl rc=0x0
+[    31.125] -> GetDisplayService:enter
+[    31.132]    program=0100152000022000 mode=0
+[    31.158] -> GetDisplayService:done
+[    31.197] -> GetRelayService:enter
+[    31.228] -> GetRelayService:wrapped
+[    31.256] -> indirect:probe
+[    31.263]    2460 RequiredMemoryInfo(1280x720) rc=0x0 -> size=3801088 align=4096
+[    31.270]    102 GetManagerDisplayService rc=0xa72 -> denied on a vi:u session
+[    31.295] -> indirect:probe_done

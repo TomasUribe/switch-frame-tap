@@ -32,6 +32,8 @@
 #include "applet_mitm_log.hpp"
 #include "vic40_config.hpp"
 #include "nvenc_drv_h264.h"
+#include "applet_mitm_nvjpg.hpp"
+#include "nvjpg_drv.h"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -804,6 +806,7 @@ namespace ams::mitm::applet {
          * thing left unknown. */
         void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle);
         void TryNvencProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
+        void TryNvjpgProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
 
 
 
@@ -1314,6 +1317,7 @@ namespace ams::mitm::applet {
         TryDebugCapture(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, dst_addr);
         TryNvencPhaseA(nvmap_fd, cmd_handle);
         if (g_nvenc_armed) { TryNvencProbe(nvmap_fd, cmd_handle, dst_handle); }
+        if (g_nvjpg_armed) { TryNvjpgProbe(nvmap_fd, cmd_handle, dst_handle); }
 
     close_vic:
         if (cfg_addr != 0) { UnmapCmdBuffer(vfd, cfg_handle); }
@@ -3038,6 +3042,187 @@ namespace ams::mitm::applet {
             UnmapCmdBuffer(efd, dst_handle);
             NvClose(efd);
             VicStage("nvp:done");
+        }
+
+
+        /* ---- M73: NVJPG, the hardware JPEG encoder -----------------------
+         *
+         * The compression path. See applet_mitm_nvjpg.cpp for why this engine
+         * rather than NVENC.
+         *
+         * Every attempt gets a FRESH CHANNEL. That is the fix for the flaw
+         * that invalidated M71: one channel shared across attempts means the
+         * first job to hang the engine stalls every later job identically, so
+         * nothing after the first is informative. Open, submit, wait, close.
+         *
+         * input_type is not documented in NVIDIA's public header, so it is
+         * swept rather than guessed. memory_mode 0 is semi-planar, which is
+         * what the VIC already produces. */
+        bool NvjpgOneAttempt(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle,
+                             const NvjpgLayout &L, u32 memory_mode, u32 input_type,
+                             u32 *out_scan_len, u32 *out_err) {
+            *out_scan_len = 0; *out_err = 0xFFFFFFFFu;
+
+            u32 jfd = 0, nverr = 0;
+            if (R_FAILED(NvOpen("/dev/nvhost-nvjpg", std::addressof(jfd), std::addressof(nverr))) || nverr != 0) {
+                LogLine("   nvjpg: /dev/nvhost-nvjpg open FAILED nverr=%u", nverr);
+                return false;
+            }
+
+            u32 syncpt = 0;
+            {
+                struct { u32 module_id; u32 syncpt; } gs = { 0, 0 };
+                nverr = 0;
+                NvIoctl(jfd, NvHostIocChannelGetSyncpoint, std::addressof(gs), sizeof(gs), std::addressof(nverr));
+                syncpt = gs.syncpt;
+            }
+            { struct { u32 fd; } sn = { nvmap_fd }; nverr = 0;
+              NvIoctl(jfd, NvHostIocChannelSetNvmapFd, std::addressof(sn), sizeof(sn), std::addressof(nverr)); }
+            { struct { u32 ms; } to = { 1000 }; nverr = 0;
+              NvIoctl(jfd, NvHostIocChannelSetSubmitTo, std::addressof(to), sizeof(to), std::addressof(nverr)); }
+
+            u32 buf_addr = 0, cmd_addr = 0;
+            MapCmdBuffer(jfd, dst_handle, std::addressof(buf_addr), "nvjpg-buf", 0);
+            MapCmdBuffer(jfd, cmd_handle, std::addressof(cmd_addr), "nvjpg-cmd", 0);
+            if (buf_addr == 0) {
+                LogLine("   nvjpg: buffer pin failed - refusing to submit");
+                NvClose(jfd);
+                return false;
+            }
+
+            NvjpgFillParams(g_vic_dst_buf, L, memory_mode, input_type);
+            std::memset(g_vic_dst_buf + L.status_off, 0, sizeof(nvjpg_enc_status));
+            std::memset(g_vic_dst_buf + L.bits_off, 0, 0x1000);
+            armDCacheFlush(g_vic_dst_buf, VicDstSize);
+
+            auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
+            u32 n = NvjpgBuildCmdbuf(w,
+                                     buf_addr + L.param_off,
+                                     buf_addr + L.status_off,
+                                     buf_addr + L.bits_off,
+                                     buf_addr + L.luma_off,
+                                     buf_addr + L.chroma_off,
+                                     0);
+            n = AppendIncrSyncpt(w, n, syncpt, true);
+            armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
+
+            alignas(8) u8 sb[16 + 12 + 20 + 4] = {};
+            u32 off = 0;
+            auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
+            put(1); put(0); put(1); put(1);
+            put(cmd_handle); put(0); put(n);
+            put(syncpt); put(1); put(0); put(0); put(0);
+            const u32 fence_off = off; put(0);
+            const u32 sz = off;
+            const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
+            u32 fence_val = 0; nverr = 0;
+            const auto rc = NvIoctl(jfd, req, sb, sz, std::addressof(nverr));
+            std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
+
+            bool done = false;
+            u32 seen = 0;
+            if (R_SUCCEEDED(rc) && nverr == 0) {
+                const u32 cfd = CtrlFd();
+                if (cfd != 0) {
+                    struct { u32 id; u32 thresh; u32 timeout; } a = { syncpt, fence_val, 300 };
+                    u32 we = 0;
+                    NvIoctl(cfd, NvHostIocCtrlSyncptWait, std::addressof(a), sizeof(a), std::addressof(we));
+                    struct { u32 id; u32 value; } r = { syncpt, 0 };
+                    for (u32 spin = 0; spin < 400 && !done; ++spin) {
+                        u32 e2 = 0; r.value = 0;
+                        NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
+                        seen = r.value;
+                        done = (seen >= fence_val);
+                        if (!done) { os::SleepThread(TimeSpan::FromMicroSeconds(200)); }
+                    }
+                }
+            }
+            armDCacheFlush(g_vic_dst_buf, VicDstSize);
+
+            const auto *st = reinterpret_cast<const nvjpg_enc_status *>(g_vic_dst_buf + L.status_off);
+            *out_err      = st->error_status;
+            *out_scan_len = st->bitstream_size;
+
+            LogLine("   nvjpg mem_mode=%u input_type=%u words=%u rc=0x%x nverr=%u fence %u/%u %s"
+                    "  err=%u bytes=%u mcu=%ux%u cycles=%u",
+                    memory_mode, input_type, n, rc, nverr, seen, fence_val,
+                    done ? "REACHED" : "STALLED",
+                    st->error_status, st->bitstream_size, st->mcu_x, st->mcu_y, st->cycle_count);
+
+            UnmapCmdBuffer(jfd, dst_handle);
+            NvClose(jfd);
+            return done && st->error_status == 0 && st->bitstream_size > 0;
+        }
+
+        void TryNvjpgProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle) {
+            VicStage("jpg:1");
+            LogLine("   ---- NVJPG ENCODE PROBE (quality %u) ----", g_nvjpg_quality);
+
+            NvjpgLayout L = {};
+            L.param_off  = 0x000000;
+            L.status_off = 0x002000;
+            L.bits_off   = 0x003000;
+            L.bits_size  = 0x080000;
+            L.luma_off   = 0x090000;
+            L.w = 1280; L.h = 720;
+            L.chroma_off = L.luma_off + L.w * L.h;
+            L.quality    = g_nvjpg_quality;
+            static_assert(0x090000 + 1280 * 720 * 3 / 2 <= VicDstSize, "nvjpg probe surfaces must fit");
+
+            /* A gradient with a hard edge: compresses to something obviously
+             * non-trivial, and any plane mix-up is visible at a glance. */
+            for (u32 y = 0; y < L.h; ++y) {
+                u8 *row = g_vic_dst_buf + L.luma_off + y * L.w;
+                for (u32 x = 0; x < L.w; ++x) {
+                    row[x] = static_cast<u8>(((x * 255) / L.w) ^ ((y < L.h / 2) ? 0 : 0xFF));
+                }
+            }
+            for (u32 y = 0; y < L.h / 2; ++y) {
+                u8 *row = g_vic_dst_buf + L.chroma_off + y * L.w;
+                for (u32 x = 0; x < L.w / 2; ++x) {
+                    row[2 * x + 0] = static_cast<u8>((x * 255) / (L.w / 2));   /* U */
+                    row[2 * x + 1] = static_cast<u8>((y * 255) / (L.h / 2));   /* V */
+                }
+            }
+
+            struct Case { u32 mem_mode, input_type; };
+            const Case cases[] = { { 0, 0 }, { 0, 1 }, { 0, 2 }, { 1, 0 } };
+
+            for (u32 i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+                u32 scan_len = 0, err = 0;
+                const bool ok = NvjpgOneAttempt(nvmap_fd, cmd_handle, dst_handle, L,
+                                                cases[i].mem_mode, cases[i].input_type,
+                                                std::addressof(scan_len), std::addressof(err));
+                if (!ok) { continue; }
+
+                if (scan_len > L.bits_size) {
+                    LogLine("   nvjpg: reported %u bytes > %u buffer - not trusting it", scan_len, L.bits_size);
+                    continue;
+                }
+                /* Wrap into a viewable file. Headers go just below the scan so
+                 * nothing has to move: the container is written into the
+                 * staging area past the surfaces. */
+                u8 *out = g_vic_dst_buf + L.chroma_off + L.w * L.h / 2;
+                const u32 avail = VicDstSize - static_cast<u32>(out - g_vic_dst_buf);
+                if (scan_len + 0x400 > avail) {
+                    LogLine("   nvjpg: no room to wrap the container (%u needed, %u free)", scan_len + 0x400, avail);
+                    continue;
+                }
+                const u32 total = NvjpgWriteContainer(out, L.w, L.h, L.quality,
+                                                      g_vic_dst_buf + L.bits_off, scan_len);
+                char path[64];
+                std::snprintf(path, sizeof(path), "sdmc:/nvjpg-probe-%u%u.jpg", cases[i].mem_mode, cases[i].input_type);
+                fs::DeleteFile(path);
+                if (R_SUCCEEDED(fs::CreateFile(path, total))) {
+                    fs::FileHandle f;
+                    if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Write))) {
+                        static_cast<void>(fs::WriteFile(f, 0, out, total, fs::WriteOption::Flush));
+                        fs::CloseFile(f);
+                        LogLine("   *** NVJPG ENCODED %u BYTES -> %s (%u B file) ***", scan_len, path, total);
+                    }
+                }
+            }
+            VicStage("jpg:done");
         }
 
         void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle) {

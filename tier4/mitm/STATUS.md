@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 71 hardware test cycles. Current build: **M72** (built, not yet run).
+`0100000000000C20`. 71 hardware test cycles. Current build: **M73**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,6 +88,83 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M73: NVJPG fails identically to NVENC - the blocker is not the config ***
+
+The compression path needs a hardware encoder. NVENC had resisted four probes
+with its cause still unisolated, so M73 switched engines rather than keep
+guessing at a 512-byte bitfield struct. NVJPG is a much smaller target for the
+same job: ~10 methods against NVENC's 39-word job, no reference pictures, no IO
+history, and **no magic/version word at all** - which removes the entire
+ambiguity that stalled M68-M71. JPEG is also all-intra by construction, so it is
+the lowest-latency compression available, and 1080p60 at quality 85 is roughly
+12-24 MB/s against the measured 37 MB/s link.
+
+### The result
+
+```
+nvjpg mem_mode=0 input_type=0 words=33 rc=0x0 nverr=0 fence 0/1 STALLED err=0 bytes=0 mcu=0x0 cycles=0
+nvjpg mem_mode=0 input_type=1 words=33 rc=0x0 nverr=0 fence 1/2 STALLED err=0 bytes=0 mcu=0x0 cycles=0
+nvjpg mem_mode=0 input_type=2 words=33 rc=0x0 nverr=0 fence 2/3 STALLED err=0 bytes=0 mcu=0x0 cycles=0
+```
+
+**Identical to NVENC in every respect**: submit accepted (`rc=0 nverr=0`), a
+fence issued, the engine never completes, and the status buffer never written
+(`cycles=0` is decisive - the engine did not burn a single cycle).
+
+Each attempt used a **fresh channel**, which is the fix for the flaw that
+invalidated M71. So this is not one hung job poisoning the rest.
+
+### What this establishes, and what it kills
+
+Two completely different engines, with completely different configuration
+structures, one of which has no version word to get wrong, fail the same way.
+**The blocker is not our NVENC configuration.** Everything from M68 to M71 that
+treated it as a config problem was looking in the wrong place.
+
+Note the fence column: 0/1, then 1/2, then 2/3. The syncpoint advances by
+exactly one between attempts, never during them. That is consistent with
+nvhost force-incrementing on channel teardown to release waiters, not with the
+engine completing late.
+
+### The remaining difference between VIC and these engines
+
+Our VIC jobs complete reliably. VIC, NVENC and NVJPG all take the same host1x
+submit path, and all three classes even declare the same `CTX_SAVE_AREA` /
+`CTX_SWITCH` methods, which we set for none of them. So that is not the
+difference.
+
+What *is* different: **nvnflinger drives the VIC continuously.** It is powered,
+clocked, firmware-booted and context-initialised by the compositor before we
+ever touch it. NVENC and NVJPG sit idle, and an idle engine on Tegra is
+clock/power-gated. A gated engine would behave exactly like this: the channel is
+real, the syncpoint allocates, the submit is accepted, and nothing executes.
+
+This is a hypothesis, not a finding. It has not been tested.
+
+### Two bugs of mine in this run
+
+- **The display wedged on the fourth attempt.** That case was `memory_mode=1`
+  (planar) while `chroma_v_addr` stayed 0, so `SET_CUR_PIC_CHROMA_V` was never
+  emitted - a planar encode with no V plane. M27's lesson was that a zero
+  address does not fail politely on the VIC; it applies to every engine, and I
+  did not apply it. The console needed a forced power-off. No fatal report was
+  written, so the module hung rather than aborting.
+- `SET_SUBMIT_TIMEOUT` was set to 1000 ms, so every stalled attempt ended in a
+  channel abort. Repeated engine resets are a plausible contributor to the
+  compositor corruption and should not be used while probing.
+
+### What did work
+
+The JPEG container and tables were verified on the PC *before* the run, which
+is why the run cost nothing extra to diagnose:
+
+- Wrapping libjpeg's own scan data in our headers decodes **pixel-identical**
+  (max abs diff 0). That validates the quantisation tables, the quality scaling,
+  zigzag order, DHT segments and marker structure together.
+- The Huffman codes we hand the engine match the canonical standard values, and
+  the AC symbol-to-index mapping is collision-free across all 176 entries.
+
+So the moment any engine executes, the output is a correct, viewable JPEG.
 ## *** M72: the grc recorder - copy the one client that works (built, not yet run) ***
 
 ### First, M71 was over-read
