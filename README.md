@@ -313,14 +313,45 @@ so the split is exact: **host1x accepts and retires the full job, and the engine
 never signals completion.** L3/L4 carried a complete H.264 all-intra IDR setup
 at 256x128 — populated SPS/PPS/RC/pic_control, slice + ME + MD + quant control
 blocks at their offsets, and every surface the firmware can dereference. The
-bitstream came back all zeros, which kills "the engine is stalling for want of
-surfaces".
+bitstream came back all zeros.
 
-What is left is that the Falcon microcode is not booted: a live channel, a live
-host1x path, and nothing running behind it. `SET_UCODE_STATE` (0x50C) is unused.
-**If you have driven Tegra NVENC from userspace on either Horizon or L4T, how
-the firmware gets booted is the open question** — and it is the whole difference
-between 800x450 and native resolution.
+**What that does and does not prove — corrected after M71.** It was first
+written up as ruling out the "missing surfaces" theory and leaving "the Falcon
+firmware is not booted" as the only explanation. That over-reads it. In every
+run, the first job carrying `EXECUTE` is the only one that tells us anything:
+if its config hangs the engine, every later job queues behind the hang and
+stalls identically. (The same thing explains why an invalid magic behaved
+exactly like the real ones in M69.) What is actually established is narrower:
+**the engine never completed the first job we gave it.** "Firmware not
+running" and "our config hangs it" look the same from here.
+
+And the firmware theory has a fact against it: grc, the system's own game
+recorder — the thing SysDVR reads from — drives this same engine on this same
+firmware, so on a running console the ucode is very probably loaded.
+
+### M72: record grc instead of guessing
+
+So instead of reverse-engineering a 512-byte config struct blind, M72 records
+the one client known to drive NVENC successfully. It is a **logging-only mitm on
+`nvdrv:s`, accepted for grc (`0100000000000035`) and nobody else**. It records
+grc's device opens and its encoder and buffer-allocation ioctls; on grc's first
+encoder submits it attaches with the debug SVCs, reads the command-buffer words
+and the `drv_pic_setup` they point at out of grc's memory, and writes all of it
+to `sdmc:/nvenc-grc.bin`. Every request is still forwarded unchanged.
+
+- `mitm.lst` in the contents directory makes boot2 declare the mitm in advance,
+  so grc's first session waits for us rather than racing past.
+- It runs on its own server and threads, separate from `vi:u`, so a grc call
+  blocked inside nvservices can never stall the game's picture.
+- [`tools/nvrec.py`](tools/nvrec.py) decodes the record stream and names every
+  method in the command buffers from NVIDIA's `clc5b7.h`;
+  [`tools/nvsetup-dump.c`](tools/nvsetup-dump.c) decodes the captured
+  `drv_pic_setup` with NVIDIA's own header, so the bitfield layout is exact.
+
+Replaying grc's job from our module and diffing field by field against ours is
+the next step. **If you have driven Tegra NVENC from userspace on Horizon or
+L4T, a pointer is still very welcome** — it is the whole difference between
+800x450 and native resolution.
 
 ### Two constraints worth knowing
 
@@ -354,8 +385,11 @@ version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
 | **End-to-end stream** | **done, on hardware** — **768x432 at 59.6 fps**, 3600 frames, 0 stale; user-confirmed playable |
 | VIC scale + packed 4:2:0 in the stream path | **done, on hardware** — 2.1 ms/frame, 1.5 B/px, no codec |
 | Native resolution at 60 fps | **blocked on bandwidth, now measured.** The link saturates at ~37 MB/s, capping 60 fps at ~800x450. Raw 1080p60 needs 186.6 MB/s |
-| NVENC H.264 encode | **channel proven, engine silent.** host1x retires a full 39-word job with every surface populated; the OP_DONE increment never fires. Falcon firmware boot is the remaining suspect |
+| NVENC H.264 encode | **channel proven, engine silent.** host1x retires a full 39-word job with every surface populated; the engine never completes it. Cause not isolated — see [M72](#m72-record-grc-instead-of-guessing) |
+| **Compressed stream over USB 2.0** — the main goal | **in progress.** The link carries ~290 Mbps; H.264 1080p60 is visually lossless at 100–150 Mbps even all-intra, so bitrate has 2–3x headroom and the tuning target is quality and latency, not size. Waiting on NVENC |
+| grc recorder (M72) — capture how the system drives NVENC | **built, not yet run on hardware** |
 | USB 3.0 SuperSpeed | descriptors **and BOS** accepted, link still negotiates High. Device side now matches haze exactly; the cable is the one untested variable |
+| **USB 3.0 lossless mode** — future option | planned. Once SuperSpeed trains, stream uncompressed. Real YUV 4:2:0 1080p60 is 186.6 MB/s, comfortably inside a USB 3.0 Gen 1 link, and visually lossless. Strictly lossless RGB is 373 MB/s, at the edge of Gen 1 |
 | Capture the home menu and system overlays | wanted, and not possible through any route found so far |
 
 Capture is no longer the gate — **bandwidth is**, and the figure is now measured

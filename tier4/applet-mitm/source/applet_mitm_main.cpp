@@ -15,6 +15,7 @@
 #include "applet_mitm_service.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_nv.hpp"
+#include "applet_mitm_nvdrv.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -57,6 +58,47 @@ namespace ams {
 
         ServerManager g_server_manager;
 
+        /* ---- M72: the grc recorder's own server --------------------------
+         * Separate from vi:u on purpose. Anything forwarded for grc can block
+         * inside nvservices - a syncpoint wait, an event wait - and on a shared
+         * LoopProcess thread that would stall the game's binder traffic, i.e.
+         * freeze the picture. Here a blocked grc call ties up one of four
+         * threads that serve grc and nobody else. */
+        enum NvPortIndex {
+            NvPortIndex_Nvdrv,
+            NvPortIndex_Count,
+        };
+
+        constexpr sm::ServiceName NvdrvMitmServiceName = sm::ServiceName::Encode("nvdrv:s");
+        constexpr size_t NvMaxSessions = 16;
+        constexpr size_t NvThreads     = 4;
+
+        class NvServerManager final : public sf::hipc::ServerManager<NvPortIndex_Count, ServerOptions, NvMaxSessions> {
+            private:
+                virtual Result OnNeedsToAccept(int port_index, Server *server) override;
+        };
+
+        NvServerManager g_nv_server_manager;
+
+        alignas(os::ThreadStackAlignment) constinit u8 g_nv_stacks[NvThreads][32_KB];
+        constinit os::ThreadType g_nv_threads[NvThreads];
+
+        void NvLoopThread(void *) { g_nv_server_manager.LoopProcess(); }
+
+        /* Registered before anything else in main: mitm.lst has boot2 declare
+         * this mitm in advance, so every nvdrv:s client in the system is waiting
+         * on us until this returns. */
+        void StartGrcRecorder() {
+            R_ABORT_UNLESS(g_nv_server_manager.RegisterMitmServer<mitm::applet::NvDrvMitm>(NvPortIndex_Nvdrv, NvdrvMitmServiceName));
+            const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
+            for (size_t i = 0; i < NvThreads; ++i) {
+                R_ABORT_UNLESS(os::CreateThread(std::addressof(g_nv_threads[i]), NvLoopThread, nullptr,
+                                                g_nv_stacks[i], sizeof(g_nv_stacks[i]), prio));
+                os::SetThreadNamePointer(std::addressof(g_nv_threads[i]), "applet-mitm.NvDrv");
+                os::StartThread(std::addressof(g_nv_threads[i]));
+            }
+        }
+
         /* ---- liveness heartbeat -------------------------------------------
          * Two runs in a row went silent after "registered mitm server", with
          * the system wedging on vi. That is ambiguous: the process may have
@@ -80,6 +122,7 @@ namespace ams {
                               st.relay.load(), st.txns.load(),
                               mitm::applet::g_vic_stage.load(std::memory_order_relaxed));
                 mitm::applet::LogMark(b);
+                mitm::applet::FlushNvdrvRecords();
             }
         }
 
@@ -468,6 +511,16 @@ namespace ams {
             }
         }
 
+        Result NvServerManager::OnNeedsToAccept(int port_index, Server *server) {
+            std::shared_ptr<::Service> fsrv;
+            sm::MitmProcessInfo client_info;
+            server->AcknowledgeMitmSession(std::addressof(fsrv), std::addressof(client_info));
+            AMS_ABORT_UNLESS(port_index == NvPortIndex_Nvdrv);
+            R_RETURN(this->AcceptMitmImpl(server,
+                sf::CreateSharedObjectEmplaced<mitm::applet::INvDrvMitm, mitm::applet::NvDrvMitm>(decltype(fsrv)(fsrv), client_info),
+                fsrv));
+        }
+
     }
 
     namespace init {
@@ -500,7 +553,16 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
-        mitm::applet::LogLine("applet-mitm M70: up. RESOLUTION SWEEP - where does USB actually run out?");
+
+        /* M72: first thing, before any other work. With mitm.lst present every
+         * nvdrv:s client - vi among them - is blocked until this registers. The
+         * arm file is read here only for the one flag ShouldMitm needs; without
+         * "grc" we still register (mitm.lst obliges us to) but accept nobody. */
+        mitm::applet::g_grc_armed = ArmFileContains("grc");
+        StartGrcRecorder();
+
+        mitm::applet::LogLine("applet-mitm M72: up. GRC RECORDER - how does the system drive NVENC? (grc %s)",
+                              mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
         mitm::applet::g_vic_execute = ArmFileContains("exec");

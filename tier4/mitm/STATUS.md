@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 47 hardware test cycles. Current build: **M71**.
+`0100000000000C20`. 71 hardware test cycles. Current build: **M72** (built, not yet run).
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,6 +88,65 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M72: the grc recorder - copy the one client that works (built, not yet run) ***
+
+### First, M71 was over-read
+
+M71 wrote up the ladder as killing the "missing surfaces" hypothesis and
+leaving "Falcon firmware not booted" as the only survivor. That does not
+follow. In every run the **first job carrying EXECUTE is the only informative
+one**: if its config hangs the engine, every later job queues behind the hang
+and stalls identically. That is also the better explanation of M69, where a
+deliberately invalid magic behaved exactly like the real ones: the first
+submit hung the engine and the other four never had a chance.
+
+What is actually established: **the engine never completed the first job we
+gave it.** "Firmware not running" and "our config hangs it" are
+indistinguishable from where we have been measuring. And the firmware theory
+has a fact against it: grc (`0100000000000035`), the system game recorder that
+SysDVR reads from, drives this same engine on this same firmware.
+
+### The design
+
+Stop guessing at a 512-byte bitfield struct and record the client that works.
+
+- **Logging-only mitm on `nvdrv:s`**, `ShouldMitm` true for grc only and only
+  when the arm file contains `grc`. Every request is forwarded unchanged.
+- **`mitm.lst`** (`nvdrv:s`) in the contents directory: boot2's
+  `DetectAndDeclareFutureMitms` declares it before launching anything, so grc's
+  first session waits for us instead of racing past. Price: every `nvdrv:s`
+  client, vi included, waits until we register, so registration is the first
+  thing `main` does after `LogInit`. We use `nvdrv:t` ourselves, so there is no
+  self-deadlock.
+- **Own ServerManager, four LoopProcess threads**, separate from `vi:u`. A grc
+  call blocked in nvservices (a syncpoint wait) ties up one grc thread and can
+  never stall the game's binder traffic.
+- Explicitly forwarded (so the reply is visible): `Open` (fd to path), every
+  msenc ioctl, nvmap `CREATE` (handle to size) and `ALLOC` (handle to grc VA).
+  Everything else goes back with `ResultShouldForwardToSession`, i.e. native
+  forwarding. `Ioctl2`/`Ioctl3` are recorded on msenc fds and forwarded natively.
+- **On each of the first 8 msenc submits**: attach to grc
+  (`DebugActiveProcess`, drain, `ContinueDebugEvent`), read each cmdbuf via
+  handle to VA, replay the host1x register writes to find method 0x710
+  (`SET_IN_DRV_PIC_SETUP`), translate that IOVA through the recorded
+  `MAP_CMD_BUFFER` results to a grc VA, and read 0x1000 bytes of setup. Detach
+  by closing the handle. grc is blocked in our handler throughout.
+- Records go to a 256 KB RAM buffer; the heartbeat thread appends them to
+  `sdmc:/nvenc-grc.bin` every 3 s, so the IPC path never touches the SD card.
+- Decoding: `tools/nvrec.py` (timeline, every method named from `clc5b7.h`)
+  and `tools/nvsetup-dump.c` (the setup struct, via NVIDIA's own header; the
+  size asserts pass on x86-64). Both smoke-tested on a synthetic record file.
+
+### Risks, stated before the run
+
+- `Ioctl2`/`Ioctl3` buffer layouts are taken from libnx's `nvIoctl2`/`nvIoctl3`
+  (In,In,Out and In,Out,Out). If grc uses a different shape, sf rejects the
+  request, grc gets an error, and a Nintendo sysmodule may abort on it, i.e. a
+  fatal naming grc. Recoverable, and informative.
+- If the module dies before registering, every `nvdrv:s` client waits forever:
+  a boot that never reaches the home menu. Recovery as always: delete
+  `atmosphere/contents/0100000000000C20/` from a PC.
+
 ## *** M71: the NVENC ladder answers it - the engine never completes ***
 
 M69's magic sweep taught nothing because every case, including a deliberately
@@ -114,7 +173,13 @@ L3 retires; L4 never fires. So:
   methods and the full job are all accepted and retired.
 - The engine receives fully-formed work and **never signals OP_DONE**.
 
-### Two of the three M68 hypotheses are now dead
+### Two of the three M68 hypotheses are now dead - **OVER-READ, CORRECTED IN M72**
+
+> The conclusions below do not follow from the ladder. The first job carrying
+> EXECUTE is the only informative one in any run; if its config hangs the
+> engine, every later job stalls behind it identically. All that is
+> established is that the engine never completed the first job it was given.
+> See M72.
 
 L3/L4 carried a complete H.264 all-intra IDR setup at 256x128 - populated
 sps/pps/rc/pic_control, slice+ME+MD+quant control blocks at their offsets, and

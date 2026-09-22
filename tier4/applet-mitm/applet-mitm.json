@@ -29,7 +29,8 @@
         "usb:ds"
     ],
     "service_host": [
-        "vi:u"
+        "vi:u",
+        "nvdrv:s"
     ],
     "kernel_capabilities": [
         {
