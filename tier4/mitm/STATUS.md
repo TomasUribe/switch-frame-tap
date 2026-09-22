@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 71 hardware test cycles. Current build: **M74**.
+`0100000000000C20`. 71 hardware test cycles. Current build: **M75**.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,6 +88,70 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M75: the observer never ran - a substring match re-armed the broken interceptor ***
+
+M75 was meant to be the safe route: attach to grc, read its memory, detach.
+No channel, no cmdbuf, no engine contact - the same mechanism already used on
+the game's framebuffer at 60 fps without incident. The arm file was
+`vic grcscan wait=90`.
+
+The console would not launch a game, and needed a fourth forced power-off.
+
+### The cause, from the log alone
+
+```
+[10.715] applet-mitm ... (jpg=off grc=ARMED)      <- believed off
+[44.644] hb:11 ... vic=waiting                    <- last heartbeat
+[45.407] nvdrv:s accept program=0100000000000035  <- the M72 interceptor, live
+[46.285] indirect:probe_done                      <- last line of any kind
+```
+
+`ArmFileContains` was `strstr`. **"vic grcscan wait=90" contains "grc"**, so
+`g_grc_armed` came up true and the M72 nvdrv:s IPC interceptor registered - the
+one whose `Open` handler was already known to be broken from M72b's fatal. grc's
+session was accepted at 45.4 s, grc called `Open`, the handler died, and the
+game launch blocked behind grc. The observer's own first log line never appears
+because the process was gone before it was reached.
+
+**So the observer has still never been tested.** M75 re-ran M72's known bug by
+accident, and the run says nothing whatever about reading grc's memory.
+
+### What this changes about M72-M74
+
+Nothing about their conclusions - those runs armed `grc` deliberately, or not at
+all, and their evidence stands. But it does change the count: of the four forced
+power-offs, **three were engine teardown and one was this**, and they are
+unrelated faults. Lumping them together as "probing engines is dangerous" would
+have been wrong.
+
+### The fix
+
+Whole-token matching, split on whitespace, with `key=value` matching on `key`.
+Verified on the host against 18 cases including the exact failure
+(`"vic grcscan wait=90"` + `"grc"` -> false) before going anywhere near the
+console.
+
+Any flag that is a prefix of another was a trap for the old parser: `grc` and
+`grcscan`, `q` and `qN`, `jpg` and `jpgN`. The class is now closed rather than
+the one instance patched.
+
+Two guards added alongside, because a silent mis-arm is what made this expensive:
+
+- **Every flag is dumped at boot**, by name and value, on one line. A mismatch
+  between what was intended and what was parsed is now visible in the first
+  second of the log instead of inferred from a hang.
+- **The grc IPC interceptor refuses to register without `mitm.lst`.** boot2 only
+  declares a future mitm for services listed there, so registering late is
+  incoherent - and the failure mode is a console that will not launch a game.
+
+### The lesson worth keeping
+
+Four of the last five runs failed on something other than the hypothesis being
+tested. Three on engine teardown, one on argument parsing. The hypotheses were
+sound; the delivery kept failing. A probe that cannot be trusted to run only the
+thing it claims to run is not a cheap experiment, it is an expensive one - and
+the boot-time flag dump exists so that the next run proves what it armed before
+it does anything else.
 ## *** M74: one failed submit is enough to wedge the compositor ***
 
 M73 left one hypothesis standing: NVENC and NVJPG sit idle and are therefore

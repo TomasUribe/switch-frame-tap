@@ -1,0 +1,39 @@
+[    10.715] applet-mitm M73: up. NVJPG - hardware JPEG, the compression path (jpg=off grc=ARMED)
+[    10.792] arm file (sdmc:/applet-mitm.armed): vic=ARMED exec=PhaseA-noop-cmdbuf
+[    10.800] ---- physical memory pools (svcGetSystemInfo) ----
+[    10.813]    pool 0 Application  total= 3363840 KB  used=       0 KB  free=  3363840 KB   rc=0/0
+[    10.844]    pool 1 Applet       total=  512000 KB  used=    3284 KB  free=   508716 KB   rc=0/0
+[    10.852]    pool 2 System       total=  237728 KB  used=  221720 KB  free=    16008 KB   rc=0/0
+[    10.863]    pool 3 SystemUnsafe total=   45184 KB  used=   43180 KB  free=     2004 KB   rc=0/0
+[    10.895]    THIS PROCESS (pool_partition 1 = Applet, at boot): total=511936 KB used=3220 KB free=508716 KB
+[    10.906]    for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB
+[    10.924]    usb: not armed (add "usb" to the arm file)
+[    10.948] probe fires at t=90 s; frame dump to SD: off
+[    10.965] debug-capture route: off (add "dbg" to the arm file)   pmdmntInitialize rc=0x0
+[    10.991] -> main:heartbeat_started
+[    11.007] VIC worker started (execute=PhaseA-noop-cmdbuf)
+[    11.044] registered mitm server for vi:u
+[    11.075] -> main:LoopProcess
+[    13.999] -> hb:1 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    17.035] -> hb:2 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    20.139] -> hb:3 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    23.334] -> hb:4 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    26.414] -> hb:5 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    29.442] -> hb:6 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    32.487] -> hb:7 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    35.519] -> hb:8 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    38.548] -> hb:9 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    41.600] -> hb:10 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    44.644] -> hb:11 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    45.407] nvdrv:s accept program=0100000000000035 forward pointer_buffer_size=0x8000 (ours 0x10000)
+[    46.115] OnNeedsToAccept port=0 program=0100152000022000
+[    46.125]   AcceptMitmImpl rc=0x0
+[    46.149] -> GetDisplayService:enter
+[    46.155]    program=0100152000022000 mode=0
+[    46.176] -> GetDisplayService:done
+[    46.200] -> GetRelayService:enter
+[    46.224] -> GetRelayService:wrapped
+[    46.255] -> indirect:probe
+[    46.261]    2460 RequiredMemoryInfo(1280x720) rc=0x0 -> size=3801088 align=4096
+[    46.265]    102 GetManagerDisplayService rc=0xa72 -> denied on a vi:u session
+[    46.285] -> indirect:probe_done

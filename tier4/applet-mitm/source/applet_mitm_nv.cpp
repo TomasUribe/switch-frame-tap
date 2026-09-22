@@ -56,6 +56,7 @@ namespace ams::mitm::applet {
     constinit bool g_sweep_armed   = false;
     constinit bool g_stream_auto   = true;   /* pick the size from the link speed */
     constinit bool g_matrix_armed  = false;
+    constinit bool g_grcscan_armed = false;
     constinit u32  g_matrix_mode   = 0;
     constinit bool g_stream_armed  = false;
     constinit u32  g_stream_w      = 480;
@@ -807,6 +808,7 @@ namespace ams::mitm::applet {
         void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle);
         void TryNvencProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
         void TryNvjpgProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
+        void TryGrcScan();
 
 
 
@@ -1315,9 +1317,13 @@ namespace ams::mitm::applet {
 
         TryIndirectCapture();
         TryDebugCapture(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, dst_addr);
-        TryNvencPhaseA(nvmap_fd, cmd_handle);
+        /* M75: gated. This has completed cleanly in every run (its cmdbuf is an
+         * IMMEDIATE increment with no engine op), but the point of an observer
+         * run is to touch no engine channel at all. */
+        if (g_nvenc_armed) { TryNvencPhaseA(nvmap_fd, cmd_handle); }
         if (g_nvenc_armed) { TryNvencProbe(nvmap_fd, cmd_handle, dst_handle); }
         if (g_nvjpg_armed) { TryNvjpgProbe(nvmap_fd, cmd_handle, dst_handle); }
+        if (g_grcscan_armed) { TryGrcScan(); }
 
     close_vic:
         if (cfg_addr != 0) { UnmapCmdBuffer(vfd, cfg_handle); }
@@ -3287,6 +3293,153 @@ namespace ams::mitm::applet {
                         "a screenshot was taken", first_ok);
             }
             VicStage("jpg:done");
+        }
+
+        /* ---- M75: the grc observer ---------------------------------------
+         *
+         * M72-M74 cost three forced power-offs. Every one came from the same
+         * mechanism: we opened a channel to an engine, submitted work that
+         * never completed, and the teardown took the compositor with it.
+         * host1x is shared and nvnflinger is on the other side of it.
+         *
+         * So this observes and submits nothing at all. No channel, no cmdbuf,
+         * no engine contact of any kind. It attaches to grc - the system's own
+         * recorder, the one client known to drive NVENC successfully on this
+         * firmware - resumes it immediately, reads its memory, and detaches.
+         *
+         * That is exactly the mechanism already used on the game's framebuffer
+         * at 60 fps without incident, pointed at a different process. The one
+         * thing at risk is grc itself, not the display.
+         *
+         * What we are looking for is grc's nvenc_h264_drv_pic_setup_s. Its
+         * first word is a magic constant, which makes it findable by scanning,
+         * and it is the single most valuable artifact available: the exact
+         * configuration a working client hands this engine. Also searched for
+         * is a host1x SETCL to class 0x21, which would give the real method
+         * sequence - including any method we never emit. */
+        constexpr u64 GrcProgramIdValue = 0x0100000000000035ull;
+
+        struct ScanHit { u64 addr; u32 kind; u32 word0, word1, word2, word3; };
+
+        void TryGrcScan() {
+            VicStage("grcscan:1");
+            LogLine("   ---- GRC OBSERVER (read-only; no channel, no submit) ----");
+
+            os::ProcessId pid = {};
+            {
+                const Result r = ::ams::pm::dmnt::GetProcessId(std::addressof(pid), ncm::ProgramId{GrcProgramIdValue});
+                LogLine("   pm:dmnt GetProcessId(%016llx) rc=0x%x -> pid=%llu",
+                        static_cast<unsigned long long>(GrcProgramIdValue), r.GetValue(),
+                        static_cast<unsigned long long>(pid.value));
+                if (R_FAILED(r) || pid.value == 0) {
+                    LogLine("   grc is not running - nothing to observe");
+                    VicStage("grcscan:no_proc");
+                    return;
+                }
+            }
+
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            const Result r_attach = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value);
+            LogLine("   DebugActiveProcess rc=0x%x", r_attach.GetValue());
+            if (R_FAILED(r_attach)) { VicStage("grcscan:no_attach"); return; }
+
+            /* Resume grc at once. Attaching stops it, and a stopped recorder
+             * is the only thing this run can plausibly disturb - so the window
+             * is made as short as the API allows, before any scanning. */
+            u32 nev = 0;
+            {
+                ::ams::svc::DebugEventInfo ev;
+                while (nev < 256 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg))) { ++nev; }
+                const Result rc = ::ams::svc::ContinueDebugEvent(dbg,
+                                      ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll,
+                                      nullptr, 0);
+                LogLine("   drained %u events; ContinueDebugEvent rc=0x%x -> grc %s",
+                        nev, rc.GetValue(), R_SUCCEEDED(rc) ? "RESUMED" : "STILL HALTED");
+            }
+
+            static constexpr u32 NvencMagics[4] = { 0xd0b70006u, 0xc1b70006u, 0xc0b70006u, 0xa0b70006u };
+            /* SETCL word: opcode 0, offset 0, class in bits 15:6. */
+            const u32 setcl_nvenc = vic::Host1xOpcodeSetClass(0, 0x21, 0);
+            const u32 setcl_nvjpg = vic::Host1xOpcodeSetClass(0, 0xC0, 0);
+
+            /* g_ind_buf is the scratch this scan reads into; it only exists
+             * once the VIC heap is up, so "vic" must be armed alongside. */
+            if (g_ind_buf == nullptr || g_ind_size < 64 * 1024) {
+                LogLine("   no scratch buffer (arm \"vic\" too) - skipping the scan");
+                static_cast<void>(::ams::svc::CloseHandle(dbg));
+                VicStage("grcscan:no_scratch");
+                return;
+            }
+
+            static constexpr u32 MaxHits = 24;
+            ScanHit hits[MaxHits] = {};
+            u32 nhits = 0, nregions = 0;
+            u64 scanned = 0;
+            constexpr u64 ScanCap   = 96ull * 1024 * 1024;
+            constexpr u64 ChunkSize = 64 * 1024;
+
+            u64 addr = 0;
+            for (u32 steps = 0; steps < 4000; ++steps) {
+                ::ams::svc::MemoryInfo mi = {};
+                ::ams::svc::PageInfo   pi = {};
+                if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr))) { break; }
+                if (mi.size == 0) { break; }
+
+                const u32 perm  = static_cast<u32>(mi.permission);
+                const u32 state = static_cast<u32>(mi.state);
+                const bool readable = (perm & ::ams::svc::MemoryPermission_Read) != 0;
+                /* Code and stack are not where a driver config struct lives;
+                 * skipping them keeps the scan inside a sane budget. */
+                const bool interesting = readable && mi.size >= 0x1000 &&
+                                         state != static_cast<u32>(::ams::svc::MemoryState_Free) &&
+                                         state != static_cast<u32>(::ams::svc::MemoryState_Code) &&
+                                         state != static_cast<u32>(::ams::svc::MemoryState_AliasCode);
+
+                if (interesting && scanned < ScanCap) {
+                    ++nregions;
+                    for (u64 off = 0; off < mi.size && scanned < ScanCap; off += ChunkSize) {
+                        const u64 n = (mi.size - off < ChunkSize) ? (mi.size - off) : ChunkSize;
+                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf),
+                                                                        dbg, mi.base_address + off, n))) { break; }
+                        scanned += n;
+                        const u32 *w = reinterpret_cast<const u32 *>(g_ind_buf);
+                        const u64 nw = n / 4;
+                        for (u64 i = 0; i + 4 < nw && nhits < MaxHits; ++i) {
+                            u32 kind = 0;
+                            for (u32 m = 0; m < 4; ++m) { if (w[i] == NvencMagics[m]) { kind = 1 + m; } }
+                            if (kind == 0 && w[i] == setcl_nvenc && (w[i+1] >> 28) <= 4) { kind = 5; }
+                            if (kind == 0 && w[i] == setcl_nvjpg && (w[i+1] >> 28) <= 4) { kind = 6; }
+                            if (kind == 0) { continue; }
+                            hits[nhits++] = { mi.base_address + off + i * 4, kind,
+                                              w[i], w[i+1], w[i+2], w[i+3] };
+                        }
+                    }
+                }
+
+                const u64 next = mi.base_address + mi.size;
+                if (next <= addr) { break; }
+                addr = next;
+            }
+
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+            LogLine("   scanned %llu KB across %u regions; %u hit(s)%s",
+                    static_cast<unsigned long long>(scanned / 1024), nregions, nhits,
+                    scanned >= ScanCap ? "  (hit the scan cap)" : "");
+
+            static const char *KindName[7] = { "?", "NVENC magic 5.0", "NVENC magic 6.0",
+                                               "NVENC magic 1.0", "MSENC magic 2.0",
+                                               "SETCL class 0x21 (NVENC)", "SETCL class 0xC0 (NVJPG)" };
+            for (u32 i = 0; i < nhits; ++i) {
+                LogLine("   hit %2u @ %#llx  %-26s  %08x %08x %08x %08x", i,
+                        static_cast<unsigned long long>(hits[i].addr),
+                        KindName[hits[i].kind <= 6 ? hits[i].kind : 0],
+                        hits[i].word0, hits[i].word1, hits[i].word2, hits[i].word3);
+            }
+            if (nhits == 0) {
+                LogLine("   nothing found. Either grc is idle and has not allocated its encoder");
+                LogLine("   buffers, or they are in memory this process cannot read.");
+            }
+            VicStage("grcscan:done");
         }
 
         void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle) {
