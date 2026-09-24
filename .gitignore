@@ -14,3 +14,6 @@ ref/*
 # compiled PC-side receiver (build it with the one-liner in its README)
 tools/raw-recv/raw-recv
 tools/nvsetup-dump
+
+# host-side tool bytecode
+__pycache__/

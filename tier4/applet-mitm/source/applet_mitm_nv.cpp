@@ -34,6 +34,8 @@
 #include "nvenc_drv_h264.h"
 #include "applet_mitm_nvjpg.hpp"
 #include "nvjpg_drv.h"
+#include "applet_mitm_clk.hpp"
+#include "nvjpg_dec_control.h"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -57,6 +59,7 @@ namespace ams::mitm::applet {
     constinit bool g_stream_auto   = true;   /* pick the size from the link speed */
     constinit bool g_matrix_armed  = false;
     constinit bool g_grcscan_armed = false;
+    constinit bool g_jpgdec_armed  = false;
     constinit u32  g_matrix_mode   = 0;
     constinit bool g_stream_armed  = false;
     constinit u32  g_stream_w      = 480;
@@ -808,7 +811,12 @@ namespace ams::mitm::applet {
         void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle);
         void TryNvencProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
         void TryNvjpgProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
+        void TryNvjpgDecodeControl(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
         void TryGrcScan();
+
+        /* M76: set when an engine job never completed and its channel was left
+         * open. Every later engine probe in this boot refuses to run. */
+        constinit bool g_engine_wedged = false;
 
 
 
@@ -1320,6 +1328,9 @@ namespace ams::mitm::applet {
         /* M75: gated. This has completed cleanly in every run (its cmdbuf is an
          * IMMEDIATE increment with no engine op), but the point of an observer
          * run is to touch no engine channel at all. */
+        /* M76: the positive control goes first. If it wedges the engine,
+         * nothing after it would be informative anyway. */
+        if (g_jpgdec_armed) { TryNvjpgDecodeControl(nvmap_fd, cmd_handle, dst_handle); }
         if (g_nvenc_armed) { TryNvencPhaseA(nvmap_fd, cmd_handle); }
         if (g_nvenc_armed) { TryNvencProbe(nvmap_fd, cmd_handle, dst_handle); }
         if (g_nvjpg_armed) { TryNvjpgProbe(nvmap_fd, cmd_handle, dst_handle); }
@@ -2909,6 +2920,8 @@ namespace ams::mitm::applet {
         }
 
         void TryNvencProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle) {
+            if (g_engine_wedged) { LogLine("   nvenc: skipped - an engine job is stuck this boot"); return; }
+            if (g_clk_armed) { ClocksHoldForEngines("nvenc"); }
             VicStage("nvp:1_open");
             u32 efd = 0, nverr = 0;
             if (R_FAILED(NvOpen("/dev/nvhost-msenc", std::addressof(efd), std::addressof(nverr))) || nverr != 0) {
@@ -3186,6 +3199,8 @@ namespace ams::mitm::applet {
         }
 
         void TryNvjpgProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle) {
+            if (g_engine_wedged) { LogLine("   nvjpg-enc: skipped - an engine job is stuck this boot"); return; }
+            if (g_clk_armed) { ClocksHoldForEngines("nvjpg-enc"); }
             VicStage("jpg:1");
 
             NvjpgLayout L = {};
@@ -3293,6 +3308,230 @@ namespace ams::mitm::applet {
                         "a screenshot was taken", first_ok);
             }
             VicStage("jpg:done");
+        }
+
+        /* ---- M76: NVJPG decode, the positive control ----------------------
+         *
+         * Every non-VIC job this project has submitted carried a configuration
+         * that was itself a guess, so no stall could be attributed: engine,
+         * clock, submit path and config were all unknowns at once. This job
+         * removes the config from that list. The picture-info record is
+         * generated on the PC by tools/nvjpg_dec_control.py in the T210 layout
+         * that averne's oss-nvjpg drives on this hardware under Horizon, and
+         * was checked byte-for-byte against that project's own struct and
+         * parser (0 diffs in 0xB2C bytes). The method sequence is the same one
+         * oss-nvjpg submits, plus the SETCL an L4T kernel would insert.
+         *
+         * So the outcomes mean something:
+         *   completes, output matches  -> our submit path drives non-VIC
+         *                                 engines; M68-M74 were clock and/or
+         *                                 config. Encoding is a config problem.
+         *   stalls with the clock held -> the problem is in how THIS process
+         *                                 reaches the engine, not in any config.
+         *
+         * Two guards, both from this project's own history:
+         *   - no submit unless clkrst shows NVJPG clocked after the mm:u
+         *     request. A job the engine cannot run is what wedged M74.
+         *   - on a stall the channel is deliberately LEFT OPEN. M74 found the
+         *     wedge inside teardown (NvClose blocked ~20 s, then the compositor
+         *     went), so this run does not tear down a channel with a stuck job.
+         */
+        void TryNvjpgDecodeControl(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle) {
+            namespace ctl = nvjpg_dec_control;
+            VicStage("jd:1");
+            LogLine("   ---- M76 NVJPG DECODE POSITIVE CONTROL ----");
+            if (g_engine_wedged) { LogLine("   an earlier engine job never completed - not submitting"); return; }
+
+            ClockSurvey("jpgdec-pre");
+            const bool held = ClocksHoldForEngines("jpgdec");
+            os::SleepThread(TimeSpan::FromMilliSeconds(50));
+            ClockSurvey("jpgdec");
+            u32 jpg_hz = 0;
+            const bool readable = ClockRateOf(PcvModule_NVJPG, std::addressof(jpg_hz));
+            if (!held || !readable || jpg_hz == 0) {
+                LogLine("   jpgdec: NOT submitting - hold=%d clkrst readable=%d NVJPG=%u Hz. An engine that",
+                        held, readable, jpg_hz);
+                LogLine("   cannot run is what wedged M74; the survey lines above are the result of this run.");
+                VicStage("jd:no_clock");
+                return;
+            }
+
+            /* Layout inside the (uncached) dst buffer. Every offset is
+             * 256-aligned: host1x carries addresses >> 8. */
+            constexpr u32 PicOff = 0x000000, StatOff = 0x001000, ScanOff = 0x002000, OutOff = 0x010000;
+            constexpr u32 OutSize = ctl::Pitch * ctl::Height;
+            static_assert(sizeof(ctl::PictureInfo) <= StatOff - PicOff);
+            static_assert(sizeof(ctl::ScanData) <= OutOff - ScanOff);
+            static_assert(OutOff + OutSize <= VicDstSize);
+
+            u32 jfd = 0, nverr = 0;
+            if (R_FAILED(NvOpen("/dev/nvhost-nvjpg", std::addressof(jfd), std::addressof(nverr))) || nverr != 0) {
+                LogLine("   jpgdec: /dev/nvhost-nvjpg open FAILED nverr=%u", nverr);
+                VicStage("jd:open_FAILED");
+                return;
+            }
+            u32 syncpt = 0;
+            {
+                struct { u32 module_id; u32 syncpt; } gs = { 0, 0 };
+                nverr = 0;
+                NvIoctl(jfd, NvHostIocChannelGetSyncpoint, std::addressof(gs), sizeof(gs), std::addressof(nverr));
+                syncpt = gs.syncpt;
+            }
+            if (syncpt == 0 || syncpt == 12) {
+                LogLine("   jpgdec: syncpt=%u (%s) - REFUSING", syncpt, syncpt == 12 ? "nvnflinger's" : "none");
+                NvClose(jfd);
+                VicStage("jd:bad_syncpt");
+                return;
+            }
+            { struct { u32 fd; } sn = { nvmap_fd }; nverr = 0;
+              NvIoctl(jfd, NvHostIocChannelSetNvmapFd, std::addressof(sn), sizeof(sn), std::addressof(nverr)); }
+
+            u32 buf_addr = 0, cmd_addr = 0;
+            MapCmdBuffer(jfd, dst_handle, std::addressof(buf_addr), "jpgdec-buf", 0);
+            MapCmdBuffer(jfd, cmd_handle, std::addressof(cmd_addr), "jpgdec-cmd", 0);
+            if (buf_addr == 0 || cmd_addr == 0) {
+                LogLine("   jpgdec: pin failed (buf=%#x cmd=%#x) - refusing to submit", buf_addr, cmd_addr);
+                if (buf_addr != 0) { UnmapCmdBuffer(jfd, dst_handle); }
+                if (cmd_addr != 0) { UnmapCmdBuffer(jfd, cmd_handle); }
+                NvClose(jfd);
+                VicStage("jd:pin_FAILED");
+                return;
+            }
+            const u32 a_pic = buf_addr + PicOff, a_stat = buf_addr + StatOff;
+            const u32 a_scan = buf_addr + ScanOff, a_out = buf_addr + OutOff;
+
+            std::memset(g_vic_dst_buf, 0, OutOff);
+            std::memcpy(g_vic_dst_buf + PicOff,  ctl::PictureInfo, sizeof(ctl::PictureInfo));
+            std::memcpy(g_vic_dst_buf + ScanOff, ctl::ScanData,    sizeof(ctl::ScanData));
+            std::memset(g_vic_dst_buf + OutOff, 0xAB, OutSize);   /* poison: any write is visible */
+            armDCacheFlush(g_vic_dst_buf, OutOff + OutSize);
+
+            auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
+            u32 n = 0;
+            auto m = [&](u32 method, u32 value) {
+                w[n++] = vic::Host1xOpcodeIncr(vic::UCLASS_METHOD_OFFSET, 2);
+                w[n++] = method >> 2;
+                w[n++] = value;
+            };
+            w[n++] = vic::Host1xOpcodeSetClass(0, 0xC0, 0);
+            m(0x200, 1);             /* operation type: decode        */
+            m(0x708, a_pic  >> 8);   /* picture info                  */
+            m(0x70C, a_stat >> 8);   /* status ("read info")          */
+            m(0x710, a_scan >> 8);   /* entropy-coded scan            */
+            m(0x714, a_out  >> 8);   /* output surface                */
+            m(0x300, 0x100);         /* EXECUTE, awaken               */
+            n = AppendIncrSyncpt(w, n, syncpt, true);
+            armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
+            LogLine("   jpgdec: syncpt=%u pic=%#x stat=%#x scan=%#x (%zu B) out=%#x, %u words",
+                    syncpt, a_pic, a_stat, a_scan, sizeof(ctl::ScanData), a_out, n);
+
+            alignas(8) u8 sb[16 + 12 + 20 + 4] = {};
+            u32 off = 0;
+            auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
+            put(1); put(0); put(1); put(1);
+            put(cmd_handle); put(0); put(n);
+            put(syncpt); put(1); put(0); put(0); put(0);
+            const u32 fence_off = off; put(0);
+            const u32 sz = off;
+            const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
+            u32 fence_val = 0; nverr = 0;
+            LogMark("jd:submit");
+            const auto rc = NvIoctl(jfd, req, sb, sz, std::addressof(nverr));
+            std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
+
+            bool done = false;
+            u32 seen = 0;
+            const u64 t0 = armTicksToNs(armGetSystemTick());
+            if (R_SUCCEEDED(rc) && nverr == 0) {
+                const u32 cfd = CtrlFd();
+                if (cfd != 0) {
+                    struct { u32 id; u32 thresh; u32 timeout; } a = { syncpt, fence_val, 300 };
+                    u32 we = 0;
+                    NvIoctl(cfd, NvHostIocCtrlSyncptWait, std::addressof(a), sizeof(a), std::addressof(we));
+                    struct { u32 id; u32 value; } r = { syncpt, 0 };
+                    for (u32 spin = 0; spin < 400 && !done; ++spin) {
+                        u32 e2 = 0; r.value = 0;
+                        NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
+                        seen = r.value;
+                        done = (seen >= fence_val);
+                        if (!done) { os::SleepThread(TimeSpan::FromMicroSeconds(200)); }
+                    }
+                }
+            }
+            const u64 us = (armTicksToNs(armGetSystemTick()) - t0) / 1000;
+            armDCacheFlush(g_vic_dst_buf, OutOff + OutSize);
+
+            struct Status { u32 used_bytes, mcu_x, mcu_y, reserved, result, pad[3]; };
+            static_assert(sizeof(Status) == 0x20);
+            Status st;
+            std::memcpy(std::addressof(st), g_vic_dst_buf + StatOff, sizeof(st));
+
+            u32 written = 0;
+            for (u32 i = 0; i < OutSize; ++i) { if (g_vic_dst_buf[OutOff + i] != 0xAB) { ++written; } }
+            LogLine("   jpgdec: submit rc=0x%x nverr=%u fence %u/%u %s after %llu us | status used=%u mcu=%ux%u result=%u | %u/%u output bytes written",
+                    rc, nverr, seen, fence_val, done ? "REACHED" : "STALLED",
+                    static_cast<unsigned long long>(us), st.used_bytes, st.mcu_x, st.mcu_y, st.result,
+                    written, OutSize);
+
+            if (done) {
+                /* compare 8x8 block means with what libjpeg decodes on the PC */
+                u32 worst = 0, worst_block = 0;
+                for (u32 by = 0; by < ctl::Height / 8; ++by) {
+                    for (u32 bx = 0; bx < ctl::Width / 8; ++bx) {
+                        for (u32 ch = 0; ch < 3; ++ch) {
+                            u32 sum = 0;
+                            for (u32 y = by * 8; y < by * 8 + 8; ++y) {
+                                for (u32 x = bx * 8; x < bx * 8 + 8; ++x) {
+                                    sum += g_vic_dst_buf[OutOff + y * ctl::Pitch + x * 4 + ch];
+                                }
+                            }
+                            const u32 mean = (sum + 32) / 64;
+                            const u32 idx = (by * (ctl::Width / 8) + bx) * 3 + ch;
+                            const u32 want = ctl::ExpectedBlockMeans[idx];
+                            const u32 d = mean > want ? mean - want : want - mean;
+                            if (d > worst) { worst = d; worst_block = idx / 3; }
+                        }
+                    }
+                }
+                const u8 *p0 = g_vic_dst_buf + OutOff;
+                LogLine("   jpgdec: px(0,0)=%02x %02x %02x %02x  px(63,0)=%02x %02x %02x %02x  px(0,63)=%02x %02x %02x %02x",
+                        p0[0], p0[1], p0[2], p0[3],
+                        p0[63 * 4], p0[63 * 4 + 1], p0[63 * 4 + 2], p0[63 * 4 + 3],
+                        p0[63 * ctl::Pitch], p0[63 * ctl::Pitch + 1], p0[63 * ctl::Pitch + 2], p0[63 * ctl::Pitch + 3]);
+                LogLine("   jpgdec: worst 8x8 block-mean deviation %u (block %u)  ->  %s", worst, worst_block,
+                        worst <= 6 ? "*** NVJPG RAN AND DECODED CORRECTLY - this process can drive a non-VIC engine ***"
+                                   : "engine ran, output differs - check nvjpg-dec.rgba on the PC");
+
+                /* raw surface to SD for tools/nvjpg_dec_control.py check */
+                static_assert(OutSize <= 0x10000);
+                static_cast<void>(fs::DeleteFile("sdmc:/nvjpg-dec.rgba"));
+                if (R_SUCCEEDED(fs::CreateFile("sdmc:/nvjpg-dec.rgba", OutSize))) {
+                    fs::FileHandle f;
+                    if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), "sdmc:/nvjpg-dec.rgba", fs::OpenMode_Write))) {
+                        static_cast<void>(fs::WriteFile(f, 0, g_vic_dst_buf + OutOff, OutSize, fs::WriteOption::Flush));
+                        fs::CloseFile(f);
+                    }
+                }
+                UnmapCmdBuffer(jfd, dst_handle);
+                UnmapCmdBuffer(jfd, cmd_handle);
+                NvClose(jfd);
+                VicStage(worst <= 6 ? "jd:MATCH" : "jd:ran_mismatch");
+            } else if (!(R_SUCCEEDED(rc) && nverr == 0)) {
+                /* nvservices refused the submit: nothing reached the engine,
+                 * so there is no stuck job and teardown is safe. */
+                LogLine("   jpgdec: submit REJECTED (rc=0x%x nverr=%u) - nothing reached the engine", rc, nverr);
+                UnmapCmdBuffer(jfd, dst_handle);
+                UnmapCmdBuffer(jfd, cmd_handle);
+                NvClose(jfd);
+                VicStage("jd:submit_rejected");
+            } else {
+                g_engine_wedged = true;
+                LogLine("   jpgdec: STALLED with NVJPG clocked at %u Hz. Leaving the channel OPEN on purpose", jpg_hz);
+                LogLine("   (M74: tearing down a channel with a stuck job took the compositor with it).");
+                LogLine("   No further engine work this boot. Reboot the console when convenient.");
+                ClockSurvey("jpgdec-stall");
+                VicStage("jd:STALLED_left_open");
+            }
         }
 
         /* ---- M75: the grc observer ---------------------------------------
@@ -3443,6 +3682,8 @@ namespace ams::mitm::applet {
         }
 
         void TryNvencPhaseA(u32 nvmap_fd, u32 cmd_handle) {
+            if (g_engine_wedged) { LogLine("   nvenc-phaseA: skipped - an engine job is stuck this boot"); return; }
+            if (g_clk_armed) { ClocksHoldForEngines("nvenc-phaseA"); }
             VicStage("nv:1_open_msenc");
             u32 efd = 0, nverr = 0;
             if (R_FAILED(NvOpen("/dev/nvhost-msenc", std::addressof(efd), std::addressof(nverr))) || nverr != 0) {

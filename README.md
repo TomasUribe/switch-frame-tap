@@ -15,8 +15,16 @@ developed on and for the author's own console.
 > 60 fps ceiling at about 800x450. Raw 1080p60 needs 186.6 MB/s even at 1.5
 > bytes/pixel. The remaining work is **compression** (1080p60 H.264 all-intra at
 > 50 Mbps is 6.25 MB/s — a sixth of what the cable already carries), or
-> SuperSpeed. What is finished is finished properly and verified on hardware;
-> what is not is marked as such throughout. See [Roadmap](#roadmap).
+> SuperSpeed for handheld only: docked, the dock owns the console's one USB-C
+> port, so docked 1080p has to go over the network, compressed. What is
+> finished is finished properly and verified on hardware; what is not is marked
+> as such throughout. See [Roadmap](#roadmap).
+>
+> **Latest (M76, desk review, not yet run):** the hardware encoders were never
+> given a clock. On Horizon a client requests NVENC/NVJPG clocks from `mm:u`,
+> and this project never did — which fits every "accepted, never executed"
+> result since M68. M76 adds a clock survey and the project's first
+> known-good engine job as a control. See [M76](#m76-the-encoders-were-never-clocked).
 
 **Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
 71 hardware test cycles.
@@ -353,6 +361,37 @@ the next step. **If you have driven Tegra NVENC from userspace on Horizon or
 L4T, a pointer is still very welcome** — it is the whole difference between
 800x450 and native resolution.
 
+### M76: the encoders were never clocked
+
+A desk review against the two open-source drivers that do run Tegra engines on
+this console under Horizon — averne's
+[oss-nvjpg](https://github.com/averne/oss-nvjpg) and averne's FFmpeg `nvtegra`
+hwaccel — found what every engine probe here had in common:
+
+- **No clock was ever requested.** On Horizon a client asks the multimedia
+  service `mm:u` for a frequency on NVDEC/NVENC/NVJPG before using it; both
+  drivers do it, and FFmpeg's comment says it reproduces official code. This
+  module never opened `mm:u`. An unclocked engine accepts the submit and never
+  runs a cycle — exactly NVJPG's `cycles=0`. The VIC never needed it because
+  nvnflinger keeps it running. (For NVENC this is less certain: grc's
+  background recording may keep it clocked during gameplay. The survey checks
+  before asking for anything.)
+- **The NVJPG method table was from a multi-core generation** (`clc9d1.h`).
+  From 0x704 on it was one register off, so the M73/M74 jobs wrote **0 into the
+  bitstream address**. The single-core `cle7d0.h` matches the map oss-nvjpg
+  uses on this hardware. Fixed.
+- **The NVJPG encode setup struct is probably not this chip's format.** The
+  T210 decode record that works is a different, higher-level layout, so NVJPG
+  encode stays parked until its record is known.
+
+M76 builds `clk`, a clock survey with no engine contact, and `jpgdec`: one
+NVJPG **decode** whose picture-info record is generated on the PC
+([`tools/nvjpg_dec_control.py`](tools/nvjpg_dec_control.py)) and matches
+oss-nvjpg's own struct and parser **byte for byte**. It is the first job in this
+project whose configuration is not a guess, so for the first time a stall
+would say something about the engine rather than the config. Test plan in
+[STATUS.md](tier4/mitm/STATUS.md).
+
 ### Two constraints worth knowing
 
 - **`usbDsSetBinaryObjectStore` is required for SuperSpeed.** Declaring USB 3.0
@@ -385,18 +424,22 @@ version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
 | **End-to-end stream** | **done, on hardware** — **768x432 at 59.6 fps**, 3600 frames, 0 stale; user-confirmed playable |
 | VIC scale + packed 4:2:0 in the stream path | **done, on hardware** — 2.1 ms/frame, 1.5 B/px, no codec |
 | Native resolution at 60 fps | **blocked on bandwidth, now measured.** The link saturates at ~37 MB/s, capping 60 fps at ~800x450. Raw 1080p60 needs 186.6 MB/s |
-| NVENC H.264 encode | **channel proven, engine silent.** host1x retires a full 39-word job with every surface populated; the engine never completes it. Cause not isolated — see [M72](#m72-record-grc-instead-of-guessing) |
+| NVENC H.264 encode | **channel proven, engine silent.** host1x retires a full 39-word job with every surface populated; the engine never completes it. Prime suspect since M76: no `mm:u` clock request — see [M76](#m76-the-encoders-were-never-clocked) |
+| Engine clocks via `mm:u` (M76) | **built, not yet run.** `clk`: survey + request, no engine contact |
+| NVJPG decode positive control (M76) | **built, not yet run.** `jpgdec`: one known-good job, record verified byte-for-byte against oss-nvjpg |
 | **Compressed stream over USB 2.0** — the main goal | **in progress.** The link carries ~290 Mbps; H.264 1080p60 is visually lossless at 100–150 Mbps even all-intra, so bitrate has 2–3x headroom and the tuning target is quality and latency, not size. Waiting on NVENC |
 | grc recorder (M72) — capture how the system drives NVENC | **built, not yet run on hardware** |
-| USB 3.0 SuperSpeed | descriptors **and BOS** accepted, link still negotiates High. Device side now matches haze exactly; the cable is the one untested variable |
-| **USB 3.0 lossless mode** — future option | planned. Once SuperSpeed trains, stream uncompressed. Real YUV 4:2:0 1080p60 is 186.6 MB/s, comfortably inside a USB 3.0 Gen 1 link, and visually lossless. Strictly lossless RGB is 373 MB/s, at the edge of Gen 1 |
+| USB 3.0 SuperSpeed — **handheld only** | descriptors **and BOS** accepted, link still negotiates High. Device side now matches haze exactly; the cable is the one untested variable. Docked, the dock owns the USB-C port, so this can never carry a docked stream |
+| Docked 1080p transport | **not started.** USB device mode is impossible while docked; it needs Wi-Fi or a LAN adapter in the dock, and therefore compression. `switch-stream`'s TCP path is the starting point |
+| **USB 3.0 lossless mode** — future option, handheld | planned. Once SuperSpeed trains, stream uncompressed. Handheld native is 720p: 720p60 packed-420 is 83 MB/s, well inside a USB 3.0 Gen 1 link, with no encoder at all |
 | Capture the home menu and system overlays | wanted, and not possible through any route found so far |
 
 Capture is no longer the gate — **bandwidth is**, and the figure is now measured
 rather than estimated: ~37 MB/s. Everything upstream of the cable is done; at
 768x432 the console finishes a frame in 11.3 ms of a 16.67 ms budget, so the
-pipeline has headroom it cannot spend. The next move is compression, or proving
-SuperSpeed with a known-good USB 3.0 cable.
+pipeline has headroom it cannot spend. The next move is compression (the only
+route to docked 1080p), or, for handheld 720p, proving SuperSpeed with a
+known-good USB 3.0 cable.
 
 NVENC wants NV12 input and the VIC is the natural way to produce it — that
 dependency is satisfied, at 2.1 ms/frame. What is not satisfied is the engine
@@ -456,7 +499,9 @@ sdmc:/atmosphere/contents/<TITLE_ID>/flags/boot2.flag  <- an EMPTY file
 `applet-mitm` is a **pure observer** unless `sdmc:/applet-mitm.armed` exists.
 Keywords in that file opt in to each stage: `vic` runs the nvdrv/VIC probe,
 `exec` runs the real blit rather than a no-op command buffer, `dbg` runs the
-debug-SVC probe. Logs land at `sdmc:/applet-mitm.log`, with a last-step
+debug-SVC probe, `clk` runs the M76 clock survey, `jpgdec` (with `vic`) runs
+the NVJPG decode control. `wait=N` sets when probes fire. Every parsed flag is
+dumped on one `ARMED FLAGS:` line at boot. Logs land at `sdmc:/applet-mitm.log`, with a last-step
 breadcrumb in `sdmc:/applet-mitm.last` that survives a hard power-off.
 
 **Read the SD card in a card reader, not over MTP** — MTP returns I/O errors on

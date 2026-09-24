@@ -172,30 +172,55 @@ namespace ams::mitm::applet {
             return n;
         }
 
-        /* nvjpg method table. Offsets from NVIDIA's clc9d1.h; host1x method
-         * offsets are stable across GPU generations, which M63 proved on this
-         * console for the VIC (NVCEB6's luma offset is byte-identical to the
-         * NVB0B6 one we verified). */
+        /* nvjpg method table - the SINGLE-CORE layout, NVIDIA's cle7d0.h.
+         *
+         * M76: M73/M74 took these from clc9d1.h, which is a MULTI-core NVJPG.
+         * That generation inserts SET_TOTAL_CORE_NUM at 0x704 and a per-core
+         * block starting with SET_CORE_INDEX at 0x710, which pushes every
+         * surface one register later. Tegra X1's NVJPG is single-core, and the
+         * register map reverse-engineered from working Switch homebrew
+         * (averne's oss-nvjpg, which decodes on this hardware) matches
+         * cle7d0.h exactly: 0x708 setup, 0x70C status, 0x710 bitstream, 0x714
+         * luma, 0x718 chroma U, 0x71C chroma V.
+         *
+         * So the M73/M74 command buffer wrote SET_CORE_INDEX = 0 into the
+         * BITSTREAM register - a zero output address, the exact thing M27
+         * proved hangs an engine - and handed it the bitstream as the luma
+         * plane. It never mattered because the engine never ran (cycles=0),
+         * but it would have faulted the moment it did.
+         *
+         * "Host1x method offsets are stable across generations" is true for
+         * the common block (0x200 / 0x300 / 0x700-0x70C are identical in both
+         * headers); it is not true past the point a generation adds methods. */
         namespace nvjpg {
             constexpr u32 HOST1X_CLASS_NVJPG   = 0xC0;
             constexpr u32 SET_APPLICATION_ID   = 0x00000200;
+            constexpr u32 APPLICATION_ID_DEC   = 1;
             constexpr u32 APPLICATION_ID_ENC   = 2;
             constexpr u32 EXECUTE              = 0x00000300;
             constexpr u32 SET_CONTROL_PARAMS   = 0x00000700;
-            constexpr u32 SET_TOTAL_CORE_NUM   = 0x00000704;
+            constexpr u32 SET_PICTURE_INDEX    = 0x00000704;
             constexpr u32 SET_IN_DRV_PIC_SETUP = 0x00000708;
             constexpr u32 SET_OUT_STATUS       = 0x0000070C;
-            constexpr u32 CORE_STRIDE          = 0x20;
-            constexpr u32 SET_CORE_INDEX       = 0x00000710;
-            constexpr u32 SET_BITSTREAM        = 0x00000714;
-            constexpr u32 SET_CUR_PIC          = 0x00000718;
-            constexpr u32 SET_CUR_PIC_CHROMA_U = 0x0000071C;
-            constexpr u32 SET_CUR_PIC_CHROMA_V = 0x00000720;
+            constexpr u32 SET_BITSTREAM        = 0x00000710;
+            constexpr u32 SET_CUR_PIC          = 0x00000714;
+            constexpr u32 SET_CUR_PIC_CHROMA_U = 0x00000718;
+            constexpr u32 SET_CUR_PIC_CHROMA_V = 0x0000071C;
         }
 
     }
 
-    /* Fill the driver picture parameters for one baseline 4:2:0 encode. */
+    /* Fill the driver picture parameters for one baseline 4:2:0 encode.
+     *
+     * M76 caveat, UNVERIFIED FOR THIS CHIP: nvjpg_drv_pic_param_s is the
+     * register-image layout of a later NVJPG. The one T210 layout known to work
+     * on this console - the DECODE picture info in averne's oss-nvjpg - is a
+     * completely different, higher-level struct (Huffman tables as BITS/HUFFVAL
+     * arrays, a 0xB2C-byte record the firmware parses). The T210 encoder's
+     * record is very likely the same style, not this one. Until it is known,
+     * an encode reaching a running engine is expected to fail on the setup,
+     * not the method table. The decode positive control (jpgdec) does not
+     * depend on this struct at all. */
     void NvjpgFillParams(u8 *base, const NvjpgLayout &L, u32 memory_mode, u32 input_type) {
         auto *pp = reinterpret_cast<nvjpg_drv_pic_param_s *>(base + L.param_off);
         std::memset(pp, 0, sizeof(*pp));
@@ -258,10 +283,9 @@ namespace ams::mitm::applet {
         w[n++] = vic::Host1xOpcodeSetClass(0, nvjpg::HOST1X_CLASS_NVJPG, 0);
         m(nvjpg::SET_APPLICATION_ID,   nvjpg::APPLICATION_ID_ENC);
         m(nvjpg::SET_CONTROL_PARAMS,   0);
-        m(nvjpg::SET_TOTAL_CORE_NUM,   1);
+        m(nvjpg::SET_PICTURE_INDEX,    0);
         m(nvjpg::SET_IN_DRV_PIC_SETUP, param_addr  >> 8);
         m(nvjpg::SET_OUT_STATUS,       status_addr >> 8);
-        m(nvjpg::SET_CORE_INDEX,       0);
         m(nvjpg::SET_BITSTREAM,        bits_addr     >> 8);
         m(nvjpg::SET_CUR_PIC,          luma_addr     >> 8);
         m(nvjpg::SET_CUR_PIC_CHROMA_U, chroma_u_addr >> 8);
