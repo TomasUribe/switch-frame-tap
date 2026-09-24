@@ -1,0 +1,17 @@
+[   61.983] NOTE   hit 0 kind 1 @ 0x55c78f81cc in region 0x55c78ce000+0x85000 state 0xd perm 0x3
+[   61.983] SETUP  iova=0x0 (grc va low 0xc78f81cc) 4096 B  magic=0xd0b70006
+          -> logs/m78-runD-setups/setup_0.bin
+[   61.984] NOTE   hit 1 kind 1 @ 0x55c7936570 in region 0x55c78ce000+0x85000 state 0xd perm 0x3
+[   61.984] SETUP  iova=0x0 (grc va low 0xc7936570) 4096 B  magic=0xd0b70006
+          -> logs/m78-runD-setups/setup_1.bin
+[   61.985] NOTE   hit 2 kind 1 @ 0x55c7959000 in region 0x55c7959000+0x3000 state 0xd perm 0x3
+[   61.985] SETUP  iova=0x0 (grc va low 0xc7959000) 4096 B  magic=0xd0b70006
+          -> logs/m78-runD-setups/setup_2.bin
+[   61.985] NOTE   hit 3 kind 1 @ 0x55c795c000 in region 0x55c795c000+0x3000 state 0xd perm 0x3
+[   61.985] SETUP  iova=0x0 (grc va low 0xc795c000) 4096 B  magic=0xd0b70006
+          -> logs/m78-runD-setups/setup_3.bin
+[   61.985] NOTE   hit 4 kind 1 @ 0x55c795f000 in region 0x55c795f000+0x3000 state 0xd perm 0x3
+[   61.985] SETUP  iova=0x0 (grc va low 0xc795f000) 4096 B  magic=0xd0b70006
+          -> logs/m78-runD-setups/setup_4.bin
+
+21182 of 21182 bytes decoded, 5 setup blob(s)
