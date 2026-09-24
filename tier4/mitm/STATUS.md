@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 71 hardware test cycles. Current build: **M76**. Run A done; Run B pending.
+`0100000000000C20`. 71 hardware test cycles. Current build: **M76**. Run A and Run B done; NVJPG clock decay found.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -253,6 +253,48 @@ Cleanly released. Next: Run B (`vic clk jpgdec`), the one-submit decode
 control, is now justified by this data - proceed only as a deliberate step,
 per the PR's stated residual risk (a stall could still wedge the compositor
 even with the channel left open).
+
+## M76 Run B result: refused to submit - NVJPG's clock decayed within ~8 s of being raised
+
+No crash, no freeze. The guard worked exactly as designed: it refused rather
+than gambling on an uncertain submit, so `nvjpg-dec.rgba` was never written and
+the decode is still untested. But the refusal itself is the finding.
+
+Full timeline, `clk` armed with `keep_holding=true` (jpgdec is armed this run):
+
+    50.4   clk:1_survey
+    50.5-52.2  clk[before] x4, all identical: VIC=422.4 NVENC=460.8 NVJPG=0.0 NVDEC=0.0 HOST1X=81.6
+    52.3   clk:2_hold - ClocksHoldForEngines("survey") - mm:u ids 5,6,7 all SetAndWait(max) rc=0x0
+    52.6   clk[held]     VIC=652.8 NVENC=979.2 NVJPG=652.8 NVDEC=979.2 HOST1X=81.6
+    54.6   clk[held+2s]  VIC=652.8 NVENC=979.2 NVJPG=652.8 NVDEC=979.2 HOST1X=81.6   (stable)
+    54.7   "holding for the engine probes armed in this run" - NOT released, g_holding stays true
+    ...
+    62.9   clk[jpgdec-pre]  VIC=422.4 NVENC=979.2 NVJPG=0.0  NVDEC=979.2 HOST1X=81.6
+    63.0   clk[jpgdec]      VIC=422.4 NVENC=979.2 NVJPG=0.0  NVDEC=979.2 HOST1X=81.6
+    63.05  jpgdec: NOT submitting - hold=1 clkrst readable=1 NVJPG=0 Hz
+
+**NVENC and NVDEC held their requested 979.2 MHz rock-steady for the full ~8-10
+second gap with zero engine work on either.** NVJPG did not: it decayed from
+652.8 back to 0.0 in the same window, also with zero engine work. All three
+were requested via the identical `MmSetAndWait(id, max, -1)` call and none was
+ever released (`FinalizeWithId` was never called - `g_engine_wedged` is false,
+`keep_holding` is true throughout). So NVJPG specifically has some auto-idle or
+timeout behavior on this firmware that ignores or overrides the `mm:u`
+performance-mode request when the engine sees no actual submission, while
+NVENC/NVDEC do not exhibit it, at least not within the window measured here.
+
+**A bug in our own code compounded this.** `ClocksHoldForEngines` is
+idempotent, guarded by `if (g_holding) { return true; }`. Once the initial
+survey's hold succeeds, every later call - including jpgdec's own, ~10 s
+later - short-circuits to `true` without re-issuing `SetAndWaitWithId` for
+anything, NVJPG included. So `held=1` in the refusal log means "we successfully
+requested a hold at some point," not "the clock is elevated right now" - and
+for NVJPG on this firmware those turned out not to be the same thing. Fixing
+this needs re-requesting (or at minimum re-checking and re-requesting) the
+NVJPG clock immediately before the submit, not relying on a hold from up to
+ten seconds earlier - the guard that saved this run from an uncertain submit is
+also the guard that is currently unable to ever pass for NVJPG when `clk`'s own
+timing model (survey at wait-10, submit at wait) is used as designed.
 
 ### Test plan
 
