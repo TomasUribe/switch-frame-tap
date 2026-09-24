@@ -1,0 +1,201 @@
+[    10.292] grc IPC interceptor: off
+[    10.303] applet-mitm M76: up (grc IPC interceptor off)
+[    10.354] ARMED FLAGS: vic=0 exec=0 dbg=0 dump=0 usb=0 bench=0 nvenc=0 jpg=0 sweep=0 mtx=0 stream=0 grc=0 grcscan=0 clk=1 jpgdec=0 wait=60
+[    10.361] arm file (sdmc:/applet-mitm.armed): vic=absent - observer only exec=PhaseA-noop-cmdbuf
+[    10.365] ---- physical memory pools (svcGetSystemInfo) ----
+[    10.368]    pool 0 Application  total= 3363840 KB  used=       0 KB  free=  3363840 KB   rc=0/0
+[    10.372]    pool 1 Applet       total=  512000 KB  used=    3312 KB  free=   508688 KB   rc=0/0
+[    10.387]    pool 2 System       total=  237728 KB  used=  221704 KB  free=    16024 KB   rc=0/0
+[    10.396]    pool 3 SystemUnsafe total=   45184 KB  used=   43180 KB  free=     2004 KB   rc=0/0
+[    10.408]    THIS PROCESS (pool_partition 1 = Applet, at boot): total=511936 KB used=3248 KB free=508688 KB
+[    10.420]    for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB
+[    10.429]    usb: not armed (add "usb" to the arm file)
+[    10.433] probe fires at t=60 s; frame dump to SD: off
+[    10.437] debug-capture route: off (add "dbg" to the arm file)   pmdmntInitialize rc=0x0
+[    10.457] -> main:heartbeat_started
+[    10.461] clock survey armed: fires at uptime ~50 s, then releases
+[    10.471] registered mitm server for vi:u
+[    10.490] -> main:LoopProcess
+[    13.515] -> hb:1 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    16.546] -> hb:2 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    19.584] -> hb:3 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    22.663] -> hb:4 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    25.861] -> hb:5 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    28.889] -> hb:6 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    31.931] -> hb:7 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    34.965] -> hb:8 sess=0 getdisp=0 relay=0 txn=0 vic=idle
+[    36.975] OnNeedsToAccept port=0 program=0100152000022000
+[    36.985]   AcceptMitmImpl rc=0x0
+[    37.013] -> GetDisplayService:enter
+[    37.020]    program=0100152000022000 mode=0
+[    37.049] -> GetDisplayService:done
+[    37.085] -> GetRelayService:enter
+[    37.118] -> GetRelayService:wrapped
+[    37.145] -> indirect:probe
+[    37.153]    2460 RequiredMemoryInfo(1280x720) rc=0x0 -> size=3801088 align=4096
+[    37.161]    102 GetManagerDisplayService rc=0xa72 -> denied on a vi:u session
+[    37.186] -> indirect:probe_done
+[    37.212] -> OpenDisplay:enter
+[    37.220]    OpenDisplay "Default" -> display_id=17
+[    37.295] *** binder txn #1  program=0100152000022000  session=20  code=10(connect) x1  flags=0x0  in=108 out=4096
+[    37.320] -> binder:first_txn
+[    37.336] *** binder txn #2  program=0100152000022000  session=20  code=9(query) x1  flags=0x0  in=100 out=4096
+[    37.345] *** binder txn #3  program=0100152000022000  session=20  code=14(setPreallocatedBuffer) x1  flags=0x0  in=476 out=4096
+[    37.370] -> binder:parse_preallocated
+[    37.381] === setPreallocatedBuffer#1 NvGraphicBuffer ===
+[    37.392]     nvmap_id=1268  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    37.408]     plane[0] 1920x1080  pitch=7680 B  offset=0x0  size=8847360 B
+[    37.416]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    37.427]    captured slot 0: nvmap=1268 1920x1080 stride_px=1920 blk_h_log2=4 off=0x0 pixfmt=33 (slots=1)
+[    37.441] *** binder txn #4  program=0100152000022000  session=20  code=14(setPreallocatedBuffer) x2  flags=0x0  in=476 out=4096
+[    37.466] -> binder:parse_preallocated
+[    37.473] === setPreallocatedBuffer#2 NvGraphicBuffer ===
+[    37.480]     nvmap_id=1268  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    37.487]     plane[0] 1920x1080  pitch=7680 B  offset=0x870000  size=8847360 B
+[    37.496]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    37.503]    captured slot 1: nvmap=1268 1920x1080 stride_px=1920 blk_h_log2=4 off=0x870000 pixfmt=33 (slots=2)
+[    37.511] *** binder txn #5  program=0100152000022000  session=20  code=14(setPreallocatedBuffer) x3  flags=0x0  in=476 out=4096
+[    37.546] -> binder:parse_preallocated
+[    37.551] === setPreallocatedBuffer#3 NvGraphicBuffer ===
+[    37.563]     nvmap_id=1268  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    37.568]     plane[0] 1920x1080  pitch=7680 B  offset=0x10e0000  size=8847360 B
+[    37.574]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    37.579]    captured slot 2: nvmap=1268 1920x1080 stride_px=1920 blk_h_log2=4 off=0x10e0000 pixfmt=33 (slots=3)
+[    37.585] *** binder txn #6  program=0100152000022000  session=20  code=3(dequeueBuffer) x1  flags=0x0  in=116 out=4096
+[    37.592] *** binder txn #7  program=0100152000022000  session=20  code=1(requestBuffer) x1  flags=0x0  in=100 out=4096
+[    38.023] -> hb:9 sess=1 getdisp=1 relay=1 txn=7 vic=idle
+[    41.097] -> hb:10 sess=1 getdisp=1 relay=1 txn=7 vic=idle
+[    42.606] *** binder txn #8  program=0100152000022000  session=20  code=7(queueBuffer) x1  flags=0x0  in=192 out=4096
+[    42.661] *** binder txn #9  program=0100152000022000  session=20  code=3(dequeueBuffer) x2  flags=0x0  in=116 out=4096
+[    42.685] *** binder txn #10  program=0100152000022000  session=20  code=1(requestBuffer) x2  flags=0x0  in=100 out=4096
+[    42.750] *** binder txn #11  program=0100152000022000  session=20  code=7(queueBuffer) x2  flags=0x0  in=192 out=4096
+[    42.783] *** binder txn #12  program=0100152000022000  session=20  code=3(dequeueBuffer) x3  flags=0x0  in=116 out=4096
+[    42.800] *** binder txn #13  program=0100152000022000  session=20  code=1(requestBuffer) x3  flags=0x0  in=100 out=4096
+[    42.834] *** binder txn #14  program=0100152000022000  session=20  code=7(queueBuffer) x3  flags=0x0  in=192 out=4096
+[    44.224] -> hb:11 sess=1 getdisp=1 relay=1 txn=169 vic=idle
+[    47.330] -> hb:12 sess=1 getdisp=1 relay=1 txn=541 vic=idle
+[    47.757] *** binder txn #600  program=0100152000022000  session=20  code=7(queueBuffer) x296  flags=0x0  in=192 out=4096
+[    50.209] -> clk:1_survey
+[    50.264] ---- M76 CLOCK SURVEY (no engine contact) ----
+[    50.316]    clk[before      ]  VIC=422.4 MHz  NVENC=460.8 MHz  NVJPG=0.0 MHz  NVDEC=0.0 MHz  HOST1X=81.6 MHz
+[    50.445] -> hb:13 sess=1 getdisp=1 relay=1 txn=911 vic=idle
+[    50.915]    clk[before+     ]  VIC=422.4 MHz  NVENC=460.8 MHz  NVJPG=0.0 MHz  NVDEC=0.0 MHz  HOST1X=81.6 MHz
+[    51.451]    clk[before+     ]  VIC=422.4 MHz  NVENC=460.8 MHz  NVJPG=0.0 MHz  NVDEC=0.0 MHz  HOST1X=81.6 MHz
+[    51.970]    clk[before+     ]  VIC=422.4 MHz  NVENC=460.8 MHz  NVJPG=0.0 MHz  NVDEC=0.0 MHz  HOST1X=81.6 MHz
+[    52.011] -> clk:2_hold
+[    52.020]    clk(survey): smGetService(mm:u) rc=0x0
+[    52.031]    clk: mm id 5 (libnx: NVENC, nvtegra: NVDEC) req=1  get=0 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=979200000 Hz (rc=0x0)
+[    52.049]    clk: mm id 6 (libnx: NVDEC) req=2  get=979200000 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=979200000 Hz (rc=0x0)
+[    52.061]    clk: mm id 7 (NVJPG) req=3  get=0 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=652800000 Hz (rc=0x0)
+[    52.180]    clk[held        ]  VIC=652.8 MHz  NVENC=979.2 MHz  NVJPG=652.8 MHz  NVDEC=979.2 MHz  HOST1X=81.6 MHz
+[    52.757] *** binder txn #1200  program=0100152000022000  session=20  code=7(queueBuffer) x596  flags=0x0  in=192 out=4096
+[    53.497] -> hb:14 sess=1 getdisp=1 relay=1 txn=1284 vic=idle
+[    54.193]    clk[held+2s     ]  VIC=652.8 MHz  NVENC=979.2 MHz  NVJPG=652.8 MHz  NVDEC=979.2 MHz  HOST1X=81.6 MHz
+[    54.219] -> clk:3_release
+[    54.227]    clk: release mm id 5 (libnx: NVENC, nvtegra: NVDEC) rc=0x0
+[    54.233]    clk: release mm id 6 (libnx: NVDEC) rc=0x0
+[    54.237]    clk: release mm id 7 (NVJPG) rc=0x0
+[    54.745]    clk[released    ]  VIC=422.4 MHz  NVENC=460.8 MHz  NVJPG=0.0 MHz  NVDEC=0.0 MHz  HOST1X=81.6 MHz
+[    54.750] ---- M76 CLOCK SURVEY done ----
+[    54.784] -> clk:done
+[    56.569] -> hb:15 sess=1 getdisp=1 relay=1 txn=1651 vic=idle
+[    57.756] *** binder txn #1800  program=0100152000022000  session=20  code=7(queueBuffer) x896  flags=0x0  in=192 out=4096
+[    59.620] -> hb:16 sess=1 getdisp=1 relay=1 txn=2021 vic=idle
+[    62.649] -> hb:17 sess=1 getdisp=1 relay=1 txn=2385 vic=idle
+[    62.757] *** binder txn #2400  program=0100152000022000  session=20  code=7(queueBuffer) x1196  flags=0x0  in=192 out=4096
+[    65.684] -> hb:18 sess=1 getdisp=1 relay=1 txn=2748 vic=idle
+[    67.756] *** binder txn #3000  program=0100152000022000  session=20  code=7(queueBuffer) x1496  flags=0x0  in=192 out=4096
+[    68.737] -> hb:19 sess=1 getdisp=1 relay=1 txn=3113 vic=idle
+[    71.769] -> hb:20 sess=1 getdisp=1 relay=1 txn=3457 vic=idle
+[    73.009] *** binder txn #3600  program=0100152000022000  session=20  code=7(queueBuffer) x1796  flags=0x0  in=192 out=4096
+[    74.826] -> hb:21 sess=1 getdisp=1 relay=1 txn=3812 vic=idle
+[    77.863] -> hb:22 sess=1 getdisp=1 relay=1 txn=4176 vic=idle
+[    78.041] *** binder txn #4200  program=0100152000022000  session=20  code=7(queueBuffer) x2096  flags=0x0  in=192 out=4096
+[    80.892] -> hb:23 sess=1 getdisp=1 relay=1 txn=4525 vic=idle
+[    83.157] *** binder txn #4800  program=0100152000022000  session=20  code=7(queueBuffer) x2396  flags=0x0  in=192 out=4096
+[    83.921] -> hb:24 sess=1 getdisp=1 relay=1 txn=4889 vic=idle
+[    86.948] -> hb:25 sess=1 getdisp=1 relay=1 txn=5253 vic=idle
+[    88.159] *** binder txn #5400  program=0100152000022000  session=20  code=7(queueBuffer) x2696  flags=0x0  in=192 out=4096
+[    89.975] -> hb:26 sess=1 getdisp=1 relay=1 txn=5615 vic=idle
+[    93.019] -> hb:27 sess=1 getdisp=1 relay=1 txn=5979 vic=idle
+[    93.157] *** binder txn #6000  program=0100152000022000  session=20  code=7(queueBuffer) x2996  flags=0x0  in=192 out=4096
+[    96.053] -> hb:28 sess=1 getdisp=1 relay=1 txn=6345 vic=idle
+[    98.156] *** binder txn #6600  program=0100152000022000  session=20  code=7(queueBuffer) x3296  flags=0x0  in=192 out=4096
+[    99.081] -> hb:29 sess=1 getdisp=1 relay=1 txn=6709 vic=idle
+[   102.107] -> hb:30 sess=1 getdisp=1 relay=1 txn=7071 vic=idle
+[   103.156] *** binder txn #7200  program=0100152000022000  session=20  code=7(queueBuffer) x3596  flags=0x0  in=192 out=4096
+[   105.136] -> hb:31 sess=1 getdisp=1 relay=1 txn=7435 vic=idle
+[   108.168] *** binder txn #7800  program=0100152000022000  session=20  code=7(queueBuffer) x3896  flags=0x0  in=192 out=4096
+[   108.175] -> hb:32 sess=1 getdisp=1 relay=1 txn=7799 vic=idle
+[   111.212] -> hb:33 sess=1 getdisp=1 relay=1 txn=8163 vic=idle
+[   113.157] *** binder txn #8400  program=0100152000022000  session=20  code=7(queueBuffer) x4196  flags=0x0  in=192 out=4096
+[   114.250] -> hb:34 sess=1 getdisp=1 relay=1 txn=8529 vic=idle
+[   117.281] -> hb:35 sess=1 getdisp=1 relay=1 txn=8893 vic=idle
+[   118.157] *** binder txn #9000  program=0100152000022000  session=20  code=7(queueBuffer) x4496  flags=0x0  in=192 out=4096
+[   120.308] -> hb:36 sess=1 getdisp=1 relay=1 txn=9255 vic=idle
+[   123.156] *** binder txn #9600  program=0100152000022000  session=20  code=7(queueBuffer) x4796  flags=0x0  in=192 out=4096
+[   123.338] -> hb:37 sess=1 getdisp=1 relay=1 txn=9619 vic=idle
+[   126.379] -> hb:38 sess=1 getdisp=1 relay=1 txn=9983 vic=idle
+[   128.157] *** binder txn #10200  program=0100152000022000  session=20  code=7(queueBuffer) x5096  flags=0x0  in=192 out=4096
+[   129.702] -> hb:39 sess=1 getdisp=1 relay=1 txn=10347 vic=idle
+[   132.736] -> hb:40 sess=1 getdisp=1 relay=1 txn=10747 vic=idle
+[   133.157] *** binder txn #10800  program=0100152000022000  session=20  code=7(queueBuffer) x5396  flags=0x0  in=192 out=4096
+[   135.762] -> hb:41 sess=1 getdisp=1 relay=1 txn=11111 vic=idle
+[   138.157] *** binder txn #11400  program=0100152000022000  session=20  code=7(queueBuffer) x5696  flags=0x0  in=192 out=4096
+[   138.787] -> hb:42 sess=1 getdisp=1 relay=1 txn=11473 vic=idle
+[   141.826] -> hb:43 sess=1 getdisp=1 relay=1 txn=11837 vic=idle
+[   143.157] *** binder txn #12000  program=0100152000022000  session=20  code=7(queueBuffer) x5996  flags=0x0  in=192 out=4096
+[   144.854] -> hb:44 sess=1 getdisp=1 relay=1 txn=12201 vic=idle
+[   147.881] -> hb:45 sess=1 getdisp=1 relay=1 txn=12565 vic=idle
+[   148.157] *** binder txn #12600  program=0100152000022000  session=20  code=7(queueBuffer) x6296  flags=0x0  in=192 out=4096
+[   150.909] -> hb:46 sess=1 getdisp=1 relay=1 txn=12927 vic=idle
+[   153.157] *** binder txn #13200  program=0100152000022000  session=20  code=7(queueBuffer) x6596  flags=0x0  in=192 out=4096
+[   153.937] -> hb:47 sess=1 getdisp=1 relay=1 txn=13291 vic=idle
+[   156.967] -> hb:48 sess=1 getdisp=1 relay=1 txn=13655 vic=idle
+[   158.157] *** binder txn #13800  program=0100152000022000  session=20  code=7(queueBuffer) x6896  flags=0x0  in=192 out=4096
+[   159.997] -> hb:49 sess=1 getdisp=1 relay=1 txn=14018 vic=idle
+[   163.022] -> hb:50 sess=1 getdisp=1 relay=1 txn=14381 vic=idle
+[   163.157] *** binder txn #14400  program=0100152000022000  session=20  code=7(queueBuffer) x7196  flags=0x0  in=192 out=4096
+[   166.056] -> hb:51 sess=1 getdisp=1 relay=1 txn=14745 vic=idle
+[   168.157] *** binder txn #15000  program=0100152000022000  session=20  code=7(queueBuffer) x7496  flags=0x0  in=192 out=4096
+[   169.087] -> hb:52 sess=1 getdisp=1 relay=1 txn=15109 vic=idle
+[   172.116] -> hb:53 sess=1 getdisp=1 relay=1 txn=15473 vic=idle
+[   173.156] *** binder txn #15600  program=0100152000022000  session=20  code=7(queueBuffer) x7796  flags=0x0  in=192 out=4096
+[   175.147] -> hb:54 sess=1 getdisp=1 relay=1 txn=15837 vic=idle
+[   178.177] *** binder txn #16200  program=0100152000022000  session=20  code=7(queueBuffer) x8096  flags=0x0  in=192 out=4096
+[   178.184] -> hb:55 sess=1 getdisp=1 relay=1 txn=16199 vic=idle
+[   181.215] -> hb:56 sess=1 getdisp=1 relay=1 txn=16565 vic=idle
+[   183.157] *** binder txn #16800  program=0100152000022000  session=20  code=7(queueBuffer) x8396  flags=0x0  in=192 out=4096
+[   184.241] -> hb:57 sess=1 getdisp=1 relay=1 txn=16927 vic=idle
+[   187.272] -> hb:58 sess=1 getdisp=1 relay=1 txn=17291 vic=idle
+[   188.157] *** binder txn #17400  program=0100152000022000  session=20  code=7(queueBuffer) x8696  flags=0x0  in=192 out=4096
+[   190.317] -> hb:59 sess=1 getdisp=1 relay=1 txn=17655 vic=idle
+[   193.156] *** binder txn #18000  program=0100152000022000  session=20  code=7(queueBuffer) x8996  flags=0x0  in=192 out=4096
+[   193.347] -> hb:60 sess=1 getdisp=1 relay=1 txn=18021 vic=idle
+[   196.375] -> hb:61 sess=1 getdisp=1 relay=1 txn=18383 vic=idle
+[   198.156] *** binder txn #18600  program=0100152000022000  session=20  code=7(queueBuffer) x9296  flags=0x0  in=192 out=4096
+[   199.403] -> hb:62 sess=1 getdisp=1 relay=1 txn=18747 vic=idle
+[   202.433] -> hb:63 sess=1 getdisp=1 relay=1 txn=19111 vic=idle
+[   203.157] *** binder txn #19200  program=0100152000022000  session=20  code=7(queueBuffer) x9596  flags=0x0  in=192 out=4096
+[   205.462] -> hb:64 sess=1 getdisp=1 relay=1 txn=19475 vic=idle
+[   208.156] *** binder txn #19800  program=0100152000022000  session=20  code=7(queueBuffer) x9896  flags=0x0  in=192 out=4096
+[   208.526] -> hb:65 sess=1 getdisp=1 relay=1 txn=19837 vic=idle
+[   211.601] -> hb:66 sess=1 getdisp=1 relay=1 txn=20207 vic=idle
+[   213.157] *** binder txn #20400  program=0100152000022000  session=20  code=7(queueBuffer) x10196  flags=0x0  in=192 out=4096
+[   214.671] -> hb:67 sess=1 getdisp=1 relay=1 txn=20575 vic=idle
+[   217.810] -> hb:68 sess=1 getdisp=1 relay=1 txn=20951 vic=idle
+[   218.157] *** binder txn #21000  program=0100152000022000  session=20  code=7(queueBuffer) x10496  flags=0x0  in=192 out=4096
+[   220.882] -> hb:69 sess=1 getdisp=1 relay=1 txn=21321 vic=idle
+[   223.157] *** binder txn #21600  program=0100152000022000  session=20  code=7(queueBuffer) x10796  flags=0x0  in=192 out=4096
+[   223.922] -> hb:70 sess=1 getdisp=1 relay=1 txn=21687 vic=idle
+[   226.966] -> hb:71 sess=1 getdisp=1 relay=1 txn=22053 vic=idle
+[   228.174] *** binder txn #22200  program=0100152000022000  session=20  code=7(queueBuffer) x11096  flags=0x0  in=192 out=4096
+[   229.992] -> hb:72 sess=1 getdisp=1 relay=1 txn=22417 vic=idle
+[   233.019] -> hb:73 sess=1 getdisp=1 relay=1 txn=22779 vic=idle
+[   233.174] *** binder txn #22800  program=0100152000022000  session=20  code=7(queueBuffer) x11396  flags=0x0  in=192 out=4096
+[   236.048] -> hb:74 sess=1 getdisp=1 relay=1 txn=22973 vic=idle
+[   239.068] -> hb:75 sess=1 getdisp=1 relay=1 txn=22973 vic=idle
+[   242.092] -> hb:76 sess=1 getdisp=1 relay=1 txn=22973 vic=idle
+[   245.115] -> hb:77 sess=1 getdisp=1 relay=1 txn=22973 vic=idle
+[   248.142] -> hb:78 sess=1 getdisp=1 relay=1 txn=22973 vic=idle
+[   251.178] -> hb:79 sess=1 getdisp=1 relay=1 txn=22973 vic=idle
