@@ -3339,22 +3339,16 @@ namespace ams::mitm::applet {
         void TryNvjpgDecodeControl(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle) {
             namespace ctl = nvjpg_dec_control;
             VicStage("jd:1");
-            LogLine("   ---- M76 NVJPG DECODE POSITIVE CONTROL ----");
+            LogLine("   ---- NVJPG DECODE POSITIVE CONTROL (M77: clock ensured after open, read at submit) ----");
             if (g_engine_wedged) { LogLine("   an earlier engine job never completed - not submitting"); return; }
+            ON_SCOPE_EXIT { ClockWatchStop(); };
 
+            /* M77: informational only. M76 gated the whole probe here on a
+             * hold made ~10 s earlier, and Run B found NVJPG back at 0 by the
+             * time it looked. The clock is now established after the channel
+             * is open (the order oss-nvjpg and nvtegra both use) and checked
+             * immediately before the submit - see ClockEnsure below. */
             ClockSurvey("jpgdec-pre");
-            const bool held = ClocksHoldForEngines("jpgdec");
-            os::SleepThread(TimeSpan::FromMilliSeconds(50));
-            ClockSurvey("jpgdec");
-            u32 jpg_hz = 0;
-            const bool readable = ClockRateOf(PcvModule_NVJPG, std::addressof(jpg_hz));
-            if (!held || !readable || jpg_hz == 0) {
-                LogLine("   jpgdec: NOT submitting - hold=%d clkrst readable=%d NVJPG=%u Hz. An engine that",
-                        held, readable, jpg_hz);
-                LogLine("   cannot run is what wedged M74; the survey lines above are the result of this run.");
-                VicStage("jd:no_clock");
-                return;
-            }
 
             /* Layout inside the (uncached) dst buffer. Every offset is
              * 256-aligned: host1x carries addresses >> 8. */
@@ -3434,10 +3428,35 @@ namespace ams::mitm::applet {
             const u32 fence_off = off; put(0);
             const u32 sz = off;
             const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
-            u32 fence_val = 0; nverr = 0;
+
+            /* M77: the clock, established with the channel already open and
+             * everything else prepared, then read once more with nothing but
+             * a timestamp between that read and the submit. */
+            LogMark("jd:clock");
+            const u32 ensured_hz = ClockEnsure(PcvModule_NVJPG, "jpgdec");
+            /* the breadcrumb goes BEFORE the final read: it is an SD flush,
+             * and nothing that slow may sit between the read and the submit */
             LogMark("jd:submit");
+            u32 jpg_hz = 0;
+            const bool readable = ClockRateOf(PcvModule_NVJPG, std::addressof(jpg_hz));
+            const u64 t_read = armTicksToNs(armGetSystemTick());
+            if (ensured_hz == 0 || !readable || jpg_hz == 0) {
+                /* Nothing has been submitted, so closing is safe. */
+                LogLine("   jpgdec: NOT submitting - ClockEnsure=%u Hz, final read %s %u Hz. An engine that",
+                        ensured_hz, readable ? "=" : "UNREADABLE", jpg_hz);
+                LogLine("   cannot run is what wedged M74. The clk-ensure lines above are this run's result.");
+                UnmapCmdBuffer(jfd, dst_handle);
+                UnmapCmdBuffer(jfd, cmd_handle);
+                NvClose(jfd);
+                VicStage("jd:no_clock");
+                return;
+            }
+
+            u32 fence_val = 0; nverr = 0;
             const auto rc = NvIoctl(jfd, req, sb, sz, std::addressof(nverr));
+            const u64 t_submit = armTicksToNs(armGetSystemTick());
             std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
+            LogMark("jd:submitted");
 
             bool done = false;
             u32 seen = 0;
@@ -3468,10 +3487,14 @@ namespace ams::mitm::applet {
 
             u32 written = 0;
             for (u32 i = 0; i < OutSize; ++i) { if (g_vic_dst_buf[OutOff + i] != 0xAB) { ++written; } }
-            LogLine("   jpgdec: submit rc=0x%x nverr=%u fence %u/%u %s after %llu us | status used=%u mcu=%ux%u result=%u | %u/%u output bytes written",
+            u32 after_hz = 0;
+            const bool after_ok = ClockRateOf(PcvModule_NVJPG, std::addressof(after_hz));
+            LogLine("   jpgdec: submit rc=0x%x nverr=%u fence %u/%u %s after %llu us | NVJPG %u Hz read %llu us before submit returned, %u Hz%s after"
+                    " | status used=%u mcu=%ux%u result=%u | %u/%u output bytes written",
                     rc, nverr, seen, fence_val, done ? "REACHED" : "STALLED",
-                    static_cast<unsigned long long>(us), st.used_bytes, st.mcu_x, st.mcu_y, st.result,
-                    written, OutSize);
+                    static_cast<unsigned long long>(us), jpg_hz,
+                    static_cast<unsigned long long>((t_submit - t_read) / 1000), after_hz, after_ok ? "" : " (unreadable)",
+                    st.used_bytes, st.mcu_x, st.mcu_y, st.result, written, OutSize);
 
             if (done) {
                 /* compare 8x8 block means with what libjpeg decodes on the PC */

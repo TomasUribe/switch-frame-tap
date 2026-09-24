@@ -49,10 +49,28 @@ namespace ams::mitm::applet {
     /* One log line per engine: the clock clkrst reports right now. */
     void ClockSurvey(const char *label);
 
-    /* Idempotent. Opens mm:u and requests the maximum rate on every candidate
-     * engine id, then holds the requests. Returns true if any request
-     * succeeded. Safe to call from any thread. */
+    /* Creates the mm:u requests once (maximum rate on every candidate engine
+     * id) and keeps them. Returns true if any request succeeded. Safe to call
+     * from any thread.
+     *
+     * M77: "held" means the requests EXIST, not that any clock is running
+     * now. M76 Run B watched NVJPG go from 652.8 MHz to 0 while its request
+     * was never released, and jpgdec trusted this call's `true`. Before a
+     * submit, use ClockEnsure. */
     bool ClocksHoldForEngines(const char *who);
+
+    /* M77: make sure `pcv_module` is clocked RIGHT NOW. Re-applies the mm:u
+     * request for that engine and reads the clock back through clkrst,
+     * escalating until it is non-zero or the budget is spent:
+     *   1. SetAndWait(max) on the existing request
+     *   2. SetAndWait(0) then SetAndWait(max) - defeats a cached "no change"
+     *   3. Finalize, fresh InitializeWithId, SetAndWait(max)
+     * Which step brings it back is itself evidence of how the clock was lost.
+     * Returns the rate clkrst reports, 0 if it never came up. */
+    u32 ClockEnsure(u32 pcv_module, const char *who);
+
+    /* Ends the clock watch the survey thread runs while it holds clocks. */
+    void ClockWatchStop();
 
     /* Starts the survey thread when "clk" is armed: at t=wait it surveys,
      * holds, surveys again, and (if no engine probe is armed) releases. */

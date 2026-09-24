@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 71 hardware test cycles. Current build: **M76**. Run A and Run B done; NVJPG clock decay found.
+`0100000000000C20`. 73 hardware test cycles (M76 Run A and Run B included). Current build: **M77** (not yet run): NVJPG clock established at the submit.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -87,6 +87,105 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M77: establish NVJPG's clock at the submit, and find out what cleared it (built, not yet run) ***
+
+Picks up from `HANDOFF-M76.md`. No hardware cycle yet.
+
+### What Run B's log shows, beyond the summary
+
+Between the hold (52.4 s) and the jpgdec check (62.9 s) exactly three things
+happened:
+
+```
+52.461  mm id 7 (NVJPG) SetAndWait(max) -> 652.8 MHz
+54.635  clk[held+2s]   VIC=652.8  NVJPG=652.8  NVDEC=979.2   <- still up
+61.008  vb:4b_node_survey - opens and CLOSES every engine node:
+61.152    /dev/nvhost-msenc   61.167 /dev/nvhost-nvdec   61.199 /dev/nvhost-nvjpg
+61.669  /dev/nvhost-vic opened (the VIC worker's own channel)
+62.927  clk[jpgdec-pre] VIC=422.4  NVJPG=0.0    NVDEC=979.2   <- NVJPG gone
+```
+
+- **VIC fell with NVJPG** (652.8 -> 422.4). Run A's release shows the same
+  pairing: dropping the NVJPG request put VIC back to 422.4, while NVENC and
+  NVDEC rose and fell together. By the rates, {NVJPG, VIC} and {NVENC, NVDEC}
+  behave like two shared clock domains. That is an inference from four
+  numbers, not a documented fact.
+- So in Run B the NVJPG request's **effect vanished entirely**, VIC included.
+  This was not NVJPG idling on its own. Something undid the rate mm:u had set.
+- **Prime suspect: the node survey's open and close of `/dev/nvhost-nvjpg`.**
+  The last close of an engine channel is the natural place for nvservices to
+  drop that engine's clock. The evidence against it: NVDEC's node was opened
+  and closed in the same survey and NVDEC stayed at 979.2. So this is a
+  suspect, not a finding.
+- **The order was backwards anyway.** Both working drivers open the engine
+  channel first and request the clock after (oss-nvjpg: `channel.open`, map,
+  then `mmuRequestInitialize`; nvtegra: open at device init, `SetAndWait` at
+  decode init). M76 requested the clock ten seconds before a channel existed.
+
+The bug that turned this into a refusal is the one the handoff names:
+`ClocksHoldForEngines` returned `true` from its idempotency guard, so
+`held=1` meant "a request exists", not "the clock is running".
+
+### The fix
+
+- **`ClockEnsure(module)`** re-applies the mm:u request for that engine and
+  reads the clock back through clkrst. It escalates until the clock is non-zero
+  or six attempts are spent, and logs every attempt:
+  1. `SetAndWait(max)` on the existing request
+  2. `SetAndWait(0)` then `SetAndWait(max)`, which defeats a cached "no change"
+  3. `FinalizeWithId`, fresh `InitializeWithId`, `SetAndWait(max)`
+  `ClocksHoldForEngines` now documents that it only creates requests.
+- **jpgdec order:** open the channel -> syncpoint -> nvmap fd -> map buffers
+  -> prepare record, scan, cmdbuf and submit args -> `ClockEnsure` ->
+  breadcrumb -> **final clkrst read -> submit**, with nothing but a timestamp
+  between the read and the ioctl. The result line carries the NVJPG rate read
+  at the submit, how many microseconds before the submit returned, and the
+  rate afterwards.
+- If the clock cannot be brought up, jpgdec unmaps, closes (nothing was
+  submitted, so teardown is safe) and refuses.
+- **`clk-watch`:** while the survey thread holds clocks for an engine probe,
+  it samples NVJPG, VIC and NVDEC every 200 ms and logs only changes, until
+  jpgdec finishes (or 45 s). That places the drop against the node survey's
+  timestamps.
+
+Which ensure step brings NVJPG back is itself a result:
+
+| step that works | meaning |
+|---|---|
+| 1, re-set max | the rate was overwritten underneath mm:u; a fresh request re-applies it |
+| 2, 0 then max | mm:u caches the rate and skipped a same-value request; pcv had been changed behind it |
+| 3, fresh request | the request itself was dropped server-side |
+| none | this process cannot hold NVJPG's clock with a channel open; stop and rethink |
+
+### Run C - `vic clk jpgdec wait=60`
+
+Same arm file as Run B, in a game. Read, in order:
+
+1. `clk-watch` lines from ~54.7 s: when NVJPG and VIC drop, against
+   `node /dev/nvhost-nvjpg` (~61.2 s) and the `/dev/nvhost-vic` open.
+2. `clk-ensure(jpgdec)` lines: which step brought NVJPG up.
+3. `jpgdec: submit ... NVJPG <Hz> read <us> before submit returned`:
+
+| result | meaning |
+|---|---|
+| REACHED, block means match | this process drives a non-VIC engine and the decode record is right. NVJPG's M73/M74 failures were the clock plus the offsets M76 fixed. Run `tools/nvjpg_dec_control.py check` on `nvjpg-dec.rgba` |
+| REACHED, mismatch | the engine ran; the output needs comparing on the PC |
+| STALLED, NVJPG non-zero at submit | the clock was necessary but not sufficient; something in our submit path is still wrong. Next suspects: the SETCL oss-nvjpg does not send on Horizon, adopting the game's aruid before opening nvmap, the `nvdrv:t` session |
+| refused | the watch and ensure lines say why |
+
+**Risk:** unchanged from Run B. A stall can still wedge the compositor like
+M74 did, even though the channel is left open on a stall.
+
+### NVENC
+
+Run A settled one thing: NVENC ran at 460.8 MHz before anything was
+requested, so the clock does not explain M68-M71. That leaves configuration or
+the submit path, and Run C tells them apart for free. If jpgdec completes, our
+submit path is proven and NVENC is purely a config problem, best answered by
+grc's own job (the M75 observer, which has never actually run). If jpgdec
+stalls with a clock, NVENC would stall for the same reason, so the submit path
+comes first.
 
 ## *** M76: nobody ever asked for the clock - and the NVJPG table was one register off ***
 

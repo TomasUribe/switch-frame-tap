@@ -20,11 +20,14 @@ developed on and for the author's own console.
 > finished is finished properly and verified on hardware; what is not is marked
 > as such throughout. See [Roadmap](#roadmap).
 >
-> **Latest (M76, desk review, not yet run):** the hardware encoders were never
-> given a clock. On Horizon a client requests NVENC/NVJPG clocks from `mm:u`,
-> and this project never did — which fits every "accepted, never executed"
-> result since M68. M76 adds a clock survey and the project's first
-> known-good engine job as a control. See [M76](#m76-the-encoders-were-never-clocked).
+> **Latest (M76 run on hardware, M77 built):** NVJPG really was unclocked in
+> every earlier probe; requesting its clock from `mm:u` brings it to 652.8 MHz.
+> NVENC was already running at 460.8 MHz before anything asked, so NVENC's
+> failures are not a clock problem. The M76 decode control refused to submit
+> because NVJPG's clock had dropped back to 0 by the time it looked. M77
+> re-establishes the clock after opening the channel and reads it again right
+> at the submit. See [M76](#m76-the-encoders-were-never-clocked) and
+> [STATUS.md](tier4/mitm/STATUS.md).
 
 **Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
 71 hardware test cycles.
@@ -424,9 +427,9 @@ version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
 | **End-to-end stream** | **done, on hardware** — **768x432 at 59.6 fps**, 3600 frames, 0 stale; user-confirmed playable |
 | VIC scale + packed 4:2:0 in the stream path | **done, on hardware** — 2.1 ms/frame, 1.5 B/px, no codec |
 | Native resolution at 60 fps | **blocked on bandwidth, now measured.** The link saturates at ~37 MB/s, capping 60 fps at ~800x450. Raw 1080p60 needs 186.6 MB/s |
-| NVENC H.264 encode | **channel proven, engine silent.** host1x retires a full 39-word job with every surface populated; the engine never completes it. Prime suspect since M76: no `mm:u` clock request — see [M76](#m76-the-encoders-were-never-clocked) |
-| Engine clocks via `mm:u` (M76) | **built, not yet run.** `clk`: survey + request, no engine contact |
-| NVJPG decode positive control (M76) | **built, not yet run.** `jpgdec`: one known-good job, record verified byte-for-byte against oss-nvjpg |
+| NVENC H.264 encode | **channel proven, engine silent.** host1x retires a full 39-word job with every surface populated; the engine never completes it. **Not the clock** (M76 Run A: 460.8 MHz before any request), so config or submit path |
+| Engine clocks via `mm:u` (M76) | **done, on hardware.** NVJPG 0 -> 652.8 MHz on request; NVENC already clocked. NVJPG's rate does not persist on its own (M76 Run B) |
+| NVJPG decode positive control (M76/M77) | **built, M77 not yet run.** M76 refused to submit (clock had dropped). M77 establishes the clock after opening the channel and reads it at the submit |
 | **Compressed stream over USB 2.0** — the main goal | **in progress.** The link carries ~290 Mbps; H.264 1080p60 is visually lossless at 100–150 Mbps even all-intra, so bitrate has 2–3x headroom and the tuning target is quality and latency, not size. Waiting on NVENC |
 | grc recorder (M72) — capture how the system drives NVENC | **built, not yet run on hardware** |
 | USB 3.0 SuperSpeed — **handheld only** | descriptors **and BOS** accepted, link still negotiates High. Device side now matches haze exactly; the cable is the one untested variable. Docked, the dock owns the USB-C port, so this can never carry a docked stream |
