@@ -20,14 +20,12 @@ developed on and for the author's own console.
 > finished is finished properly and verified on hardware; what is not is marked
 > as such throughout. See [Roadmap](#roadmap).
 >
-> **Latest (M77 Run C, on hardware):** the first engine other than the VIC
-> has completed a job for this project. One NVJPG decode finished in 314 us,
-> with the clock confirmed at the submit, and its output matched libjpeg block
-> for block. That proves the whole submit path. NVENC's clock was running all
-> along (M76 Run A), so what NVENC still needs is its job configuration. M78
-> reads grc's own encoder job out of grc's memory, read-only, and fixes the
-> dump that should have let the PC verify the decode. See
-> [M76](#m76-the-encoders-were-never-clocked) and
+> **Latest (M78 Run D, on hardware):** a hardware NVJPG decode is verified
+> byte for byte on the PC, and the first live NVENC configuration on this
+> firmware has been read out of grc (the system recorder) without touching the
+> engine: 1280x720 H.264 High, 30 fps, 5 Mbps, NVENC 5.0 magic. It differs from
+> this project's own M71 job in a dozen fields. M79 captures grc's command
+> buffer and an intra frame, which is all a replay still needs. See
 > [STATUS.md](tier4/mitm/STATUS.md).
 
 **Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
@@ -431,7 +429,7 @@ version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
 | NVENC H.264 encode | **channel proven, engine silent.** host1x retires a full 39-word job with every surface populated; the engine never completes it. **Not the clock** (M76 Run A: 460.8 MHz before any request), so config or submit path |
 | Engine clocks via `mm:u` (M76) | **done, on hardware.** NVJPG 0 -> 652.8 MHz on request; NVENC already clocked. NVJPG's rate does not persist on its own (M76 Run B) |
 | NVJPG decode positive control (M76/M77) | **done, on hardware (M77 Run C).** 64x64 decode in 314 us, output matches. First completed non-VIC engine job; the submit path is proven |
-| grc's NVENC job, read out of grc (M75 observer, M78 dumps) | **built, not yet run.** Read-only; dumps setups and command buffers for `nvrec.py` / `nvsetup-dump` |
+| grc's NVENC job, read out of grc (M75 observer, M78 dumps) | **setups captured on hardware (M78 Run D).** 720p30 High-profile config decoded with NVIDIA's header. Command buffer and an intra frame: M79, not yet run |
 | **Compressed stream over USB 2.0** — the main goal | **in progress.** The link carries ~290 Mbps; H.264 1080p60 is visually lossless at 100–150 Mbps even all-intra, so bitrate has 2–3x headroom and the tuning target is quality and latency, not size. Waiting on NVENC |
 | grc recorder (M72) — capture how the system drives NVENC | **built, not yet run on hardware** |
 | USB 3.0 SuperSpeed — **handheld only** | descriptors **and BOS** accepted, link still negotiates High. Device side now matches haze exactly; the cable is the one untested variable. Docked, the dock owns the USB-C port, so this can never carry a docked stream |

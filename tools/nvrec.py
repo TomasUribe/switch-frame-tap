@@ -70,7 +70,8 @@ def decode_cmdbuf(words, out):
             method = v
         elif r == 0x11:
             m = method << 2
-            out(f"      {CLASS.get(cls, hex(cls or 0)):6} {m:#06x} {NVENC_METHODS.get(m, '?'):32} = {v:#010x}"
+            cname = "?" if cls is None else CLASS.get(cls, hex(cls))   # no SETCL seen: class set by nvservices
+            out(f"      {cname:6} {m:#06x} {NVENC_METHODS.get(m, '?'):32} = {v:#010x}"
                 + (f"   (iova {v << 8:#x})" if 0x400 <= m < 0x800 and m not in (0x700, 0x704) else ""))
         elif r == 0x00:
             out(f"      INCR_SYNCPT cond={(v >> 8) & 0xFF} syncpt={v & 0xFF}")
@@ -129,10 +130,22 @@ def main():
             say(f"{t} CLOSE  {fds.get(fd, fd)}")
         elif kind == 7:
             words = list(struct.unpack_from(f"<{len(p) // 4}I", p))
-            say(f"{t} CMDBUF handle={x:#x} offset={y:#x} words={len(words)}")
-            decode_cmdbuf(words, say)
+            if rq:
+                # M79 grc observer: payload read from grc va (x<<32|y), and rq is
+                # the offset of the SET_IN_DRV_PIC_SETUP write inside it. Words
+                # before the hit are shown raw - the dump may start mid-command.
+                hit = rq // 4
+                say(f"{t} CMDBUF grc va {(x << 32) | y:#x} words={len(words)}  hit at +{rq:#x} (word {hit})")
+                for k in range(0, hit, 8):
+                    say(f"      -{(hit - k) * 4:#06x}: " + " ".join(f"{v:08x}" for v in words[k:min(k + 8, hit)]))
+                say("    decoded from the hit:")
+                decode_cmdbuf(words[hit:], say)
+            else:
+                say(f"{t} CMDBUF handle={x:#x} offset={y:#x} words={len(words)}")
+                decode_cmdbuf(words, say)
         elif kind == 8:
-            say(f"{t} SETUP  iova={x:#x} (grc va low {y:#x}) {len(p)} B  magic={struct.unpack_from('<I', p)[0]:#010x}")
+            where = f"grc va {(x << 32) | y:#x}" if x else f"iova={x:#x} (grc va low {y:#x})"
+            say(f"{t} SETUP  {where} {len(p)} B  magic={struct.unpack_from('<I', p)[0]:#010x}")
             if a.out:
                 os.makedirs(a.out, exist_ok=True)
                 fn = os.path.join(a.out, f"setup_{nset}.bin")

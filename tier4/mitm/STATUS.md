@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 74 hardware test cycles (through M77 Run C). Current build: **M78** (not yet run).
+`0100000000000C20`. 75 hardware test cycles (through M78 Run D). Current build: **M79** (not yet run).
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,7 +88,90 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M78: the dump that could not have worked, and grc's encoder job read out (built, not yet run) ***
+## *** M79: grc's live encoder config is in hand - now its command buffer and an intra frame (built, not yet run) ***
+
+### M78 Run D, read
+
+Facts in `RESULT-M78-RUND.md`. Verified here as well: the decode file's
+FNV-1a equals the console's `sd(...)` line (`3c391345`), and the check tool
+reports diff 0, so NVJPG's output matches libjpeg's to the byte for this
+image. `grc-scan.bin` matches too (`60525240`).
+
+The observer attached to grc (pid 138), resumed it, scanned 98,356 KB across
+52 regions, and **stopped at the 96 MB cap**. It found five NVENC 5.0 magics
+and **no NVENC SETCL at all**.
+
+- **Three of the five are grc's live per-frame setups.** Each sits at the
+  start of its own 12 KB region (`0x55c7959000`, `...c000`, `...f000`, state
+  0xd). They differ in exactly two fields, `frame_num` and
+  `pic_order_cnt_lsb` (1/2, 2/4, 2/4), so they look like a ring of setups for
+  consecutive frames.
+- The other two are in a 532 KB heap region: the magic followed by
+  pointer-like words. Some other grc object, not a setup.
+- **This is the configuration NVENC accepts on this firmware**, decoded with
+  NVIDIA's header:
+
+| field | grc | M71 (ours) |
+|---|---|---|
+| magic | 0xd0b70006 (NVENC 5.0) | same |
+| size / input | 1280x720, pitch 1280, block_height 2 | 256x128, pitch-linear |
+| ref / output pictures | tiled 16x16, chroma at +0xE10 x 256 B | tiled, separate chroma |
+| profile / level | High (100) / 3.2, CABAC, 8x8 transform | Baseline (66) / 4.2, CAVLC |
+| GOP | 15, P frames, 1 reference, POC type 2 | infinite, every frame IDR |
+| rate control | hrd_type 1, 5 Mbps, VBV 5 Mb, QP 24/28/24, two_pass_rc | hrd_type 2, constant QP 26 |
+| framerate | 7680 = 30 << 8 (8.8 fixed point) | 60 (i.e. 0.23 fps) |
+| rhopbi | 0,0,0 | 256,256,256 |
+| max_slice_size, e4byteStartCode | 3600, 1 | 256 KB, 0 |
+| ME / MD / quant controls | fully populated | ME: one field set; MD: intra modes only; quant: zeroed |
+| hist / bitstream buffers | 706,560 / 1,382,400 B | 64 KB / 256 KB |
+
+  Any of those differences could have kept M68-M71's job from completing.
+  None has to be guessed any more: the replay starts from grc's bytes.
+- **The command buffer is still missing.** No NVENC SETCL turned up in
+  96 MB. The likely reason is the one oss-nvjpg already shows: on Horizon
+  userspace does not send SETCL, and nvservices sets the class. M78's search
+  keyed on SETCL, so it could not have found grc's command buffers, and the
+  cap may have kept it out of the right regions anyway. The command buffer
+  holds what the setup does not: the `SET_CONTROL_PARAMS` value, and which
+  surfaces grc binds (rate-control data, IO history, status, reference
+  pictures).
+- **Every setup caught was a P frame.** The first job to replay should be an
+  intra frame, which references nothing.
+
+### What M79 builds
+
+- **Command buffers found by what they do.** A hit is a method-offset write
+  (INCR, NONINCR or MASK to register 0x10, or the IMM form) whose method is
+  `SET_IN_DRV_PIC_SETUP` (0x710 >> 2). Each gets a 2 KB window starting
+  0x200 before the hit; at most two per region and twelve in all.
+- **No blind spots from the cap.** Every readable region up to 8 MB is
+  scanned in full, with an overall cap of 256 MB. Larger regions (frame and
+  bitstream storage) are skipped, and each is recorded as a note.
+- **The setup ring is watched for up to 3 s** after the scan, with grc
+  running. Each new (slot, frame_num, pic_type) is dumped. Intra frames
+  (pic_type 2 or 3) are always kept, P frames at most three. The first time
+  an intra frame appears, the command-buffer windows are dumped again at that
+  moment. Each pass drains any debug event, so grc is never left halted.
+- `tools/nvrec.py`: observer CMDBUF records carry the hit offset. The words
+  before it are printed raw (the window may start mid-command) and decoding
+  starts at the hit. The class shows as `?` when no SETCL was seen.
+  Round-tripped on the host with a synthetic file; M78's file still decodes.
+
+### Run E - `vic grcscan wait=60`
+
+No engine probe, and no clock requests: this run only reads grc.
+
+| reading | next |
+|---|---|
+| SET_IN_DRV_PIC_SETUP writes decoded, plus an intra setup | **M80 replays grc's intra frame**: its setup bytes and its method list, in our own NVENC job at 1280x720, from a VIC-made NV12 input, over the submit path jpgdec proved, with ClockEnsure on NVENC first |
+| writes decoded, no intra frame | M80 can still start from a P setup rewritten to IDR (pic_type 3, frame_num 0, POC 0). Less faithful |
+| no writes found | the command buffers are in a skipped (> 8 MB) region or use an encoding this search misses; the skipped-region notes say where to look next |
+
+**Risk:** the attach lasts up to ~3 s instead of under 1 s. grc keeps running
+the whole time. In Run D, a video capture right after a sub-second attach
+saved and played back fine.
+
+## *** M78: the dump that could not have worked, and grc's encoder job read out (Run D: both files verified, grc's setups captured) ***
 
 ### M77 Run C: this process drove a non-VIC engine for the first time
 

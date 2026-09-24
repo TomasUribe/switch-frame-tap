@@ -3689,6 +3689,12 @@ namespace ams::mitm::applet {
             /* SETCL word: opcode 0, offset 0, class in bits 15:6. */
             const u32 setcl_nvenc = vic::Host1xOpcodeSetClass(0, 0x21, 0);
             const u32 setcl_nvjpg = vic::Host1xOpcodeSetClass(0, 0xC0, 0);
+            /* M79: SET_IN_DRV_PIC_SETUP as a method-offset value. Run D found
+             * grc's setups and not one NVENC SETCL - like oss-nvjpg on Horizon,
+             * grc evidently leaves the class to nvservices - so its command
+             * buffers are found by the write that points the engine at a
+             * setup, whichever opcode carries it. */
+            constexpr u32 MethodDrvPicSetup = 0x710u >> 2;
 
             /* g_ind_buf is the scratch this scan reads into; it only exists
              * once the VIC heap is up, so "vic" must be armed alongside. */
@@ -3699,29 +3705,34 @@ namespace ams::mitm::applet {
                 return;
             }
 
-            static constexpr u32 MaxHits = 24;
-            ScanHit hits[MaxHits] = {};
-            u32 nhits = 0, nregions = 0;
-            u64 scanned = 0;
-            constexpr u64 ScanCap   = 96ull * 1024 * 1024;
+            enum : u32 { Hit_SetclEnc = 5, Hit_SetclJpg = 6, Hit_Method = 7, NumKinds = 8 };
+            static constexpr u32 MaxLogged = 32;
+            ScanHit hits[MaxLogged] = {};
+            u32 nlogged = 0, nkind[NumKinds] = {};
+            u32 nregions = 0, nskipped = 0;
+            u64 scanned = 0, skipped_bytes = 0;
+            /* M79: M78 stopped at a 96 MB cap in address order and may never
+             * have reached grc's command buffers. Command buffers and setups
+             * live in small allocations, so every region up to 8 MB is scanned
+             * in full and only larger ones (frame and bitstream storage) are
+             * skipped - each one noted, so nothing is silently left out. */
+            constexpr u64 MaxRegion = 8ull * 1024 * 1024;
+            constexpr u64 ScanCap   = 256ull * 1024 * 1024;
             constexpr u64 ChunkSize = 64 * 1024;
 
-            /* M78: M75 only LOGGED where things were - four words per hit,
-             * which is not enough to rebuild a job from. Now every NVENC magic
-             * and NVENC SETCL hit is also DUMPED, while we are still attached,
-             * as records in the M72 recorder's format, so tools/nvrec.py
-             * decodes the command buffers method by method and
-             * tools/nvsetup-dump decodes each setup with NVIDIA's header.
-             * Records are built in the cached stage buffer and written with
-             * WriteSdVerified after detaching. */
+            /* M78: every hit is dumped, not just located, as records in the
+             * M72 recorder's format (tools/nvrec.py, tools/nvsetup-dump),
+             * built in the cached stage buffer and written with
+             * WriteSdVerified after detaching. M79: a CMDBUF record's `rq`
+             * field carries the offset of the hit inside its payload. */
             constexpr size_t RecCap = 0x40000;
             u8 *const rec = g_stage_buf;
             size_t rec_len = 0;
             const bool can_dump = rec != nullptr && 2 * RecCap <= StreamStageSize;
-            auto rec_put = [&](u16 kind, u32 a, u32 b, const void *payload, u32 len) -> u8 * {
+            auto rec_put = [&](u16 kind, u32 rq, u32 a, u32 b, const void *payload, u32 len) -> u8 * {
                 if (!can_dump || rec_len + 32 + len > RecCap) { return nullptr; }
                 const u32 ms = static_cast<u32>(armTicksToNs(armGetSystemTick()) / UINT64_C(1000000));
-                const u32 hdr[8] = { 0x4352564Eu, static_cast<u32>(kind) | (32u << 16), 0, 0, a, b, len, ms };
+                const u32 hdr[8] = { 0x4352564Eu, static_cast<u32>(kind) | (32u << 16), 0, rq, a, b, len, ms };
                 std::memcpy(rec + rec_len, hdr, sizeof(hdr));
                 u8 *body = rec + rec_len + 32;
                 if (payload != nullptr) { std::memcpy(body, payload, len); }
@@ -3730,12 +3741,49 @@ namespace ams::mitm::applet {
             };
             char note[160];
             auto rec_note = [&](int n) {
-                if (n > 0) { rec_put(9, 0, 0, note, static_cast<u32>(n < static_cast<int>(sizeof(note)) ? n : sizeof(note) - 1)); }
+                if (n > 0) { rec_put(9, 0, 0, 0, note, static_cast<u32>(n < static_cast<int>(sizeof(note)) ? n : sizeof(note) - 1)); }
             };
+            /* read `len` bytes of grc at `va` straight into a new record */
             u32 ndumped = 0;
+            auto dump = [&](u16 kind, u32 rq, u64 va, u32 len) -> u8 * {
+                u8 *body = rec_put(kind, rq, static_cast<u32>(va >> 32), static_cast<u32>(va), nullptr, len);
+                if (body == nullptr) { return nullptr; }
+                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(body), dbg, va, len))) {
+                    std::memset(body, 0, len);
+                    rec_note(std::snprintf(note, sizeof(note), "dump @ %#llx: ReadDebugProcessMemory failed - payload zeroed",
+                                           static_cast<unsigned long long>(va)));
+                    return nullptr;
+                }
+                ++ndumped;
+                return body;
+            };
+
+            /* setups worth watching: magic, and a picture size and profile that
+             * make sense (Run D's two heap hits were some other object) */
+            static constexpr u32 MaxSetups = 6;
+            u64 setup_va[MaxSetups] = {};
+            u32 nsetups = 0;
+            auto plausible = [](const u8 *p) {
+                nvenc_h264_drv_pic_setup_s st;
+                std::memcpy(std::addressof(st), p, sizeof(st));
+                const u32 w = st.input_cfg.frame_width_minus1 + 1u, h = st.input_cfg.frame_height_minus1 + 1u;
+                return st.sps_data.profile_idc != 0 && w >= 16 && w <= 4096 && h >= 16 && h <= 4096;
+            };
+
+            /* command-buffer windows: 2 KB from 0x200 before each hit, at most
+             * two per region and twelve in all */
+            struct Win { u64 va; u32 len; u32 hit_off; };
+            static constexpr u32 MaxWins = 12;
+            Win wins[MaxWins] = {};
+            u32 nwins = 0;
+            /* scan-time dump budgets, so a process full of magic-bearing
+             * objects cannot use up the record buffer before the command
+             * buffers and the watch get their turn */
+            u32 nmagic_dumps = 0, nsetcl_dumps = 0;
+            static constexpr u32 MaxMagicDumps = 8, MaxSetclDumps = 4;
 
             u64 addr = 0;
-            for (u32 steps = 0; steps < 4000; ++steps) {
+            for (u32 steps = 0; steps < 8000; ++steps) {
                 ::ams::svc::MemoryInfo mi = {};
                 ::ams::svc::PageInfo   pi = {};
                 if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr))) { break; }
@@ -3744,15 +3792,22 @@ namespace ams::mitm::applet {
                 const u32 perm  = static_cast<u32>(mi.permission);
                 const u32 state = static_cast<u32>(mi.state);
                 const bool readable = (perm & ::ams::svc::MemoryPermission_Read) != 0;
-                /* Code and stack are not where a driver config struct lives;
-                 * skipping them keeps the scan inside a sane budget. */
+                /* Code and stack are not where a driver config struct lives. */
                 const bool interesting = readable && mi.size >= 0x1000 &&
                                          state != static_cast<u32>(::ams::svc::MemoryState_Free) &&
                                          state != static_cast<u32>(::ams::svc::MemoryState_Code) &&
                                          state != static_cast<u32>(::ams::svc::MemoryState_AliasCode);
 
-                if (interesting && scanned < ScanCap) {
+                if (interesting && mi.size > MaxRegion) {
+                    ++nskipped;
+                    skipped_bytes += mi.size;
+                    rec_note(std::snprintf(note, sizeof(note), "skipped region %#llx+%#llx state %#x perm %#x (over 8 MB)",
+                                           static_cast<unsigned long long>(mi.base_address),
+                                           static_cast<unsigned long long>(mi.size), state, perm));
+                } else if (interesting && scanned < ScanCap) {
                     ++nregions;
+                    u32 region_wins = 0;
+                    const u64 region_end = mi.base_address + mi.size;
                     for (u64 off = 0; off < mi.size && scanned < ScanCap; off += ChunkSize) {
                         const u64 n = (mi.size - off < ChunkSize) ? (mi.size - off) : ChunkSize;
                         if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf),
@@ -3760,40 +3815,63 @@ namespace ams::mitm::applet {
                         scanned += n;
                         const u32 *w = reinterpret_cast<const u32 *>(g_ind_buf);
                         const u64 nw = n / 4;
-                        for (u64 i = 0; i + 4 < nw && nhits < MaxHits; ++i) {
+                        for (u64 i = 0; i + 4 < nw; ++i) {
                             u32 kind = 0;
                             for (u32 m = 0; m < 4; ++m) { if (w[i] == NvencMagics[m]) { kind = 1 + m; } }
-                            /* M78: a SETCL counts only if the next word writes
-                             * the method-offset register (0x10) with INCR,
-                             * NONINCR or MASK - what a real cmdbuf does next.
-                             * M75's "opcode <= 4" accepted almost any word. */
+                            /* M78: a SETCL counts only if the next word writes the
+                             * method-offset register (0x10) with INCR, NONINCR or
+                             * MASK. */
                             const u32 nx = w[i + 1] >> 16;
                             const bool method_next = nx == 0x1010 || nx == 0x2010 || nx == 0x3010;
-                            if (kind == 0 && w[i] == setcl_nvenc && method_next) { kind = 5; }
-                            if (kind == 0 && w[i] == setcl_nvjpg && method_next) { kind = 6; }
+                            if (kind == 0 && w[i] == setcl_nvenc && method_next) { kind = Hit_SetclEnc; }
+                            if (kind == 0 && w[i] == setcl_nvjpg && method_next) { kind = Hit_SetclJpg; }
+                            const u32 op = w[i] >> 16;
+                            if (kind == 0 && (((op == 0x1010 || op == 0x2010 || op == 0x3010) && w[i + 1] == MethodDrvPicSetup) ||
+                                              w[i] == (0x40100000u | MethodDrvPicSetup))) {
+                                kind = Hit_Method;
+                            }
                             if (kind == 0) { continue; }
+                            ++nkind[kind];
                             const u64 hit_addr = mi.base_address + off + i * 4;
-                            hits[nhits++] = { hit_addr, kind, w[i], w[i+1], w[i+2], w[i+3] };
+                            if (nlogged < MaxLogged) { hits[nlogged++] = { hit_addr, kind, w[i], w[i+1], w[i+2], w[i+3] }; }
 
-                            /* dump it now, while attached: 4 KB of setup from a
-                             * magic, 1 KB of command words from an NVENC SETCL,
-                             * clamped to the end of this memory region */
-                            if (kind <= 5) {
-                                const u64 region_end = mi.base_address + mi.size;
-                                u32 want = (kind == 5) ? 0x400u : 0x1000u;
+                            if (kind <= 4 && nmagic_dumps < MaxMagicDumps) {
+                                ++nmagic_dumps;
+                                /* 4 KB of setup: the 512-byte header plus the
+                                 * control arrays pic_control points into */
+                                u32 want = 0x1000u;
                                 if (hit_addr + want > region_end) { want = static_cast<u32>(region_end - hit_addr) & ~3u; }
-                                rec_note(std::snprintf(note, sizeof(note), "hit %u kind %u @ %#llx in region %#llx+%#llx state %#x perm %#x",
-                                                       nhits - 1, kind, static_cast<unsigned long long>(hit_addr),
+                                rec_note(std::snprintf(note, sizeof(note), "setup magic @ %#llx in region %#llx+%#llx state %#x perm %#x",
+                                                       static_cast<unsigned long long>(hit_addr),
                                                        static_cast<unsigned long long>(mi.base_address),
                                                        static_cast<unsigned long long>(mi.size), state, perm));
-                                u8 *body = rec_put(kind == 5 ? 7 : 8, 0, static_cast<u32>(hit_addr), nullptr, want);
-                                if (body != nullptr) {
-                                    if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(body), dbg, hit_addr, want))) {
-                                        ++ndumped;
-                                    } else {
-                                        std::memset(body, 0, want);
-                                        rec_note(std::snprintf(note, sizeof(note), "hit %u: ReadDebugProcessMemory failed - payload zeroed", nhits - 1));
-                                    }
+                                const u8 *body = dump(8, 0, hit_addr, want);
+                                if (body != nullptr && want >= sizeof(nvenc_h264_drv_pic_setup_s) && plausible(body) && nsetups < MaxSetups) {
+                                    setup_va[nsetups++] = hit_addr;
+                                }
+                            } else if (kind == Hit_SetclEnc && nsetcl_dumps < MaxSetclDumps) {
+                                ++nsetcl_dumps;
+                                u32 want = 0x400u;
+                                if (hit_addr + want > region_end) { want = static_cast<u32>(region_end - hit_addr) & ~3u; }
+                                rec_note(std::snprintf(note, sizeof(note), "NVENC SETCL @ %#llx", static_cast<unsigned long long>(hit_addr)));
+                                dump(7, 0, hit_addr, want);
+                            } else if (kind == Hit_Method && region_wins < 2 && nwins < MaxWins) {
+                                bool covered = false;
+                                for (u32 k = 0; k < nwins; ++k) {
+                                    if (hit_addr >= wins[k].va && hit_addr < wins[k].va + wins[k].len) { covered = true; }
+                                }
+                                if (!covered) {
+                                    const u64 ws = (hit_addr - mi.base_address > 0x200) ? hit_addr - 0x200 : mi.base_address;
+                                    u32 wl = 0x800u;
+                                    if (ws + wl > region_end) { wl = static_cast<u32>(region_end - ws) & ~3u; }
+                                    wins[nwins] = { ws, wl, static_cast<u32>(hit_addr - ws) };
+                                    rec_note(std::snprintf(note, sizeof(note), "SET_IN_DRV_PIC_SETUP write @ %#llx (+%#x in the dump) in region %#llx+%#llx state %#x",
+                                                           static_cast<unsigned long long>(hit_addr), wins[nwins].hit_off,
+                                                           static_cast<unsigned long long>(mi.base_address),
+                                                           static_cast<unsigned long long>(mi.size), state));
+                                    dump(7, wins[nwins].hit_off, ws, wl);
+                                    ++nwins;
+                                    ++region_wins;
                                 }
                             }
                         }
@@ -3805,28 +3883,97 @@ namespace ams::mitm::applet {
                 addr = next;
             }
 
-            static_cast<void>(::ams::svc::CloseHandle(dbg));
-            LogLine("   scanned %llu KB across %u regions; %u hit(s)%s",
-                    static_cast<unsigned long long>(scanned / 1024), nregions, nhits,
-                    scanned >= ScanCap ? "  (hit the scan cap)" : "");
+            /* ---- M79: watch grc's setup ring --------------------------------
+             * Run D caught three P-frame setups (frame_num 1 and 2). The first
+             * job we replay should be an intra frame, which needs no reference
+             * picture, so poll the plausible setups for up to three seconds and
+             * dump each new (slot, frame_num, pic_type), always keeping intra
+             * ones. At 30 fps and a GOP of 15 an intra frame comes every
+             * 0.5 s. When the first one shows up, the command-buffer windows
+             * are dumped again at that same moment. grc runs throughout; each
+             * pass drains any debug event so nothing is left halted. */
+            u32 polls = 0, extra_setups = 0, extra_nonintra = 0, nev_watch = 0;
+            bool intra_seen = false, cmd_redumped = false;
+            u32 seen_n = 0;
+            struct Seen { u32 slot; u32 frame_num; u32 pic_type; };
+            Seen seen[48] = {};
+            const u64 w0 = armTicksToNs(armGetSystemTick());
+            if (nsetups > 0) {
+                alignas(8) u8 hdr_buf[sizeof(nvenc_h264_drv_pic_setup_s)];
+                while (armTicksToNs(armGetSystemTick()) - w0 < UINT64_C(3000000000)) {
+                    ++polls;
+                    {
+                        ::ams::svc::DebugEventInfo ev;
+                        u32 n = 0;
+                        while (n < 64 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg))) { ++n; }
+                        if (n != 0) {
+                            nev_watch += n;
+                            static_cast<void>(::ams::svc::ContinueDebugEvent(dbg,
+                                ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll, nullptr, 0));
+                        }
+                    }
+                    for (u32 k = 0; k < nsetups; ++k) {
+                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(hdr_buf), dbg, setup_va[k], sizeof(hdr_buf)))) { continue; }
+                        nvenc_h264_drv_pic_setup_s st;
+                        std::memcpy(std::addressof(st), hdr_buf, sizeof(st));
+                        const u32 fn = st.pic_control.frame_num, pt = st.pic_control.pic_type;
+                        bool known = false;
+                        for (u32 j = 0; j < seen_n; ++j) {
+                            if (seen[j].slot == k && seen[j].frame_num == fn && seen[j].pic_type == pt) { known = true; }
+                        }
+                        if (known) { continue; }
+                        if (seen_n < 48) { seen[seen_n++] = { k, fn, pt }; }
+                        const bool intra = pt >= 2;   /* 2 = I, 3 = IDR */
+                        if (extra_setups >= 8 || (!intra && extra_nonintra >= 3)) { continue; }
+                        rec_note(std::snprintf(note, sizeof(note), "watch +%llu ms: slot %u @ %#llx frame_num %u pic_type %u%s",
+                                               static_cast<unsigned long long>((armTicksToNs(armGetSystemTick()) - w0) / 1000000),
+                                               k, static_cast<unsigned long long>(setup_va[k]), fn, pt, intra ? " (INTRA)" : ""));
+                        if (dump(8, 0, setup_va[k], 0x1000) != nullptr) {
+                            ++extra_setups;
+                            if (!intra) { ++extra_nonintra; }
+                        }
+                        if (intra && !cmd_redumped) {
+                            rec_note(std::snprintf(note, sizeof(note), "intra frame seen: command-buffer windows dumped again now"));
+                            for (u32 j = 0; j < nwins; ++j) { dump(7, wins[j].hit_off, wins[j].va, wins[j].len); }
+                            cmd_redumped = true;
+                        }
+                        intra_seen = intra_seen || intra;
+                    }
+                    if (intra_seen && extra_nonintra >= 2) { break; }
+                    os::SleepThread(TimeSpan::FromMilliSeconds(5));
+                }
+            }
+            const u64 watch_ms = (armTicksToNs(armGetSystemTick()) - w0) / 1000000;
 
-            static const char *KindName[7] = { "?", "NVENC magic 5.0", "NVENC magic 6.0",
-                                               "NVENC magic 1.0", "MSENC magic 2.0",
-                                               "SETCL class 0x21 (NVENC)", "SETCL class 0xC0 (NVJPG)" };
-            for (u32 i = 0; i < nhits; ++i) {
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+            LogLine("   scanned %llu KB across %u regions; skipped %u region(s) over 8 MB (%llu KB)%s",
+                    static_cast<unsigned long long>(scanned / 1024), nregions, nskipped,
+                    static_cast<unsigned long long>(skipped_bytes / 1024),
+                    scanned >= ScanCap ? "  (hit the 256 MB cap)" : "");
+            LogLine("   hits: setup magic %u, NVENC SETCL %u, NVJPG SETCL %u, SET_IN_DRV_PIC_SETUP writes %u",
+                    nkind[1] + nkind[2] + nkind[3] + nkind[4], nkind[Hit_SetclEnc], nkind[Hit_SetclJpg], nkind[Hit_Method]);
+
+            static const char *KindName[NumKinds] = { "?", "NVENC magic 5.0", "NVENC magic 6.0",
+                                                      "NVENC magic 1.0", "MSENC magic 2.0",
+                                                      "SETCL class 0x21 (NVENC)", "SETCL class 0xC0 (NVJPG)",
+                                                      "SET_IN_DRV_PIC_SETUP write" };
+            for (u32 i = 0; i < nlogged; ++i) {
                 LogLine("   hit %2u @ %#llx  %-26s  %08x %08x %08x %08x", i,
                         static_cast<unsigned long long>(hits[i].addr),
-                        KindName[hits[i].kind <= 6 ? hits[i].kind : 0],
+                        KindName[hits[i].kind < NumKinds ? hits[i].kind : 0],
                         hits[i].word0, hits[i].word1, hits[i].word2, hits[i].word3);
             }
-            if (nhits == 0) {
+            LogLine("   plausible setups %u, command-buffer windows %u; watch: %u polls in %llu ms, %u new setups dumped, intra %s, %u debug events",
+                    nsetups, nwins, polls, static_cast<unsigned long long>(watch_ms), extra_setups,
+                    intra_seen ? "CAPTURED" : "not seen", nev_watch);
+            if (nkind[1] + nkind[2] + nkind[3] + nkind[4] + nkind[Hit_Method] == 0) {
                 LogLine("   nothing found. Either grc is idle and has not allocated its encoder");
                 LogLine("   buffers, or they are in memory this process cannot read.");
             }
             if (!can_dump) {
                 LogLine("   no cached stage buffer - hits logged above, nothing dumped");
             } else if (rec_len != 0) {
-                LogLine("   dumped %u hit(s) into %zu B of records -> sdmc:/grc-scan.bin (decode: tools/nvrec.py)", ndumped, rec_len);
+                LogLine("   dumped %u block(s) into %zu B of records -> sdmc:/grc-scan.bin (decode: tools/nvrec.py)", ndumped, rec_len);
                 WriteSdVerified("sdmc:/grc-scan.bin", rec, rec_len, rec + RecCap, nullptr);
             }
             VicStage("grcscan:done");
