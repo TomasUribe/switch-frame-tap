@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 71 hardware test cycles. Current build: **M76** (not yet run).
+`0100000000000C20`. 71 hardware test cycles. Current build: **M76**. Run A done; Run B pending.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,7 +88,7 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M76: nobody ever asked for the clock - and the NVJPG table was one register off (built, not yet run) ***
+## *** M76: nobody ever asked for the clock - and the NVJPG table was one register off ***
 
 No hardware cycle. This milestone is a desk review of M68-M75 against the two
 open-source drivers known to run Tegra engines on this console under Horizon:
@@ -217,6 +217,42 @@ MK8D renders 1280x720 into its 1920x1080 surface (M47).
   every `nvdrv:s` client (vi included) would wait forever. Now `mitm.lst`
   without `grc` registers a pass-through that accepts nobody, and says so in
   the log.
+
+## M76 Run A result: NVJPG confirmed unclocked; NVENC confirmed NOT unclocked
+
+Clean run, no crash, no freeze, game played normally for 230+ s at steady 60 fps
+throughout (queueBuffer incrementing ~300/5s the entire time). Zero engine
+channel touched - pure clkrst + mm:u survey, exactly as designed.
+
+    clk[before]    VIC=422.4  NVENC=460.8  NVJPG=0.0    NVDEC=0.0    HOST1X=81.6  MHz
+    clk[before+] x3 identical - stable baseline before we touch anything
+    clk[held]      VIC=652.8  NVENC=979.2  NVJPG=652.8  NVDEC=979.2  HOST1X=81.6  MHz
+    clk[held+2s]   identical - the hold is stable, not a transient blip
+    clk[released]  VIC=422.4  NVENC=460.8  NVJPG=0.0    NVDEC=0.0    HOST1X=81.6  MHz
+
+Two results, matching both branches of the PR's own decision table at once:
+
+- **NVJPG: 0.0 MHz before, 652.8 MHz when held.** Exactly the M76 prediction.
+  NVJPG was clock-gated in every prior probe (M73, M74) and mm:u raises it.
+  This justifies Run B (jpgdec).
+- **NVENC: 460.8 MHz BEFORE we ever call mm:u.** Non-zero baseline, present
+  through the whole survey window, unrelated to our request. Per the PR's own
+  table: "NVENC non-zero before we ask -> grc keeps it running; NVENC's
+  problem is config, not clock." So the four M68-M71 NVENC "accepted, never
+  executed" results are NOT explained by an unclocked engine - NVENC had a
+  clock the entire time (almost certainly grc's background 30 s capture
+  buffer, which MK8D supports). NVENC's stall is a genuine configuration
+  problem and needs its own investigation, separate from and unrelated to the
+  clock-gating fix.
+
+Side note: requesting NVENC/NVDEC/NVJPG clocks also raised VIC's reported clock
+(422.4 -> 652.8 MHz) even though VIC was not requested. Consistent with a
+shared DVFS voltage/frequency table across the video engine complex.
+
+Cleanly released. Next: Run B (`vic clk jpgdec`), the one-submit decode
+control, is now justified by this data - proceed only as a deliberate step,
+per the PR's stated residual risk (a stall could still wedge the compositor
+even with the channel left open).
 
 ### Test plan
 
