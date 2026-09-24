@@ -17,6 +17,8 @@
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_nvdrv.hpp"
 #include "applet_mitm_nvjpg.hpp"
+#include "applet_mitm_armfile.hpp"
+#include "applet_mitm_clk.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -108,27 +110,41 @@ namespace ams {
             /* M73: opt-in. M72 registered this unconditionally, which meant
              * every run carried the recorder's risk even when the run had
              * nothing to do with grc. Without "grc" in the arm file nothing
-             * here is registered at all, so nvdrv:s is untouched. mitm.lst
-             * must also be absent, or boot2 blocks every nvdrv:s client
-             * waiting for a mitm that never registers. */
-            if (!mitm::applet::g_grc_armed) {
-                mitm::applet::LogLine("grc IPC interceptor: off");
-                return;
-            }
-            /* M75: refuse without mitm.lst. boot2 only declares a future mitm
-             * for services listed there; registering one late means clients
-             * that already have sessions bypass us, and the ones that do not
-             * can block. Checking is cheap and the failure mode is a console
-             * that will not launch a game. */
+             * here is registered at all, so nvdrv:s is untouched - unless
+             * mitm.lst is on the card, in which case see M76 below. */
+            bool have_lst = false;
             {
                 fs::FileHandle lf;
-                if (R_FAILED(fs::OpenFile(std::addressof(lf), "sdmc:/atmosphere/contents/0100000000000C20/mitm.lst", fs::OpenMode_Read))) {
-                    mitm::applet::LogLine("grc IPC interceptor: ARMED but mitm.lst is MISSING - refusing to register");
+                if (R_SUCCEEDED(fs::OpenFile(std::addressof(lf), "sdmc:/atmosphere/contents/0100000000000C20/mitm.lst", fs::OpenMode_Read))) {
+                    fs::CloseFile(lf);
+                    have_lst = true;
+                }
+            }
+            if (!mitm::applet::g_grc_armed) {
+                if (!have_lst) {
+                    mitm::applet::LogLine("grc IPC interceptor: off");
                     return;
                 }
-                fs::CloseFile(lf);
+                /* M76: mitm.lst left on the card from M72-M75 and "grc" not
+                 * armed. boot2 has already declared a future nvdrv:s mitm, so
+                 * if nothing registers, every nvdrv:s client - vi among them -
+                 * waits forever and the console never reaches the home menu.
+                 * Register anyway: ShouldMitm is false for everyone while grc
+                 * is off, so every client gets the real service and none of
+                 * the recorder's handlers can run. */
+                mitm::applet::LogLine("grc IPC interceptor: off, but mitm.lst is PRESENT - registering as a pass-through "
+                                      "(accepts nobody) so nvdrv:s clients are not blocked. Delete mitm.lst.");
+            } else if (!have_lst) {
+                /* M75: refuse without mitm.lst. boot2 only declares a future mitm
+                 * for services listed there; registering one late means clients
+                 * that already have sessions bypass us, and the ones that do not
+                 * can block. Checking is cheap and the failure mode is a console
+                 * that will not launch a game. */
+                mitm::applet::LogLine("grc IPC interceptor: ARMED but mitm.lst is MISSING - refusing to register");
+                return;
+            } else {
+                mitm::applet::LogLine("grc IPC interceptor: ARMED (this handler has hung the console before)");
             }
-            mitm::applet::LogLine("grc IPC interceptor: ARMED (this handler has hung the console before)");
             R_ABORT_UNLESS(g_nv_server_manager.RegisterMitmServer<mitm::applet::NvDrvMitm>(NvPortIndex_Nvdrv, NvdrvMitmServiceName));
             const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
             for (size_t i = 0; i < NvThreads; ++i) {
@@ -169,78 +185,49 @@ namespace ams {
         /* ---- opt-in arm file ----------------------------------------------
          * Nothing touches nvdrv/VIC unless sdmc:/applet-mitm.armed exists and
          * contains "vic". Default is a pure observer, i.e. M7d behaviour. */
-        bool ArmFileContains(const char *keyword) {
+        /* Called once per flag at boot; the file is a single short line. */
+        size_t ReadArmFile(char *buf, size_t cap) {
             fs::FileHandle f;
             if (R_FAILED(fs::OpenFile(std::addressof(f), "sdmc:/applet-mitm.armed", fs::OpenMode_Read))) {
-                return false;
+                return 0;
             }
-            char buf[256] = {};
             s64 fsz = 0;
-            if (R_FAILED(fs::GetFileSize(std::addressof(fsz), f))) { fs::CloseFile(f); return false; }
+            if (R_FAILED(fs::GetFileSize(std::addressof(fsz), f))) { fs::CloseFile(f); return 0; }
             size_t n = static_cast<size_t>(fsz);
-            if (n > sizeof(buf) - 1) { n = sizeof(buf) - 1; }
+            if (n > cap - 1) { n = cap - 1; }
             const bool ok = n > 0 && R_SUCCEEDED(fs::ReadFile(f, 0, buf, n));
             fs::CloseFile(f);
-            if (!ok) { return false; }
+            if (!ok) { return 0; }
             buf[n] = '\0';
+            return n;
+        }
 
-            /* M75: WHOLE-TOKEN match, not substring.
-             *
-             * This was `strstr`, and it cost a hardware cycle and a forced
-             * power-off. The arm file "vic grcscan wait=90" made
-             * ArmFileContains("grc") true, because "grcscan" contains "grc" -
-             * so the grc IPC interceptor registered when I believed it was off,
-             * re-running a handler already known to be broken, and the game
-             * could not launch. The run I thought was a read-only observer was
-             * nothing of the kind.
-             *
-             * Any flag that is a prefix of another is a trap for this: grc and
-             * grcscan, vic and vic-something, jpg and jpgN. Splitting on
-             * whitespace removes the whole class. "key=value" still matches on
-             * "key", which is what ArmFileNumber wants. */
-            const size_t klen = std::strlen(keyword);
-            if (klen == 0) { return false; }
-            for (size_t i = 0; i < n; ) {
-                while (i < n && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r' || buf[i] == '\n')) { ++i; }
-                size_t j = i;
-                while (j < n && buf[j] != ' ' && buf[j] != '\t' && buf[j] != '\r' && buf[j] != '\n') { ++j; }
-                if (j > i) {
-                    size_t len = j - i;
-                    /* a trailing "=..." is not part of the token's name */
-                    for (size_t k = i; k < j; ++k) { if (buf[k] == '=') { len = k - i; break; } }
-                    if (len == klen && std::memcmp(buf + i, keyword, klen) == 0) { return true; }
-                }
-                i = j;
-            }
-            return false;
+        /* M75: WHOLE-TOKEN match, not substring.
+         *
+         * This was `strstr`, and it cost a hardware cycle and a forced
+         * power-off. The arm file "vic grcscan wait=90" made
+         * ArmFileContains("grc") true, because "grcscan" contains "grc" -
+         * so the grc IPC interceptor registered when I believed it was off,
+         * re-running a handler already known to be broken, and the game
+         * could not launch. The run I thought was a read-only observer was
+         * nothing of the kind.
+         *
+         * M76: ArmFileNumber still used `strstr` and carried the same bug:
+         * "sweep stream sw=768" read `sw` out of "sweep" and fell back to 0.
+         * Both now share applet_mitm_armfile.hpp, which has a host test. */
+        bool ArmFileContains(const char *keyword) {
+            char buf[256] = {};
+            const size_t n = ReadArmFile(buf, sizeof(buf));
+            return mitm::applet::armfile::Contains(buf, n, keyword);
         }
 
         /* Numeric option out of the arm file: "wait=180" delays the probe so
          * there is time to actually get into a race before it fires. M39 probed
          * at ~50 s, which is still the title screen. */
         u32 ArmFileNumber(const char *key, u32 def) {
-            fs::FileHandle f;
-            if (R_FAILED(fs::OpenFile(std::addressof(f), "sdmc:/applet-mitm.armed", fs::OpenMode_Read))) {
-                return def;
-            }
             char buf[256] = {};
-            s64 fsz = 0;
-            if (R_FAILED(fs::GetFileSize(std::addressof(fsz), f))) { fs::CloseFile(f); return def; }
-            size_t n = static_cast<size_t>(fsz);
-            if (n > sizeof(buf) - 1) { n = sizeof(buf) - 1; }
-            const bool ok = n > 0 && R_SUCCEEDED(fs::ReadFile(f, 0, buf, n));
-            fs::CloseFile(f);
-            if (!ok) { return def; }
-            buf[n] = '\0';
-
-            const char *p = std::strstr(buf, key);
-            if (p == nullptr) { return def; }
-            p += std::strlen(key);
-            while (*p == '=' || *p == ' ') { ++p; }
-            u32 v = 0;
-            bool any = false;
-            while (*p >= '0' && *p <= '9') { v = v * 10 + static_cast<u32>(*p - '0'); ++p; any = true; }
-            return any ? v : def;
+            const size_t n = ReadArmFile(buf, sizeof(buf));
+            return mitm::applet::armfile::Number(buf, n, key, def);
         }
 
         /* Ask the kernel how big each physical memory pool is, rather than
@@ -635,8 +622,10 @@ namespace ams {
         mitm::applet::g_grc_armed = ArmFileContains("grc");
         StartGrcRecorder();
 
-        mitm::applet::LogLine("applet-mitm M75: up. GRC OBSERVER - read-only, no engine contact (jpg=%s grc=%s)",
-                              mitm::applet::g_nvjpg_armed ? "ARMED" : "off",
+        /* M76: this line used to print jpg=off before jpg was parsed, and
+         * called every build a "read-only observer". The flag dump below is
+         * the record of what this boot armed. */
+        mitm::applet::LogLine("applet-mitm M76: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -652,6 +641,8 @@ namespace ams {
         mitm::applet::g_sweep_armed   = ArmFileContains("sweep");
         mitm::applet::g_matrix_armed  = ArmFileContains("mtx");
         mitm::applet::g_grcscan_armed = ArmFileContains("grcscan");
+        mitm::applet::g_clk_armed     = ArmFileContains("clk");
+        mitm::applet::g_jpgdec_armed  = ArmFileContains("jpgdec");
         mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);
         mitm::applet::g_stream_armed  = ArmFileContains("stream");
         mitm::applet::g_stream_w      = ArmFileNumber("sw", 0);
@@ -663,14 +654,18 @@ namespace ams {
         mitm::applet::g_stream_frames = ArmFileNumber("sframes", 600);
         mitm::applet::g_probe_delay_s = ArmFileNumber("wait", 120);
         mitm::applet::LogLine("ARMED FLAGS: vic=%d exec=%d dbg=%d dump=%d usb=%d bench=%d nvenc=%d "
-                              "jpg=%d sweep=%d mtx=%d stream=%d grc=%d grcscan=%d",
+                              "jpg=%d sweep=%d mtx=%d stream=%d grc=%d grcscan=%d clk=%d jpgdec=%d wait=%u",
                               mitm::applet::g_vic_armed, mitm::applet::g_vic_execute,
                               mitm::applet::g_dbg_armed, mitm::applet::g_dump_armed,
                               g_usb_armed, mitm::applet::g_bench_armed,
                               mitm::applet::g_nvenc_armed, mitm::applet::g_nvjpg_armed,
                               mitm::applet::g_sweep_armed, mitm::applet::g_matrix_armed,
                               mitm::applet::g_stream_armed, mitm::applet::g_grc_armed,
-                              mitm::applet::g_grcscan_armed);
+                              mitm::applet::g_grcscan_armed, mitm::applet::g_clk_armed,
+                              mitm::applet::g_jpgdec_armed, mitm::applet::g_probe_delay_s);
+        if (mitm::applet::g_jpgdec_armed && !mitm::applet::g_vic_armed) {
+            mitm::applet::LogLine("jpgdec is armed without vic: it runs inside the VIC worker, so it will NOT run");
+        }
         mitm::applet::LogLine("arm file (sdmc:/applet-mitm.armed): vic=%s exec=%s",
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
                               mitm::applet::g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
@@ -704,6 +699,11 @@ namespace ams {
         mitm::applet::LogMark("main:heartbeat_started");
 
         mitm::applet::StartVicWorker();
+        /* M76: its own thread, so an mm:u or clkrst call that blocks can never
+         * hold up vi:u registration below. Holds the clocks past the survey
+         * only when an engine probe in this run needs them. */
+        mitm::applet::StartClockProbe(mitm::applet::g_jpgdec_armed || mitm::applet::g_nvenc_armed ||
+                                      mitm::applet::g_nvjpg_armed);
 
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");

@@ -16,11 +16,11 @@ docker run --rm -v "$AMS":/ams "$IMG" chown -R "$UIDGID" /ams/stratosphere/apple
 python3 "$SRC/patch_libstrat.py" "$AMS"
 
 rsync -a --delete \
-  --exclude build.sh --exclude '*.nsp' --exclude patch_libstrat.py --exclude out/ --exclude build/ \
+  --exclude build.sh --exclude '*.nsp' --exclude patch_libstrat.py --exclude out/ --exclude build/ --exclude test/ \
   "$SRC"/ "$DST"/
 
 set +e
-docker run --rm -v "$AMS":/ams -w /ams/stratosphere/applet-mitm "$IMG" bash -lc 'make nx_release 2>&1'
+docker run --rm -e MAKEFLAGS="${MAKEFLAGS:-}" -v "$AMS":/ams -w /ams/stratosphere/applet-mitm "$IMG" bash -lc 'make nx_release 2>&1'
 rc=$?
 set -e
 

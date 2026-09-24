@@ -38,3 +38,21 @@ carries the pieces this project had been missing:
 | `nvjpg_drv.h` | NVJPG. Not useful here: switchbrew's `NV_services` lists `/dev/nvhost-nvjpg` on this firmware as **JPEG Decoder** only - hardware JPEG *encode* arrives on Xavier, not X1. |
 
 Not redistributed; clone it yourself. Licensed by NVIDIA, see the repo.
+
+## Added in M76
+
+| path | what it settles | upstream |
+|---|---|---|
+| `ref/open-gpu-doc/classes/video/cle7d0.h` | The **single-core** NVJPG method table (0x710 bitstream, 0x714/0x718/0x71C surfaces). `clc9d1.h`, which M73 used, is multi-core and one register off from 0x704. | open-gpu-doc (above) |
+| `ref/oss-nvjpg/` | averne's NVJPG decoder, which runs on this hardware under Horizon. Its `include/nvjpg/nv/registers.hpp` is the T210 decode picture-info layout that `tools/nvjpg_dec_control.py` reproduces, and `lib/decoder.cpp` shows the `mm:u` clock request. GPL-3.0: read, never copied into this GPL-2.0 tree. | <https://github.com/averne/oss-nvjpg> |
+| `ref/ffmpeg-nvtegra/` | `hwcontext_nvtegra.c` / `nvtegra.c` from averne's FFmpeg `nvtegra` branch: `mm:u` requests for NVDEC/NVJPG with `SetAndWait(max)`, and the note that `SET_CLK_RATE` resets on sleep. | <https://github.com/averne/FFmpeg> (branch `nvtegra`) |
+| `ref/libnx/` | `nx/include/switch/services/mm.h` (`mm:u`) and `clkrst.h`. | <https://github.com/switchbrew/libnx> |
+
+```
+git clone --depth 1 https://github.com/averne/oss-nvjpg ref/oss-nvjpg
+git clone --depth 1 https://github.com/switchbrew/libnx ref/libnx
+```
+
+The `nvjpg_drv.h` row above is **superseded**: whether T210 NVJPG can encode is
+still open, but it certainly decodes, and a decode is what M76 uses as a
+known-good control job.

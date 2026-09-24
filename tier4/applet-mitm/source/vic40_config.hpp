@@ -93,6 +93,10 @@ namespace ams::mitm::applet::vic {
         return (UINT32_C(0) << 28) | ((offset & 0xFFF) << 16) | ((class_id & 0x3FF) << 6) | (mask & 0x3F);
     }
 
+    constexpr u32 Host1xOpcodeIncr(u32 offset, u32 count) {
+        return (UINT32_C(1) << 28) | ((offset & 0xFFF) << 16) | (count & 0xFFFF);
+    }
+
     constexpr u32 Host1xOpcodeNonIncr(u32 offset, u32 count) {
         return (UINT32_C(2) << 28) | ((offset & 0xFFF) << 16) | (count & 0xFFFF);
     }

@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 71 hardware test cycles. Current build: **M75**.
+`0100000000000C20`. 71 hardware test cycles. Current build: **M76** (not yet run).
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,6 +88,161 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** M76: nobody ever asked for the clock - and the NVJPG table was one register off (built, not yet run) ***
+
+No hardware cycle. This milestone is a desk review of M68-M75 against the two
+open-source drivers known to run Tegra engines on this console under Horizon:
+averne's **oss-nvjpg** (NVJPG decode) and averne's **FFmpeg nvtegra** hwaccel
+(NVDEC + NVJPG + VIC). It found three defects and one hole in the roadmap, and
+it builds the probes that test them. Nothing below is verified on hardware yet.
+
+### 1. The engines were never clocked
+
+The facts every engine run agrees on: the VIC works; NVENC and NVJPG accept a
+submit, issue a fence, and never execute - NVJPG's status says `cycles=0`, i.e.
+the engine did not run for a single clock. M73 named the one difference (the
+VIC is kept running by nvnflinger) and guessed power gating. It never found the
+mechanism, and M74 spent a forced power-off trying to wake the engine with
+screenshots.
+
+On Horizon, the clock for NVDEC / NVENC / NVJPG is not nvservices' business. A
+client asks the multimedia service **`mm:u`** for a frequency on the engine it
+is about to use. Both working drivers do exactly that before submitting:
+
+| driver | what it does |
+|---|---|
+| oss-nvjpg `Decoder::initialize` | `mmuRequestInitialize(MmuModuleId_Nvjpg, 8, false)` |
+| FFmpeg nvtegra device init + DFS | `mmuRequestInitialize` for NVDEC and NVJPG, then `mmuRequestSetAndWait(max)` - commented "reproduces official code". It also notes the channel `SET_CLK_RATE` ioctl exists on HOS but is reset on sleep. |
+
+This module has never opened `mm:u`, never listed it in the NPDM, and never
+issued `SET_CLK_RATE`. Grep says so. An engine with no clock behaves exactly
+like M68-M74: channel real, submit accepted, fence issued, zero cycles.
+
+Two cautions, stated before the run:
+
+- **NVENC may not be the same story.** grc continuously records the last 30
+  seconds for titles that support capture (MK8D does), so grc may keep NVENC
+  clocked during gameplay. If the survey shows NVENC already running before we
+  ask, the clock was not NVENC's problem and its config is.
+- **The mm:u module ids are ambiguous.** libnx names 5 NVENC and 6 NVDEC;
+  nvtegra, by the same author and newer, passes `(MmuModuleId)5` for NVDEC. So
+  M76 requests 5, 6 and 7 and lets clkrst say which id moved which engine.
+
+### 2. The NVJPG method table came from the wrong generation
+
+M73 took NVJPG's methods from `clc9d1.h`, a **multi-core** NVJPG. That header
+inserts `SET_TOTAL_CORE_NUM` at 0x704 and starts a per-core block with
+`SET_CORE_INDEX` at 0x710, pushing every surface one register later. Tegra X1's
+NVJPG is single-core. The single-core header, `cle7d0.h` (it was in
+`ref/open-gpu-doc` all along), agrees register-for-register with the map
+oss-nvjpg drives on this hardware:
+
+| offset | M73 wrote (C9D1) | T210 / E7D0 means |
+|---|---|---|
+| 0x704 | TOTAL_CORE_NUM = 1 | PICTURE_INDEX |
+| 0x710 | CORE_INDEX = **0** | **BITSTREAM** |
+| 0x714 | bitstream | CUR_PIC (luma) |
+| 0x718 | luma | CHROMA_U |
+| 0x71C | chroma U | CHROMA_V |
+
+So M73/M74 handed the engine **a zero bitstream address** - the thing M27
+proved hangs an engine - and the bitstream as its luma plane. It never mattered
+only because the engine never ran. "Method offsets are stable across
+generations" holds for the common block (0x200, 0x300, 0x700-0x70C are the same
+in both headers); it does not hold past the point a generation adds methods.
+Fixed.
+
+### 3. The NVJPG encode setup struct is probably not this chip's format either
+
+`nvjpg_drv_pic_param_s` from open-gpu-doc is a register-image layout. The one
+T210 NVJPG record known to work - oss-nvjpg's decode picture info - is a
+completely different, higher-level 0xB2C-byte record (Huffman tables as JPEG
+BITS/HUFFVAL arrays, quant tables in file order). The T210 encoder almost
+certainly takes a record in that style, and nobody has published it. So even
+with the clock and the method table fixed, **NVJPG encode is not the quick path
+M73 thought it was**, and `jpg` should not be armed until its record is known.
+
+### 4. The M75 parser bug class survived in ArmFileNumber
+
+M75 fixed `ArmFileContains` and declared the prefix-bug class closed.
+`ArmFileNumber` still used `strstr`: with `sweep stream sw=768` it read `sw`
+out of "sweep", found no digits, and silently used the default. Both now share
+one tokenizer (`applet_mitm_armfile.hpp`) with a host test
+(`tier4/applet-mitm/test/armfile_test.cpp`, 24 checks including M75's exact
+failure).
+
+The boot banner also printed `jpg=off` *before* the `jpg` flag was parsed, and
+called every build a read-only observer. It now names only what it knows; the
+flag dump that follows it is the record.
+
+### 5. Docked 1080p cannot go over USB at all
+
+The Switch has one USB-C port. Docked, the dock owns it and the console is the
+USB **host**; `usb:ds` device mode needs a direct cable to the PC, i.e.
+handheld. So every USB stream so far (M58-M71) was necessarily handheld, where
+MK8D renders 1280x720 into its 1920x1080 surface (M47).
+
+- **SuperSpeed can only ever help handheld**, where native is 720p. Handheld
+  720p60 packed-420 is 83 MB/s: over USB 2.0's measured 37, comfortably inside
+  USB 3.0. So a SuperSpeed link would give native handheld with no encoder.
+- **Docked native 1080p60 needs a network transport** (Wi-Fi, or a USB LAN
+  adapter in the dock), and neither is expected to beat the USB 2.0 link. So
+  docked native resolution needs compression, with no way around it.
+
+### What M76 builds
+
+- **`clk` - clock survey, no engine contact.** Fires at uptime `wait - 10`
+  (so its "before" reading precedes any engine probe at `wait`).
+  Reads the real clocks of VIC / NVENC / NVJPG / NVDEC / HOST1X through
+  `clkrst` four times, then opens `mm:u` and requests the maximum on ids 5, 6
+  and 7, logs what each request reports, reads the clocks twice more, and
+  releases (unless an engine probe in the same run needs them). NPDM gains
+  `mm:u` and `clkrst`. Both are hand-rolled IPC with explicit command ids.
+- **`jpgdec` - the first positive control this project has ever had.** One
+  NVJPG **decode** of a 64x64 JPEG whose picture-info record is generated on the
+  PC (`tools/nvjpg_dec_control.py`) in oss-nvjpg's T210 layout and was checked
+  **byte-for-byte against that project's own struct and parser: 0 diffs in
+  2,860 bytes**. The method sequence is oss-nvjpg's, plus the SETCL an L4T
+  kernel would insert. Unlike every job since M68, a stall here cannot be blamed
+  on the config. Guards: it will not submit unless clkrst shows NVJPG clocked
+  after the request; on a stall it leaves the channel **open** (M74's wedge was
+  in teardown) and refuses all later engine work that boot. On success it
+  compares 8x8 block means against libjpeg's decode on the console and writes
+  `sdmc:/nvjpg-dec.rgba` for the PC check.
+- `nvenc` / `jpg` probes now refuse to run after a stuck job, and hold the
+  clocks first when `clk` is armed.
+- **A boot hang closed off.** Since M73 the grc interceptor registers only when
+  `grc` is armed - but if `mitm.lst` from M72-M75 was still on the card, boot2
+  had already declared a future `nvdrv:s` mitm, and with nothing registering,
+  every `nvdrv:s` client (vi included) would wait forever. Now `mitm.lst`
+  without `grc` registers a pass-through that accepts nobody, and says so in
+  the log.
+
+### Test plan
+
+Before either run: delete `atmosphere/contents/0100000000000C20/mitm.lst` if
+it is still there from M72-M75 (M76 survives it, but the run should not carry
+the interceptor's registration at all).
+
+**Run A - `clk wait=60`**, in a game. No channel, no submit. The survey lines
+(`clk[before]`, `clk[held]`, ...) decide the next step:
+
+| reading | meaning |
+|---|---|
+| NVJPG 0 before, non-zero when held | the clock is what M73/M74 lacked -> Run B |
+| NVENC non-zero *before* we ask | grc keeps it running; NVENC's problem is config, not clock |
+| NVENC 0 before, non-zero held | NVENC was unclocked too; the M68-M71 results need re-reading |
+| clkrst errors | report it; the survey needs a different read path |
+
+**Run B - `vic clk jpgdec wait=60`**, in a game, only if Run A shows NVJPG
+clocked when held. One decode. Copy `sdmc:/nvjpg-dec.rgba` off the card and run
+`python3 tools/nvjpg_dec_control.py check nvjpg-dec.rgba`. Completes and
+matches: this process can drive a non-VIC engine and encoding is purely a
+config problem. Stalls with the clock held: the problem is how this process
+reaches the engine. **Risk:** if it stalls, a M74-style compositor wedge is
+possible even with the channel left open; it would cost a forced power-off.
+
+Do **not** arm `jpg` or `nvenc` in either run.
 ## *** M75: the observer never ran - a substring match re-armed the broken interceptor ***
 
 M75 was meant to be the safe route: attach to grc, read its memory, detach.
