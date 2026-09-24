@@ -38,7 +38,8 @@ to do this.
 ```
 git fetch origin
 git checkout claude/laughing-albattani-26hnt8
-git log -1 --format=%h        # must print 36ee103 (or a later commit only if I say so)
+git merge-base --is-ancestor 36ee103 HEAD && echo ok      # must print ok
+git diff --stat 36ee103 HEAD -- tier4/applet-mitm/          # must print nothing: no code changed since M77
 ```
 
 Build it. This needs Docker and an Atmosphère 1.11.2 checkout in
