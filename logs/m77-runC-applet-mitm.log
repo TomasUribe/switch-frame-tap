@@ -1,0 +1,369 @@
+[    10.390] grc IPC interceptor: off
+[    10.400] applet-mitm M77: up (grc IPC interceptor off)
+[    10.456] ARMED FLAGS: vic=1 exec=0 dbg=0 dump=0 usb=0 bench=0 nvenc=0 jpg=0 sweep=0 mtx=0 stream=0 grc=0 grcscan=0 clk=1 jpgdec=1 wait=60
+[    10.463] arm file (sdmc:/applet-mitm.armed): vic=ARMED exec=PhaseA-noop-cmdbuf
+[    10.467] ---- physical memory pools (svcGetSystemInfo) ----
+[    10.471]    pool 0 Application  total= 3363840 KB  used=       0 KB  free=  3363840 KB   rc=0/0
+[    10.475]    pool 1 Applet       total=  512000 KB  used=    3316 KB  free=   508684 KB   rc=0/0
+[    10.489]    pool 2 System       total=  237728 KB  used=  221704 KB  free=    16024 KB   rc=0/0
+[    10.498]    pool 3 SystemUnsafe total=   45184 KB  used=   43180 KB  free=     2004 KB   rc=0/0
+[    10.511]    THIS PROCESS (pool_partition 1 = Applet, at boot): total=511936 KB used=3252 KB free=508684 KB
+[    10.523]    for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB
+[    10.532]    usb: not armed (add "usb" to the arm file)
+[    10.537] probe fires at t=60 s; frame dump to SD: off
+[    10.541] debug-capture route: off (add "dbg" to the arm file)   pmdmntInitialize rc=0x0
+[    10.560] -> main:heartbeat_started
+[    10.564] VIC worker started (execute=PhaseA-noop-cmdbuf)
+[    10.574] clock survey armed: fires at uptime ~50 s, then HOLDS the clocks for this run's engine probes
+[    10.580] registered mitm server for vi:u
+[    10.598] -> main:LoopProcess
+[    13.569] -> hb:1 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    16.615] -> hb:2 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    20.557] -> hb:3 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    23.612] -> hb:4 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    26.652] -> hb:5 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    29.680] -> hb:6 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    31.628] OnNeedsToAccept port=0 program=0100152000022000
+[    31.636]   AcceptMitmImpl rc=0x0
+[    31.660] -> GetDisplayService:enter
+[    31.666]    program=0100152000022000 mode=0
+[    31.689] -> GetDisplayService:done
+[    31.715] -> GetRelayService:enter
+[    31.740] -> GetRelayService:wrapped
+[    31.765] -> indirect:probe
+[    31.771]    2460 RequiredMemoryInfo(1280x720) rc=0x0 -> size=3801088 align=4096
+[    31.781]    102 GetManagerDisplayService rc=0xa72 -> denied on a vi:u session
+[    31.804] -> indirect:probe_done
+[    31.827] -> OpenDisplay:enter
+[    31.832]    OpenDisplay "Default" -> display_id=17
+[    31.906] *** binder txn #1  program=0100152000022000  session=20  code=10(connect) x1  flags=0x0  in=108 out=4096
+[    31.928] -> binder:first_txn
+[    31.945] *** binder txn #2  program=0100152000022000  session=20  code=9(query) x1  flags=0x0  in=100 out=4096
+[    31.951] *** binder txn #3  program=0100152000022000  session=20  code=14(setPreallocatedBuffer) x1  flags=0x0  in=476 out=4096
+[    31.970] -> binder:parse_preallocated
+[    31.977] === setPreallocatedBuffer#1 NvGraphicBuffer ===
+[    31.984]     nvmap_id=1268  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    31.992]     plane[0] 1920x1080  pitch=7680 B  offset=0x0  size=8847360 B
+[    31.999]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    32.007]    captured slot 0: nvmap=1268 1920x1080 stride_px=1920 blk_h_log2=4 off=0x0 pixfmt=33 (slots=1)
+[    32.014] *** binder txn #4  program=0100152000022000  session=20  code=14(setPreallocatedBuffer) x2  flags=0x0  in=476 out=4096
+[    32.037] -> binder:parse_preallocated
+[    32.044] === setPreallocatedBuffer#2 NvGraphicBuffer ===
+[    32.050]     nvmap_id=1268  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    32.053]     plane[0] 1920x1080  pitch=7680 B  offset=0x870000  size=8847360 B
+[    32.058]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    32.063]    captured slot 1: nvmap=1268 1920x1080 stride_px=1920 blk_h_log2=4 off=0x870000 pixfmt=33 (slots=2)
+[    32.067] *** binder txn #5  program=0100152000022000  session=20  code=14(setPreallocatedBuffer) x3  flags=0x0  in=476 out=4096
+[    32.089] -> binder:parse_preallocated
+[    32.097] === setPreallocatedBuffer#3 NvGraphicBuffer ===
+[    32.105]     nvmap_id=1268  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    32.113]     plane[0] 1920x1080  pitch=7680 B  offset=0x10e0000  size=8847360 B
+[    32.120]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    32.127]    captured slot 2: nvmap=1268 1920x1080 stride_px=1920 blk_h_log2=4 off=0x10e0000 pixfmt=33 (slots=3)
+[    32.135] *** binder txn #6  program=0100152000022000  session=20  code=3(dequeueBuffer) x1  flags=0x0  in=116 out=4096
+[    32.144] *** binder txn #7  program=0100152000022000  session=20  code=1(requestBuffer) x1  flags=0x0  in=100 out=4096
+[    32.753] -> hb:7 sess=1 getdisp=1 relay=1 txn=7 vic=waiting
+[    35.873] -> hb:8 sess=1 getdisp=1 relay=1 txn=7 vic=waiting
+[    37.025] *** binder txn #8  program=0100152000022000  session=20  code=7(queueBuffer) x1  flags=0x0  in=192 out=4096
+[    37.078] *** binder txn #9  program=0100152000022000  session=20  code=3(dequeueBuffer) x2  flags=0x0  in=116 out=4096
+[    37.111] *** binder txn #10  program=0100152000022000  session=20  code=1(requestBuffer) x2  flags=0x0  in=100 out=4096
+[    37.130] *** binder txn #11  program=0100152000022000  session=20  code=7(queueBuffer) x2  flags=0x0  in=192 out=4096
+[    37.141] *** binder txn #12  program=0100152000022000  session=20  code=3(dequeueBuffer) x3  flags=0x0  in=116 out=4096
+[    37.169] *** binder txn #13  program=0100152000022000  session=20  code=1(requestBuffer) x3  flags=0x0  in=100 out=4096
+[    37.187] *** binder txn #14  program=0100152000022000  session=20  code=7(queueBuffer) x3  flags=0x0  in=192 out=4096
+[    38.971] -> hb:9 sess=1 getdisp=1 relay=1 txn=219 vic=waiting
+[    42.019] -> hb:10 sess=1 getdisp=1 relay=1 txn=587 vic=waiting
+[    42.106] *** binder txn #600  program=0100152000022000  session=20  code=7(queueBuffer) x296  flags=0x0  in=192 out=4096
+[    45.061] -> hb:11 sess=1 getdisp=1 relay=1 txn=951 vic=waiting
+[    47.105] *** binder txn #1200  program=0100152000022000  session=20  code=7(queueBuffer) x596  flags=0x0  in=192 out=4096
+[    48.116] -> hb:12 sess=1 getdisp=1 relay=1 txn=1317 vic=waiting
+[    50.116] -> clk:1_survey
+[    50.161] ---- M76 CLOCK SURVEY (no engine contact) ----
+[    50.197]    clk[before      ]  VIC=422.4 MHz  NVENC=460.8 MHz  NVJPG=422.4 MHz  NVDEC=460.8 MHz  HOST1X=81.6 MHz
+[    50.733]    clk[before+     ]  VIC=422.4 MHz  NVENC=460.8 MHz  NVJPG=422.4 MHz  NVDEC=460.8 MHz  HOST1X=81.6 MHz
+[    51.164] -> hb:13 sess=1 getdisp=1 relay=1 txn=1685 vic=waiting
+[    51.264]    clk[before+     ]  VIC=422.4 MHz  NVENC=460.8 MHz  NVJPG=422.4 MHz  NVDEC=460.8 MHz  HOST1X=81.6 MHz
+[    51.775]    clk[before+     ]  VIC=422.4 MHz  NVENC=460.8 MHz  NVJPG=422.4 MHz  NVDEC=460.8 MHz  HOST1X=81.6 MHz
+[    51.808] -> clk:2_hold
+[    51.817]    clk(survey): smGetService(mm:u) rc=0x0
+[    51.830]    clk: mm id 5 (libnx: NVENC, nvtegra: NVDEC) req=2  get=460800000 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=979200000 Hz (rc=0x0)
+[    51.842]    clk: mm id 6 (libnx: NVDEC) req=3  get=979200000 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=979200000 Hz (rc=0x0)
+[    51.853]    clk: mm id 7 (NVJPG) req=4  get=422400000 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=652800000 Hz (rc=0x0)
+[    51.964]    clk[held        ]  VIC=652.8 MHz  NVENC=979.2 MHz  NVJPG=652.8 MHz  NVDEC=979.2 MHz  HOST1X=81.6 MHz
+[    52.106] *** binder txn #1800  program=0100152000022000  session=20  code=7(queueBuffer) x896  flags=0x0  in=192 out=4096
+[    53.976]    clk[held+2s     ]  VIC=652.8 MHz  NVENC=979.2 MHz  NVJPG=652.8 MHz  NVDEC=979.2 MHz  HOST1X=81.6 MHz
+[    53.984]    clk: holding for the engine probes armed in this run
+[    53.993] ---- M76 CLOCK SURVEY done ----
+[    54.061] -> clk:watch
+[    54.094]    clk-watch: sampling NVJPG/VIC/NVDEC every 200 ms, logging changes only
+[    54.126]    clk-watch  NVJPG=652.8  VIC=652.8  NVDEC=979.2 MHz
+[    54.246] -> hb:14 sess=1 getdisp=1 relay=1 txn=2049 vic=waiting
+[    57.106] *** binder txn #2400  program=0100152000022000  session=20  code=7(queueBuffer) x1196  flags=0x0  in=192 out=4096
+[    57.365] -> hb:15 sess=1 getdisp=1 relay=1 txn=2421 vic=waiting
+[    59.382]    clk-watch  NVJPG=652.8  VIC=652.8  NVDEC=0.0 MHz
+[    60.035] -> binder:vic_blit_requested
+[    60.046]    queueBuffer txn#2728 parcel=192 slot=0 -> handed to VIC worker
+[    60.145] -> vb:0_heap
+[    60.153]    [probe, BEFORE heap grab] process total=412984 KB used=3252 KB free=409732 KB
+[    60.163]    [before heap grab] pool 0 Application  used= 3311448 KB  free=    52392 KB
+[    60.171]    [before heap grab] pool 1 Applet       used=  102268 KB  free=   409732 KB
+[    60.187]    [before heap grab] pool 2 System       used=  230060 KB  free=     7668 KB
+[    60.198]    [before heap grab] pool 3 SystemUnsafe used=   43180 KB  free=     2004 KB
+[    60.212]    SetMemoryHeapSize(24 MB) rc=0x0
+[    60.220]    [after heap grab] pool 0 Application  used= 3311448 KB  free=    52392 KB
+[    60.228]    [after heap grab] pool 1 Applet       used=  126844 KB  free=   385156 KB
+[    60.244]    [after heap grab] pool 2 System       used=  230060 KB  free=     7668 KB
+[    60.252]    [after heap grab] pool 3 SystemUnsafe used=   43180 KB  free=     2004 KB
+[    60.260]    [probe, AFTER heap grab] total=412984 KB used=27828 KB free=385156 KB | sysresource 0/0 KB
+[    60.267]    one 1080p frame is 7913 KB; heap granted 24576 KB; NVENC must fit in what is left
+[    60.281]    VIC heap 24 MB at 0x6406200000 (capture buffer 21120 KB on heap): cfg=0x6406200000 cmd=0x6406204000 dst=0x6406210000 src=0x6406550000
+[    60.291]    capture region 21120 KB vs one 1080p frame 8100 KB -> FITS
+[    60.304]    stage buf at +8640 KB; full-frame capture clear of staging
+[    60.331] -> vb:1_smGetService
+[    60.340]    using nvdrv:t rc=0x0
+[    60.374] -> vb:2_tmem
+[    60.431] -> vb:3_Initialize
+[    60.440] -> hb:16 sess=1 getdisp=1 relay=1 txn=2771 vic=vb:3_Initialize
+[    60.447]    Initialize rc=0x0
+[    60.491] -> vb:4a_discover_aruid
+[    60.504]    discovered game aruid = 142 (on a throwaway fd, now closed)
+[    60.512]    SetAruidWithoutCheck(142) BEFORE any real Open: rc=0x0 err=0
+[    60.546] -> vb:4_open_nvmap
+[    60.553]    /dev/nvmap rc=0x0 fd=23265280 nverr=0
+[    60.561]    perm probe: /dev/nvhost-gpu rc=0x0 nverr=0 -> OPEN (bit0 set: full mask)
+[    60.597] -> vb:4b_node_survey
+[    60.607]    node /dev/nvhost-display    OPEN (rc=0x0 nverr=0)
+[    60.616]    node /dev/nvdisp-ctrl       OPEN (rc=0x0 nverr=0)
+[    60.625]    node /dev/nvdisp-disp0      OPEN (rc=0x0 nverr=0)
+[    60.633]    node /dev/nvdisp-disp1      OPEN (rc=0x0 nverr=0)
+[    60.643]    node /dev/nvdcutil-disp0    OPEN (rc=0x0 nverr=0)
+[    60.659]    node /dev/nvcec-ctrl        OPEN (rc=0x0 nverr=0)
+[    60.666]    node /dev/nvhost-as-gpu     OPEN (rc=0x0 nverr=0)
+[    60.674]    node /dev/nvhost-ctrl-gpu   OPEN (rc=0x0 nverr=0)
+[    60.682]    node /dev/nvhost-msenc      OPEN (rc=0x0 nverr=0)
+[    60.693]    node /dev/nvhost-nvdec      OPEN (rc=0x0 nverr=0)
+[    60.704]    node /dev/nvhost-tsec       denied (rc=0x0 nverr=196611)
+[    60.718]    node /dev/nvhost-nvjpg      OPEN (rc=0x0 nverr=0)
+[    60.747] -> vb:5_FROM_ID
+[    60.759]    FROM_ID(1268) under aruid 142 rc=0x0 nverr=0 -> handle=1268
+[    60.799] -> vb:6_alloc_bufs
+[    60.807]    clk-watch  NVJPG=422.4  VIC=422.4  NVDEC=0.0 MHz
+[    60.816]    SetMemoryAttribute(0x6406200000, 0x4000, uncached) rc=0x0
+[    60.835]    nvmapOwn ok handle=6636 id=6636 kind=0 size=0x4000
+[    60.876]    SetMemoryAttribute(0x6406204000, 0x1000, uncached) rc=0x0
+[    61.041]    nvmapOwn ok handle=6644 id=6644 kind=0 size=0x1000
+[    61.170]    SetMemoryAttribute(0x6406210000, 0x340000, uncached) rc=0x0
+[    61.228]    nvmapOwn ok handle=6996 id=6996 kind=0 size=0x340000
+[    61.279]    SetMemoryAttribute(0x6406550000, 0x10000, uncached) rc=0x0
+[    61.350]    nvmapOwn ok handle=7000 id=7000 kind=0 size=0x10000
+[    61.486] -> vb:7_open_vic
+[    61.535]    /dev/nvhost-vic rc=0x0 fd=23265281 nverr=0
+[    61.551]    GET_SYNCPOINT rc=0x0 nverr=0 -> syncpt=12
+[    61.614] -> vb:8_set_nvmap_fd
+[    61.633]    SET_NVMAP_FD(23265280) rc=0x0 nverr=0
+[    61.652]    SET_SUBMIT_TIMEOUT rc=0x0 nverr=0
+[    61.720] -> vb:job_fill
+[    61.742]    [vb:job_fill] REFUSING to submit: cfg=0x0 dst=0x0 src=0x0 - a zero address hangs the VIC and freezes the console
+[    61.760]    fill did not complete - engine wedged, skipping the rest
+[    61.829] -> vb:ABORTED_after_fill
+[    61.861]    game blit still not possible: handle pins to phys=0
+[    61.933] -> vb:game_blit_SKIPPED
+[    61.994] -> vb:ALL_JOBS_DONE
+[    62.043] -> ind:1_open_vi_root
+[    62.060]    vi:m GetDisplayService cmd=2 mode=1 rc=0x0
+[    62.069]    101 GetSystemDisplayService    rc=0x0 GOT IT
+[    62.080]    102 GetManagerDisplayService   rc=0x0 GOT IT
+[    62.113] -> ind:3_required_memory
+[    62.121]    2460(1280x720) rc=0x0 -> size=3801088 align=4096
+[    62.133]    2460(1920x1080) rc=0x0 -> size=8388608 align=4096
+[    62.144]    1010 OpenDisplay("Default") rc=0x0 -> display_id=19
+[    62.174] -> ind:3b_create_indirect_layer
+[    62.183]    2050 shapeA{disp,aruid} rc=0x0 -> handle=20
+[    62.194]    consumer handle = 20
+[    62.225] -> ind:3c_endpoints
+[    62.233]    2052 CreateIndirectProducerEndPoint   {h,aruid} rc=0x0 -> 21
+[    62.241]    2054 CreateIndirectConsumerEndPoint   {h,aruid} rc=0x0 -> 22
+[    62.271] -> ind:4_image_map
+[    62.282]    capture size 1920x1080 needs 8388608 B, buffer is 21626880 B - OK
+[    62.297]    2450(1920x1080, handle=20, aruid=142) rc=0x60a -> size=0 stride=0
+[    62.307]    2450(1920x1080, handle=0, aruid=142) rc=0x60a -> size=0 stride=0
+[    62.317]    2450(1920x1080, handle=1, aruid=142) rc=0x60a -> size=0 stride=0
+[    62.329]    2450(1920x1080, handle=2, aruid=142) rc=0x60a -> size=0 stride=0
+[    62.342]    2450(1920x1080, handle=142, aruid=142) rc=0x60a -> size=0 stride=0
+[    62.369] *** binder txn #3000  program=0100152000022000  session=20  code=7(queueBuffer) x1496  flags=0x0  in=192 out=4096
+[    62.377] -> ind:done
+[    62.415] -> jd:1
+[    62.426]    ---- NVJPG DECODE POSITIVE CONTROL (M77: clock ensured after open, read at submit) ----
+[    62.434]    clk[jpgdec-pre  ]  VIC=422.4 MHz  NVENC=979.2 MHz  NVJPG=422.4 MHz  NVDEC=0.0 MHz  HOST1X=81.6 MHz
+[    62.445]    MAP_CMD_BUFFER(jpgdec-buf handle=6996 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x1960000
+[    62.476]    MAP_CMD_BUFFER(jpgdec-cmd handle=6644 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x1ca0000
+[    62.507]    jpgdec: syncpt=17 pic=0x1960000 stat=0x1961000 scan=0x1962000 (294 B) out=0x1970000, 21 words
+[    62.935] -> jd:clock
+[    62.986]    clk-ensure(jpgdec) #1 re-set max     : 1 request(s), SetAndWait rc=0x0 -> clkrst NVJPG=422400000 Hz
+[    63.144] -> jd:submit
+[    63.307] -> jd:submitted
+[    63.377]    jpgdec: submit rc=0x0 nverr=0 fence 1/1 REACHED after 314 us | NVJPG 422400000 Hz read 163 us before submit returned, 422400000 Hz after | status used=292 mcu=0x0 result=0 | 16384/16384 output bytes written
+[    63.431]    jpgdec: px(0,0)=dc 1e 1e ff  px(63,0)=1d c8 3c ff  px(0,63)=28 3c db ff
+[    63.496]    jpgdec: worst 8x8 block-mean deviation 0 (block 0)  ->  *** NVJPG RAN AND DECODED CORRECTLY - this process can drive a non-VIC engine ***
+[    63.532] -> hb:17 sess=1 getdisp=1 relay=1 txn=3131 vic=jd:1
+[    63.636] -> jd:MATCH
+[    63.676] -> vb:released
+[    63.720]    clk-watch: stopped (engine probe finished)
+[    63.858] -> clk:done
+[    66.643] -> hb:18 sess=1 getdisp=1 relay=1 txn=3507 vic=vb:released
+[    67.357] *** binder txn #3600  program=0100152000022000  session=20  code=7(queueBuffer) x1796  flags=0x0  in=192 out=4096
+[    69.726] -> hb:19 sess=1 getdisp=1 relay=1 txn=3867 vic=vb:released
+[    72.473] *** binder txn #4200  program=0100152000022000  session=20  code=7(queueBuffer) x2096  flags=0x0  in=192 out=4096
+[    72.753] -> hb:20 sess=1 getdisp=1 relay=1 txn=4231 vic=vb:released
+[    75.781] -> hb:21 sess=1 getdisp=1 relay=1 txn=4595 vic=vb:released
+[    77.473] *** binder txn #4800  program=0100152000022000  session=20  code=7(queueBuffer) x2396  flags=0x0  in=192 out=4096
+[    78.814] -> hb:22 sess=1 getdisp=1 relay=1 txn=4957 vic=vb:released
+[    81.836] -> hb:23 sess=1 getdisp=1 relay=1 txn=5321 vic=vb:released
+[    82.474] *** binder txn #5400  program=0100152000022000  session=20  code=7(queueBuffer) x2696  flags=0x0  in=192 out=4096
+[    84.862] -> hb:24 sess=1 getdisp=1 relay=1 txn=5685 vic=vb:released
+[    87.473] *** binder txn #6000  program=0100152000022000  session=20  code=7(queueBuffer) x2996  flags=0x0  in=192 out=4096
+[    87.886] -> hb:25 sess=1 getdisp=1 relay=1 txn=6047 vic=vb:released
+[    90.911] -> hb:26 sess=1 getdisp=1 relay=1 txn=6411 vic=vb:released
+[    92.473] *** binder txn #6600  program=0100152000022000  session=20  code=7(queueBuffer) x3296  flags=0x0  in=192 out=4096
+[    93.935] -> hb:27 sess=1 getdisp=1 relay=1 txn=6773 vic=vb:released
+[    96.960] -> hb:28 sess=1 getdisp=1 relay=1 txn=7137 vic=vb:released
+[    97.473] *** binder txn #7200  program=0100152000022000  session=20  code=7(queueBuffer) x3596  flags=0x0  in=192 out=4096
+[    99.985] -> hb:29 sess=1 getdisp=1 relay=1 txn=7499 vic=vb:released
+[   102.473] *** binder txn #7800  program=0100152000022000  session=20  code=7(queueBuffer) x3896  flags=0x0  in=192 out=4096
+[   103.011] -> hb:30 sess=1 getdisp=1 relay=1 txn=7863 vic=vb:released
+[   106.036] -> hb:31 sess=1 getdisp=1 relay=1 txn=8225 vic=vb:released
+[   107.472] *** binder txn #8400  program=0100152000022000  session=20  code=7(queueBuffer) x4196  flags=0x0  in=192 out=4096
+[   109.062] -> hb:32 sess=1 getdisp=1 relay=1 txn=8589 vic=vb:released
+[   112.098] -> hb:33 sess=1 getdisp=1 relay=1 txn=8953 vic=vb:released
+[   112.473] *** binder txn #9000  program=0100152000022000  session=20  code=7(queueBuffer) x4496  flags=0x0  in=192 out=4096
+[   115.125] -> hb:34 sess=1 getdisp=1 relay=1 txn=9315 vic=vb:released
+[   117.473] *** binder txn #9600  program=0100152000022000  session=20  code=7(queueBuffer) x4796  flags=0x0  in=192 out=4096
+[   118.151] -> hb:35 sess=1 getdisp=1 relay=1 txn=9679 vic=vb:released
+[   121.177] -> hb:36 sess=1 getdisp=1 relay=1 txn=10043 vic=vb:released
+[   122.473] *** binder txn #10200  program=0100152000022000  session=20  code=7(queueBuffer) x5096  flags=0x0  in=192 out=4096
+[   124.202] -> hb:37 sess=1 getdisp=1 relay=1 txn=10405 vic=vb:released
+[   127.227] -> hb:38 sess=1 getdisp=1 relay=1 txn=10769 vic=vb:released
+[   127.472] *** binder txn #10800  program=0100152000022000  session=20  code=7(queueBuffer) x5396  flags=0x0  in=192 out=4096
+[   130.250] -> hb:39 sess=1 getdisp=1 relay=1 txn=11131 vic=vb:released
+[   132.472] *** binder txn #11400  program=0100152000022000  session=20  code=7(queueBuffer) x5696  flags=0x0  in=192 out=4096
+[   133.275] -> hb:40 sess=1 getdisp=1 relay=1 txn=11493 vic=vb:released
+[   136.319] -> hb:41 sess=1 getdisp=1 relay=1 txn=11857 vic=vb:released
+[   137.473] *** binder txn #12000  program=0100152000022000  session=20  code=7(queueBuffer) x5996  flags=0x0  in=192 out=4096
+[   139.345] -> hb:42 sess=1 getdisp=1 relay=1 txn=12223 vic=vb:released
+[   142.369] -> hb:43 sess=1 getdisp=1 relay=1 txn=12585 vic=vb:released
+[   142.473] *** binder txn #12600  program=0100152000022000  session=20  code=7(queueBuffer) x6296  flags=0x0  in=192 out=4096
+[   145.395] -> hb:44 sess=1 getdisp=1 relay=1 txn=12949 vic=vb:released
+[   147.473] *** binder txn #13200  program=0100152000022000  session=20  code=7(queueBuffer) x6596  flags=0x0  in=192 out=4096
+[   148.426] -> hb:45 sess=1 getdisp=1 relay=1 txn=13311 vic=vb:released
+[   151.451] -> hb:46 sess=1 getdisp=1 relay=1 txn=13675 vic=vb:released
+[   152.474] *** binder txn #13800  program=0100152000022000  session=20  code=7(queueBuffer) x6896  flags=0x0  in=192 out=4096
+[   154.475] -> hb:47 sess=1 getdisp=1 relay=1 txn=14039 vic=vb:released
+[   157.473] *** binder txn #14400  program=0100152000022000  session=20  code=7(queueBuffer) x7196  flags=0x0  in=192 out=4096
+[   157.499] -> hb:48 sess=1 getdisp=1 relay=1 txn=14401 vic=vb:released
+[   160.520] -> hb:49 sess=1 getdisp=1 relay=1 txn=14763 vic=vb:released
+[   162.472] *** binder txn #15000  program=0100152000022000  session=20  code=7(queueBuffer) x7496  flags=0x0  in=192 out=4096
+[   163.547] -> hb:50 sess=1 getdisp=1 relay=1 txn=15126 vic=vb:released
+[   166.570] -> hb:51 sess=1 getdisp=1 relay=1 txn=15489 vic=vb:released
+[   167.473] *** binder txn #15600  program=0100152000022000  session=20  code=7(queueBuffer) x7796  flags=0x0  in=192 out=4096
+[   169.595] -> hb:52 sess=1 getdisp=1 relay=1 txn=15853 vic=vb:released
+[   172.474] *** binder txn #16200  program=0100152000022000  session=20  code=7(queueBuffer) x8096  flags=0x0  in=192 out=4096
+[   172.618] -> hb:53 sess=1 getdisp=1 relay=1 txn=16215 vic=vb:released
+[   175.651] -> hb:54 sess=1 getdisp=1 relay=1 txn=16579 vic=vb:released
+[   177.473] *** binder txn #16800  program=0100152000022000  session=20  code=7(queueBuffer) x8396  flags=0x0  in=192 out=4096
+[   178.679] -> hb:55 sess=1 getdisp=1 relay=1 txn=16943 vic=vb:released
+[   181.704] -> hb:56 sess=1 getdisp=1 relay=1 txn=17305 vic=vb:released
+[   182.473] *** binder txn #17400  program=0100152000022000  session=20  code=7(queueBuffer) x8696  flags=0x0  in=192 out=4096
+[   184.730] -> hb:57 sess=1 getdisp=1 relay=1 txn=17669 vic=vb:released
+[   187.473] *** binder txn #18000  program=0100152000022000  session=20  code=7(queueBuffer) x8996  flags=0x0  in=192 out=4096
+[   187.761] -> hb:58 sess=1 getdisp=1 relay=1 txn=18031 vic=vb:released
+[   190.784] -> hb:59 sess=1 getdisp=1 relay=1 txn=18395 vic=vb:released
+[   192.474] *** binder txn #18600  program=0100152000022000  session=20  code=7(queueBuffer) x9296  flags=0x0  in=192 out=4096
+[   193.810] -> hb:60 sess=1 getdisp=1 relay=1 txn=18757 vic=vb:released
+[   196.835] -> hb:61 sess=1 getdisp=1 relay=1 txn=19121 vic=vb:released
+[   197.472] *** binder txn #19200  program=0100152000022000  session=20  code=7(queueBuffer) x9596  flags=0x0  in=192 out=4096
+[   199.864] -> hb:62 sess=1 getdisp=1 relay=1 txn=19485 vic=vb:released
+[   202.473] *** binder txn #19800  program=0100152000022000  session=20  code=7(queueBuffer) x9896  flags=0x0  in=192 out=4096
+[   202.887] -> hb:63 sess=1 getdisp=1 relay=1 txn=19847 vic=vb:released
+[   205.914] -> hb:64 sess=1 getdisp=1 relay=1 txn=20211 vic=vb:released
+[   207.475] *** binder txn #20400  program=0100152000022000  session=20  code=7(queueBuffer) x10196  flags=0x0  in=192 out=4096
+[   208.936] -> hb:65 sess=1 getdisp=1 relay=1 txn=20573 vic=vb:released
+[   211.962] -> hb:66 sess=1 getdisp=1 relay=1 txn=20937 vic=vb:released
+[   212.474] *** binder txn #21000  program=0100152000022000  session=20  code=7(queueBuffer) x10496  flags=0x0  in=192 out=4096
+[   214.985] -> hb:67 sess=1 getdisp=1 relay=1 txn=21299 vic=vb:released
+[   217.473] *** binder txn #21600  program=0100152000022000  session=20  code=7(queueBuffer) x10796  flags=0x0  in=192 out=4096
+[   218.011] -> hb:68 sess=1 getdisp=1 relay=1 txn=21663 vic=vb:released
+[   221.036] -> hb:69 sess=1 getdisp=1 relay=1 txn=22025 vic=vb:released
+[   222.473] *** binder txn #22200  program=0100152000022000  session=20  code=7(queueBuffer) x11096  flags=0x0  in=192 out=4096
+[   224.061] -> hb:70 sess=1 getdisp=1 relay=1 txn=22389 vic=vb:released
+[   227.087] -> hb:71 sess=1 getdisp=1 relay=1 txn=22681 vic=vb:released
+[   228.156] *** binder txn #22800  program=0100152000022000  session=20  code=7(queueBuffer) x11396  flags=0x0  in=192 out=4096
+[   230.125] -> hb:72 sess=1 getdisp=1 relay=1 txn=23032 vic=vb:released
+[   233.174] -> hb:73 sess=1 getdisp=1 relay=1 txn=23387 vic=vb:released
+[   233.256] *** binder txn #23400  program=0100152000022000  session=20  code=7(queueBuffer) x11696  flags=0x0  in=192 out=4096
+[   236.207] -> hb:74 sess=1 getdisp=1 relay=1 txn=23751 vic=vb:released
+[   238.255] *** binder txn #24000  program=0100152000022000  session=20  code=7(queueBuffer) x11996  flags=0x0  in=192 out=4096
+[   239.236] -> hb:75 sess=1 getdisp=1 relay=1 txn=24115 vic=vb:released
+[   242.266] -> hb:76 sess=1 getdisp=1 relay=1 txn=24479 vic=vb:released
+[   243.256] *** binder txn #24600  program=0100152000022000  session=20  code=7(queueBuffer) x12296  flags=0x0  in=192 out=4096
+[   245.297] -> hb:77 sess=1 getdisp=1 relay=1 txn=24843 vic=vb:released
+[   248.256] *** binder txn #25200  program=0100152000022000  session=20  code=7(queueBuffer) x12596  flags=0x0  in=192 out=4096
+[   248.327] -> hb:78 sess=1 getdisp=1 relay=1 txn=25205 vic=vb:released
+[   251.358] -> hb:79 sess=1 getdisp=1 relay=1 txn=25569 vic=vb:released
+[   253.256] *** binder txn #25800  program=0100152000022000  session=20  code=7(queueBuffer) x12896  flags=0x0  in=192 out=4096
+[   254.386] -> hb:80 sess=1 getdisp=1 relay=1 txn=25933 vic=vb:released
+[   257.415] -> hb:81 sess=1 getdisp=1 relay=1 txn=26297 vic=vb:released
+[   258.261] *** binder txn #26400  program=0100152000022000  session=20  code=7(queueBuffer) x13196  flags=0x0  in=192 out=4096
+[   260.450] -> hb:82 sess=1 getdisp=1 relay=1 txn=26661 vic=vb:released
+[   263.255] *** binder txn #27000  program=0100152000022000  session=20  code=7(queueBuffer) x13496  flags=0x0  in=192 out=4096
+[   263.479] -> hb:83 sess=1 getdisp=1 relay=1 txn=27025 vic=vb:released
+[   266.507] -> hb:84 sess=1 getdisp=1 relay=1 txn=27387 vic=vb:released
+[   268.255] *** binder txn #27600  program=0100152000022000  session=20  code=7(queueBuffer) x13796  flags=0x0  in=192 out=4096
+[   269.537] -> hb:85 sess=1 getdisp=1 relay=1 txn=27751 vic=vb:released
+[   272.574] -> hb:86 sess=1 getdisp=1 relay=1 txn=28115 vic=vb:released
+[   273.256] *** binder txn #28200  program=0100152000022000  session=20  code=7(queueBuffer) x14096  flags=0x0  in=192 out=4096
+[   275.607] -> hb:87 sess=1 getdisp=1 relay=1 txn=28479 vic=vb:released
+[   278.256] *** binder txn #28800  program=0100152000022000  session=20  code=7(queueBuffer) x14396  flags=0x0  in=192 out=4096
+[   278.635] -> hb:88 sess=1 getdisp=1 relay=1 txn=28843 vic=vb:released
+[   281.666] -> hb:89 sess=1 getdisp=1 relay=1 txn=29207 vic=vb:released
+[   283.255] *** binder txn #29400  program=0100152000022000  session=20  code=7(queueBuffer) x14696  flags=0x0  in=192 out=4096
+[   284.699] -> hb:90 sess=1 getdisp=1 relay=1 txn=29571 vic=vb:released
+[   287.732] -> hb:91 sess=1 getdisp=1 relay=1 txn=29935 vic=vb:released
+[   288.256] *** binder txn #30000  program=0100152000022000  session=20  code=7(queueBuffer) x14996  flags=0x0  in=192 out=4096
+[   290.811] -> hb:92 sess=1 getdisp=1 relay=1 txn=30299 vic=vb:released
+[   293.256] *** binder txn #30600  program=0100152000022000  session=20  code=7(queueBuffer) x15296  flags=0x0  in=192 out=4096
+[   293.881] -> hb:93 sess=1 getdisp=1 relay=1 txn=30667 vic=vb:released
+[   296.952] -> hb:94 sess=1 getdisp=1 relay=1 txn=31035 vic=vb:released
+[   298.274] *** binder txn #31200  program=0100152000022000  session=20  code=7(queueBuffer) x15596  flags=0x0  in=192 out=4096
+[   300.026] -> hb:95 sess=1 getdisp=1 relay=1 txn=31403 vic=vb:released
+[   303.142] -> hb:96 sess=1 getdisp=1 relay=1 txn=31775 vic=vb:released
+[   303.273] *** binder txn #31800  program=0100152000022000  session=20  code=7(queueBuffer) x15896  flags=0x0  in=192 out=4096
+[   306.171] -> hb:97 sess=1 getdisp=1 relay=1 txn=32145 vic=vb:released
+[   308.273] *** binder txn #32400  program=0100152000022000  session=20  code=7(queueBuffer) x16196  flags=0x0  in=192 out=4096
+[   309.203] -> hb:98 sess=1 getdisp=1 relay=1 txn=32509 vic=vb:released
+[   312.232] -> hb:99 sess=1 getdisp=1 relay=1 txn=32873 vic=vb:released
+[   313.273] *** binder txn #33000  program=0100152000022000  session=20  code=7(queueBuffer) x16496  flags=0x0  in=192 out=4096
+[   315.261] -> hb:100 sess=1 getdisp=1 relay=1 txn=33237 vic=vb:released
+[   318.290] *** binder txn #33600  program=0100152000022000  session=20  code=7(queueBuffer) x16796  flags=0x0  in=192 out=4096
+[   318.296] -> hb:101 sess=1 getdisp=1 relay=1 txn=33599 vic=vb:released
+[   321.321] -> hb:102 sess=1 getdisp=1 relay=1 txn=33963 vic=vb:released
+[   323.273] *** binder txn #34200  program=0100152000022000  session=20  code=7(queueBuffer) x17096  flags=0x0  in=192 out=4096
+[   324.353] -> hb:103 sess=1 getdisp=1 relay=1 txn=34327 vic=vb:released
+[   327.382] -> hb:104 sess=1 getdisp=1 relay=1 txn=34691 vic=vb:released
+[   328.273] *** binder txn #34800  program=0100152000022000  session=20  code=7(queueBuffer) x17396  flags=0x0  in=192 out=4096
+[   330.412] -> hb:105 sess=1 getdisp=1 relay=1 txn=35054 vic=vb:released
+[   333.272] *** binder txn #35400  program=0100152000022000  session=20  code=7(queueBuffer) x17696  flags=0x0  in=192 out=4096
+[   333.441] -> hb:106 sess=1 getdisp=1 relay=1 txn=35417 vic=vb:released
+[   336.477] -> hb:107 sess=1 getdisp=1 relay=1 txn=35781 vic=vb:released
+[   338.272] *** binder txn #36000  program=0100152000022000  session=20  code=7(queueBuffer) x17996  flags=0x0  in=192 out=4096
+[   339.507] -> hb:108 sess=1 getdisp=1 relay=1 txn=36145 vic=vb:released
+[   342.535] -> hb:109 sess=1 getdisp=1 relay=1 txn=36509 vic=vb:released
+[   343.273] *** binder txn #36600  program=0100152000022000  session=20  code=7(queueBuffer) x18296  flags=0x0  in=192 out=4096
+[   345.566] -> hb:110 sess=1 getdisp=1 relay=1 txn=36873 vic=vb:released
+[   348.273] *** binder txn #37200  program=0100152000022000  session=20  code=7(queueBuffer) x18596  flags=0x0  in=192 out=4096
+[   348.600] -> hb:111 sess=1 getdisp=1 relay=1 txn=37236 vic=vb:released
+[   351.631] -> hb:112 sess=1 getdisp=1 relay=1 txn=37601 vic=vb:released
+[   353.272] *** binder txn #37800  program=0100152000022000  session=20  code=7(queueBuffer) x18896  flags=0x0  in=192 out=4096
+[   354.658] -> hb:113 sess=1 getdisp=1 relay=1 txn=37963 vic=vb:released
+[   357.685] -> hb:114 sess=1 getdisp=1 relay=1 txn=38327 vic=vb:released
+[   360.715] -> hb:115 sess=1 getdisp=1 relay=1 txn=38357 vic=vb:released
+[   363.749] -> hb:116 sess=1 getdisp=1 relay=1 txn=38357 vic=vb:released
