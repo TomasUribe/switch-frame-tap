@@ -1675,6 +1675,80 @@ namespace ams::mitm::applet {
             return R_SUCCEEDED(wrc);
         }
 
+        /* ---- M78: SD writes that can be trusted ---------------------------
+         *
+         * M77 Run C decoded correctly on the console, and the nvjpg-dec.rgba it
+         * left on the card held recycled FAT clusters - a fragment of this
+         * run's own log, Mario Kart asset names - instead of the output. The
+         * write handed fs::WriteFile the UNCACHED engine buffer, and
+         * mesosphere refuses any IPC buffer with the Uncached attribute
+         * (kern_k_page_table_base.cpp, SetupForIpcClient's test_attr_mask
+         * for Ipc, NonSecureIpc and NonDeviceIpc alike). CreateFile had
+         * already allocated the clusters, so a file of the right size existed
+         * and nothing said the write had failed, because its Result was
+         * discarded. M41/M42 hit exactly this and left the lesson in the
+         * strip-dump comment below; M76 repeated it anyway.
+         *
+         * So: the source must be cached memory, every fs Result is checked and
+         * logged, the file is read back and compared byte for byte, and the
+         * FNV-1a of what was written goes in the log, where the PC can compare
+         * it with the file it copied off the card. */
+        constexpr u32 Fnv1a32(const u8 *p, size_t n) {
+            u32 h = 0x811C9DC5u;
+            for (size_t i = 0; i < n; ++i) { h = (h ^ p[i]) * 0x01000193u; }
+            return h;
+        }
+
+        /* `src` must be normal cached memory; `verify` is scratch of at least
+         * `len` bytes, also cached. One retry on any failure. */
+        bool WriteSdVerified(const char *path, const u8 *src, size_t len, u8 *verify, u32 *out_fnv) {
+            const u32 fnv = Fnv1a32(src, len);
+            if (out_fnv != nullptr) { *out_fnv = fnv; }
+            for (u32 attempt = 1; attempt <= 2; ++attempt) {
+                static_cast<void>(fs::DeleteFile(path));   /* absent is fine */
+                Result rc = fs::CreateFile(path, static_cast<s64>(len));
+                if (R_FAILED(rc)) { LogLine("   sd(%s) #%u CreateFile rc=0x%x", path, attempt, rc.GetValue()); continue; }
+                fs::FileHandle f;
+                rc = fs::OpenFile(std::addressof(f), path, fs::OpenMode_Write);
+                if (R_FAILED(rc)) { LogLine("   sd(%s) #%u OpenFile(write) rc=0x%x", path, attempt, rc.GetValue()); continue; }
+                rc = fs::WriteFile(f, 0, src, len, fs::WriteOption::Flush);
+                fs::CloseFile(f);
+                if (R_FAILED(rc)) { LogLine("   sd(%s) #%u WriteFile(%zu B) rc=0x%x", path, attempt, len, rc.GetValue()); continue; }
+
+                rc = fs::OpenFile(std::addressof(f), path, fs::OpenMode_Read);
+                if (R_FAILED(rc)) { LogLine("   sd(%s) #%u OpenFile(read-back) rc=0x%x", path, attempt, rc.GetValue()); continue; }
+                size_t got = 0;
+                rc = fs::ReadFile(std::addressof(got), f, 0, verify, len);
+                fs::CloseFile(f);
+                if (R_FAILED(rc) || got != len) {
+                    LogLine("   sd(%s) #%u read-back rc=0x%x got %zu of %zu B", path, attempt, rc.GetValue(), got, len);
+                    continue;
+                }
+                size_t bad = 0;
+                while (bad < len && verify[bad] == src[bad]) { ++bad; }
+                if (bad != len) {
+                    LogLine("   sd(%s) #%u read-back DIFFERS at byte %zu (wrote %02x, read %02x)", path, attempt, bad, src[bad], verify[bad]);
+                    continue;
+                }
+                LogLine("   sd(%s): %zu B written, read back identical, fnv1a32=%08x", path, len, fnv);
+                return true;
+            }
+            LogLine("   sd(%s): FAILED after 2 attempts - the file on the card is NOT this data (fnv1a32 would be %08x)", path, fnv);
+            return false;
+        }
+
+        /* For engine output: copy out of the uncached nvmap buffer into the
+         * cached stage buffer first, then write. */
+        bool WriteEngineOutputToSd(const char *path, const u8 *uncached_src, size_t len, u32 *out_fnv) {
+            const size_t slot = (len + 0xFFF) & ~static_cast<size_t>(0xFFF);
+            if (g_stage_buf == nullptr || 2 * slot > StreamStageSize) {
+                LogLine("   sd(%s): no cached stage buffer for %zu B - not writing", path, len);
+                return false;
+            }
+            std::memcpy(g_stage_buf, uncached_src, len);
+            return WriteSdVerified(path, g_stage_buf, len, g_stage_buf + slot, out_fnv);
+        }
+
         constexpr const char *StripBinPath = "sdmc:/applet-mitm-strip.bin";
         constexpr const char *VicBinPath   = "sdmc:/applet-mitm-vic.bin";
 
@@ -3239,14 +3313,10 @@ namespace ams::mitm::applet {
                                                       g_vic_dst_buf + L.bits_off, scan_len);
                 char path[64];
                 std::snprintf(path, sizeof(path), "sdmc:/nvjpg-%03u.jpg", attempt);
-                fs::DeleteFile(path);
-                if (R_SUCCEEDED(fs::CreateFile(path, total))) {
-                    fs::FileHandle f;
-                    if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Write))) {
-                        static_cast<void>(fs::WriteFile(f, 0, out, total, fs::WriteOption::Flush));
-                        fs::CloseFile(f);
-                        LogLine("   *** NVJPG ENCODED %u BYTES -> %s (%u B file) ***", scan_len, path, total);
-                    }
+                /* M78: `out` is inside the uncached engine buffer - the same
+                 * write that could never have succeeded (see WriteSdVerified) */
+                if (WriteEngineOutputToSd(path, out, total, nullptr)) {
+                    LogLine("   *** NVJPG ENCODED %u BYTES -> %s (%u B file) ***", scan_len, path, total);
                 }
             };
 
@@ -3525,16 +3595,12 @@ namespace ams::mitm::applet {
                         worst <= 6 ? "*** NVJPG RAN AND DECODED CORRECTLY - this process can drive a non-VIC engine ***"
                                    : "engine ran, output differs - check nvjpg-dec.rgba on the PC");
 
-                /* raw surface to SD for tools/nvjpg_dec_control.py check */
+                /* raw surface to SD for tools/nvjpg_dec_control.py check. M78:
+                 * staged through cached memory and verified - see
+                 * WriteSdVerified for what M77 Run C's file actually held. */
                 static_assert(OutSize <= 0x10000);
-                static_cast<void>(fs::DeleteFile("sdmc:/nvjpg-dec.rgba"));
-                if (R_SUCCEEDED(fs::CreateFile("sdmc:/nvjpg-dec.rgba", OutSize))) {
-                    fs::FileHandle f;
-                    if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), "sdmc:/nvjpg-dec.rgba", fs::OpenMode_Write))) {
-                        static_cast<void>(fs::WriteFile(f, 0, g_vic_dst_buf + OutOff, OutSize, fs::WriteOption::Flush));
-                        fs::CloseFile(f);
-                    }
-                }
+                u32 fnv = 0;
+                WriteEngineOutputToSd("sdmc:/nvjpg-dec.rgba", g_vic_dst_buf + OutOff, OutSize, std::addressof(fnv));
                 UnmapCmdBuffer(jfd, dst_handle);
                 UnmapCmdBuffer(jfd, cmd_handle);
                 NvClose(jfd);
@@ -3640,6 +3706,34 @@ namespace ams::mitm::applet {
             constexpr u64 ScanCap   = 96ull * 1024 * 1024;
             constexpr u64 ChunkSize = 64 * 1024;
 
+            /* M78: M75 only LOGGED where things were - four words per hit,
+             * which is not enough to rebuild a job from. Now every NVENC magic
+             * and NVENC SETCL hit is also DUMPED, while we are still attached,
+             * as records in the M72 recorder's format, so tools/nvrec.py
+             * decodes the command buffers method by method and
+             * tools/nvsetup-dump decodes each setup with NVIDIA's header.
+             * Records are built in the cached stage buffer and written with
+             * WriteSdVerified after detaching. */
+            constexpr size_t RecCap = 0x40000;
+            u8 *const rec = g_stage_buf;
+            size_t rec_len = 0;
+            const bool can_dump = rec != nullptr && 2 * RecCap <= StreamStageSize;
+            auto rec_put = [&](u16 kind, u32 a, u32 b, const void *payload, u32 len) -> u8 * {
+                if (!can_dump || rec_len + 32 + len > RecCap) { return nullptr; }
+                const u32 ms = static_cast<u32>(armTicksToNs(armGetSystemTick()) / UINT64_C(1000000));
+                const u32 hdr[8] = { 0x4352564Eu, static_cast<u32>(kind) | (32u << 16), 0, 0, a, b, len, ms };
+                std::memcpy(rec + rec_len, hdr, sizeof(hdr));
+                u8 *body = rec + rec_len + 32;
+                if (payload != nullptr) { std::memcpy(body, payload, len); }
+                rec_len += 32 + len;
+                return body;
+            };
+            char note[160];
+            auto rec_note = [&](int n) {
+                if (n > 0) { rec_put(9, 0, 0, note, static_cast<u32>(n < static_cast<int>(sizeof(note)) ? n : sizeof(note) - 1)); }
+            };
+            u32 ndumped = 0;
+
             u64 addr = 0;
             for (u32 steps = 0; steps < 4000; ++steps) {
                 ::ams::svc::MemoryInfo mi = {};
@@ -3669,11 +3763,39 @@ namespace ams::mitm::applet {
                         for (u64 i = 0; i + 4 < nw && nhits < MaxHits; ++i) {
                             u32 kind = 0;
                             for (u32 m = 0; m < 4; ++m) { if (w[i] == NvencMagics[m]) { kind = 1 + m; } }
-                            if (kind == 0 && w[i] == setcl_nvenc && (w[i+1] >> 28) <= 4) { kind = 5; }
-                            if (kind == 0 && w[i] == setcl_nvjpg && (w[i+1] >> 28) <= 4) { kind = 6; }
+                            /* M78: a SETCL counts only if the next word writes
+                             * the method-offset register (0x10) with INCR,
+                             * NONINCR or MASK - what a real cmdbuf does next.
+                             * M75's "opcode <= 4" accepted almost any word. */
+                            const u32 nx = w[i + 1] >> 16;
+                            const bool method_next = nx == 0x1010 || nx == 0x2010 || nx == 0x3010;
+                            if (kind == 0 && w[i] == setcl_nvenc && method_next) { kind = 5; }
+                            if (kind == 0 && w[i] == setcl_nvjpg && method_next) { kind = 6; }
                             if (kind == 0) { continue; }
-                            hits[nhits++] = { mi.base_address + off + i * 4, kind,
-                                              w[i], w[i+1], w[i+2], w[i+3] };
+                            const u64 hit_addr = mi.base_address + off + i * 4;
+                            hits[nhits++] = { hit_addr, kind, w[i], w[i+1], w[i+2], w[i+3] };
+
+                            /* dump it now, while attached: 4 KB of setup from a
+                             * magic, 1 KB of command words from an NVENC SETCL,
+                             * clamped to the end of this memory region */
+                            if (kind <= 5) {
+                                const u64 region_end = mi.base_address + mi.size;
+                                u32 want = (kind == 5) ? 0x400u : 0x1000u;
+                                if (hit_addr + want > region_end) { want = static_cast<u32>(region_end - hit_addr) & ~3u; }
+                                rec_note(std::snprintf(note, sizeof(note), "hit %u kind %u @ %#llx in region %#llx+%#llx state %#x perm %#x",
+                                                       nhits - 1, kind, static_cast<unsigned long long>(hit_addr),
+                                                       static_cast<unsigned long long>(mi.base_address),
+                                                       static_cast<unsigned long long>(mi.size), state, perm));
+                                u8 *body = rec_put(kind == 5 ? 7 : 8, 0, static_cast<u32>(hit_addr), nullptr, want);
+                                if (body != nullptr) {
+                                    if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(body), dbg, hit_addr, want))) {
+                                        ++ndumped;
+                                    } else {
+                                        std::memset(body, 0, want);
+                                        rec_note(std::snprintf(note, sizeof(note), "hit %u: ReadDebugProcessMemory failed - payload zeroed", nhits - 1));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3700,6 +3822,12 @@ namespace ams::mitm::applet {
             if (nhits == 0) {
                 LogLine("   nothing found. Either grc is idle and has not allocated its encoder");
                 LogLine("   buffers, or they are in memory this process cannot read.");
+            }
+            if (!can_dump) {
+                LogLine("   no cached stage buffer - hits logged above, nothing dumped");
+            } else if (rec_len != 0) {
+                LogLine("   dumped %u hit(s) into %zu B of records -> sdmc:/grc-scan.bin (decode: tools/nvrec.py)", ndumped, rec_len);
+                WriteSdVerified("sdmc:/grc-scan.bin", rec, rec_len, rec + RecCap, nullptr);
             }
             VicStage("grcscan:done");
         }

@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 73 hardware test cycles (M76 Run A and Run B included). Current build: **M77** (not yet run): NVJPG clock established at the submit.
+`0100000000000C20`. 74 hardware test cycles (through M77 Run C). Current build: **M78** (not yet run).
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,7 +88,120 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M77: establish NVJPG's clock at the submit, and find out what cleared it (built, not yet run) ***
+## *** M78: the dump that could not have worked, and grc's encoder job read out (built, not yet run) ***
+
+### M77 Run C: this process drove a non-VIC engine for the first time
+
+Facts in `RESULT-M77-RUNC.md` and `logs/m77-runC-applet-mitm.log`. The line
+that matters:
+
+```
+[63.377] jpgdec: submit rc=0x0 nverr=0 fence 1/1 REACHED after 314 us | NVJPG 422400000 Hz read 163 us before
+         submit returned, 422400000 Hz after | status used=292 mcu=0x0 result=0 | 16384/16384 output bytes written
+[63.496] jpgdec: worst 8x8 block-mean deviation 0 (block 0) -> *** NVJPG RAN AND DECODED CORRECTLY ***
+```
+
+- **The first completed non-VIC job since M68.** The config was known-good,
+  the clock was confirmed at the submit, and the output matched libjpeg's
+  decode, block for block. Sampled pixels are within 1 count of the source
+  image, with byte order R, G, B, A.
+- **So our submit path is sound.** Channel, nvmap fd, MAP_CMD_BUFFER pins,
+  SETCL, method writes, OP_DONE syncpoint, and the aruid adopted from the game
+  all work for an engine other than the VIC. What M73/M74 lacked was the clock
+  (M76), plus the right method offsets (also M76).
+- **For NVENC that settles the order of work.** Run A showed its clock was
+  running all along, and our submit path is now proven, so what remains for
+  NVENC is its job configuration. The best source for that is grc's own job.
+- No freeze, no stutter, and `txn` climbed without a gap to 38,357 at 363 s.
+
+What the clock watch showed:
+
+```
+53.976  held+2s    NVJPG=652.8  VIC=652.8  NVDEC=979.2
+59.382  clk-watch  NVDEC 979.2 -> 0.0            <- nothing of ours was running
+60.718  node /dev/nvhost-nvjpg opened and closed (node survey)
+60.807  clk-watch  NVJPG, VIC 652.8 -> 422.4     <- the next sample after it
+62.986  clk-ensure #1 re-set max -> 422.4 MHz    (not 652.8)
+```
+
+- NVJPG's raised rate fell within one sample (89 ms) of the node survey
+  closing an NVJPG channel. With Run B that is two runs consistent with
+  "closing an engine channel resets its clock", now with the timing to back it.
+  It is still an inference, not a documented behaviour.
+- NVDEC fell on its own, 1.3 s before anything of ours touched a device, so
+  something outside this module also moves these clocks. Any long-lived engine
+  user should re-check its clock rather than trust a request.
+- Re-issuing `SetAndWait(max)` did not restore 652.8 MHz. It left NVJPG at the
+  domain's 422.4, which was enough to run. ClockEnsure stops at any non-zero
+  rate by design. For an encoder where throughput matters, the next change is
+  to escalate until the rate reaches the requested maximum. Not needed yet.
+- Unlike Runs A and B, NVJPG (422.4) and NVDEC (460.8) were non-zero *before*
+  any request, matching their domains' base rates. clkrst appears to report 0
+  while a module's clock is disabled and the domain rate while it is enabled.
+  Why they started enabled in this boot is unknown.
+
+### The `.rgba` file was never the engine's output, and it could not have been
+
+The local session traced it: the file held recycled FAT clusters (a line of
+this run's own log, Mario Kart asset names). The cause is in the kernel.
+`jpgdec` passed `fs::WriteFile` the **uncached** engine buffer. Mesosphere's
+IPC buffer setup (`kern_k_page_table_base.cpp`, the `test_attr_mask` for
+Ipc, NonSecureIpc and NonDeviceIpc alike) refuses any buffer with the
+`Uncached` attribute. `CreateFile` had already allocated the clusters, so a
+16 KB file existed and nothing said the write had failed, because its Result
+was discarded.
+
+This project learned exactly this in M41/M42, and the strip-dump code says
+so in a comment. M76 wrote the jpgdec dump without it; that was my bug. The
+M73 JPEG-encode dump had the same flaw and has never run with a working engine.
+
+**Fix:** `WriteSdVerified` / `WriteEngineOutputToSd`. Engine output is copied
+into the cached stage buffer first. Every fs Result is checked and logged. The
+file is read back and compared byte for byte, with one retry. The log line
+carries the FNV-1a of what was written, and `tools/nvjpg_dec_control.py check`
+prints the FNV-1a of the file it was given. Equal hashes mean the file is what
+the console wrote. Both dumps use the new path. The hash was checked against
+standard test vectors in C++ and Python.
+
+### The next step: read grc's NVENC job out, read-only
+
+The M75 observer attaches to grc, resumes it at once, scans its memory for an
+NVENC setup magic or an NVENC SETCL, and detaches. It touches no channel and
+submits nothing. It has never actually run: M75's own run was hijacked by the
+parser bug. M78 makes one run of it count:
+
+- **Every hit is dumped, not just located.** 4 KB from each setup magic and
+  1 KB of command words from each NVENC SETCL, read while still attached, go
+  into `sdmc:/grc-scan.bin` as records in the M72 recorder's format. A note
+  record before each gives the full address and its memory region.
+  `tools/nvrec.py` names every method in the command buffers, and
+  `tools/nvsetup-dump` decodes each setup with NVIDIA's header. Round-tripped
+  on the host with a synthetic record file.
+- **Fewer false positives.** A SETCL now counts only when the next word
+  writes the method-offset register (INCR, NONINCR or MASK to 0x10). M75
+  accepted any word whose opcode was <= 4.
+- The file goes through `WriteSdVerified`, so it is checked the same way.
+
+### Run D - `vic clk jpgdec grcscan wait=60`
+
+jpgdec runs first, as a regression control that should now leave a file
+verifiable on the PC. The grc observer runs after it. `grc` must **not** be
+armed and `mitm.lst` must be absent: the observer uses the debug SVCs, not the
+M72 IPC interceptor.
+
+| reading | meaning |
+|---|---|
+| `sd(sdmc:/nvjpg-dec.rgba): ... fnv1a32=X` and the PC check prints the same X plus MATCH | the decode is verified independently of the console |
+| setup hits whose decode shows a sane H.264 config (a real resolution, profile, rate control) | we have grc's configuration; M79 replays it in our own NVENC job |
+| NVENC SETCL hits only | grc's method sequence (and any method we never send) plus the setup's IOVA; the setup itself then needs locating |
+| attach or resume fails | the `rc` values say why; nothing else was touched |
+| no hits | grc was idle, or its buffers are past the 96 MB cap or unreadable; the scanned-KB and region counts say which |
+
+**Risk:** attaching stops grc until `ContinueDebugEvent`, which is the next
+call. If grc objects, recording breaks for the rest of the boot. The game's
+picture does not depend on grc.
+
+## *** M77: establish NVJPG's clock at the submit, and find out what cleared it (Run C: NVJPG decoded correctly) ***
 
 Picks up from `HANDOFF-M76.md`. No hardware cycle yet.
 

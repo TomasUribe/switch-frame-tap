@@ -252,10 +252,22 @@ namespace ams::mitm::applet::nvjpg_dec_control {{
     print(f"wrote {REFPNG.relative_to(REPO)}")
 
 
+def fnv1a32(data):
+    """Same hash the console logs for the file it wrote (M78)."""
+    h = 0x811C9DC5
+    for b in data:
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
 def check(path):
     from PIL import Image
     raw = Path(path).read_bytes()
     need = PITCH * H
+    # M78: compare this with the console's "sd(sdmc:/nvjpg-dec.rgba): ...
+    # fnv1a32=" log line. Equal means the file is what the console wrote;
+    # M77 Run C's file was recycled FAT clusters and would have failed this.
+    print(f"{path}: {len(raw)} B, fnv1a32={fnv1a32(raw):08x}")
     if len(raw) < need:
         raise SystemExit(f"{path}: {len(raw)} bytes, expected at least {need}")
     ref = Image.open(REFPNG).convert("RGB")
