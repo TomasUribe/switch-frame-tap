@@ -1,0 +1,150 @@
+== a: grc's job, flat stripes (Run F) ==
+status: picture_index=0x4d383000 error_status=2 ucode_error_status=0x0 total_bit_count=4128 (516 B) pic_type=3 num_slices=1 avgQP=8 QP 8..8 hrdFullness=0 last_valid_byte_offset=516 intra_mbs=3600 inter_mbs=0
+nvenc-a-bits.bin: 65536 B, first bytes 00 00 00 01 65 b8 04 04 bf dc fe 0b b9 fc a3 14
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 65532 B  first_mb=0 slice_type=2 pps_id=0
+no SPS/PPS in the engine's output (expected: grc writes those itself) - prepending ones built from grc's setup
+decoded 1280x720; stripe means (want/got): 32/32 40/40 48/48 56/56 64/64 72/72 80/80 88/88 96/96 104/104 112/112 120/120 128/128 136/136 144/144 152/152 160/160 168/168 176/176 184/184 192/192 200/200 208/208
+DECODE MATCHES THE INPUT STRIPES
+  -> logs/m81-runG/nvenc-a-decoded.png
+nvenc-a-recon-y.bin: 921600 B, reconstructed-luma stripe check worst deviation 0.0  (matches)
+nvenc-a-rc.bin: 4096 B, 22 non-zero words:
+  +0x0010 0x00000001 1
+  +0x002c 0x00000001 1
+  +0x0038 0x000000e0 224
+  +0x0040 0x00000022 34
+  +0x0044 0x00000008 8
+  +0x0048 0xffffffd3 -45
+  +0x0050 0x00000019 25
+  +0x0054 0x00000008 8
+  +0x0058 0x08080808 134744072
+  +0x005c 0x08080808 134744072
+  +0x0060 0x08080808 134744072
+  +0x0064 0x08080808 134744072
+  +0x0068 0x08080808 134744072
+  +0x006c 0x08080808 134744072
+  +0x0070 0x08080808 134744072
+  +0x0074 0x08080808 134744072
+  +0x0078 0x08080808 134744072
+  +0x007c 0x08080808 134744072
+  +0x0080 0x08080808 134744072
+  +0x0084 0x00000008 8
+  +0x0088 0x00000002 2
+  +0x00f0 0x00000100 256
+
+== b: grc's job, stripes + balanced noise ==
+status: picture_index=0x4d383001 error_status=2 ucode_error_status=0x0 total_bit_count=2766344 (345793 B) pic_type=3 num_slices=1 avgQP=21 QP 8..26 hrdFullness=0 last_valid_byte_offset=345793 intra_mbs=3600 inter_mbs=0
+nvenc-b-bits.bin: 345809 B, first bytes 00 00 00 01 65 b8 04 04 bf dc 45 84 a8 6c 97 f2
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 345805 B  first_mb=0 slice_type=2 pps_id=0
+no SPS/PPS in the engine's output (expected: grc writes those itself) - prepending ones built from grc's setup
+decoded 1280x720; stripe means (want/got): 32/32 40/40 48/48 56/56 64/64 72/72 80/80 88/88 96/96 104/104 112/112 120/120 128/128 136/136 144/144 152/152 160/160 168/168 176/176 184/184 192/192 200/200 208/208
+DECODE MATCHES THE INPUT STRIPES
+  -> logs/m81-runG/nvenc-b-decoded.png
+nvenc-b-rc.bin: 4096 B, 34 non-zero words:
+  +0x0004 0x027aae80 41594496
+  +0x0010 0x0000016d 365
+  +0x002c 0x0000016d 365
+  +0x0038 0x000000e0 224
+  +0x0040 0x00000022 34
+  +0x0044 0x00000b68 2920
+  +0x0048 0x000002d2 722
+  +0x0050 0x00000079 121
+  +0x0054 0x00000015 21
+  +0x0058 0x0b0a0808 185206792
+  +0x005c 0x11100e0d 286264845
+  +0x0060 0x17161413 387322899
+  +0x0064 0x18181818 404232216
+  +0x0068 0x18181717 404231959
+  +0x006c 0x18181818 404232216
+  +0x0070 0x17181818 387455000
+  +0x0074 0x18181817 404232215
+  +0x0078 0x18181818 404232216
+  +0x007c 0x18181818 404232216
+  +0x0080 0x19191818 421074968
+  +0x0084 0x0000001a 26
+  +0x0088 0x383a3e3f 943341119
+  +0x008c 0x2b2e3234 724447796
+  +0x0090 0x1e212528 505488680
+  +0x0094 0x1c1d1c1d 471669789
+  +0x0098 0x1c1d1e1f 471670303
+  +0x009c 0x1c1d1c1d 471669789
+  +0x00a0 0x1e1c1c1d 505158685
+  +0x00a4 0x1c1d1c1f 471669791
+  +0x00a8 0x1c1d1c1d 471669789
+  +0x00ac 0x1c1d1c1d 471669789
+  +0x00b0 0x1b1b1c1d 454761501
+  +0x00b4 0x00000018 24
+  +0x00f0 0x00000100 256
+
+== c: RCMODE 0 (constant QP), flat stripes ==
+status: picture_index=0x4d383002 error_status=2 ucode_error_status=0x0 total_bit_count=4040 (505 B) pic_type=3 num_slices=1 avgQP=24 QP 0..0 hrdFullness=0 last_valid_byte_offset=505 intra_mbs=3600 inter_mbs=0
+nvenc-c-bits.bin: 65536 B, first bytes 00 00 00 01 65 b8 04 2f f1 02 73 dc 9f c0 ee c4
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 65532 B  first_mb=0 slice_type=2 pps_id=0
+no SPS/PPS in the engine's output (expected: grc writes those itself) - prepending ones built from grc's setup
+decoded 1280x720; stripe means (want/got): 32/32 40/40 48/48 56/56 64/64 72/72 80/80 88/88 96/96 104/104 112/112 120/120 128/128 136/136 144/144 152/152 160/160 168/168 176/176 184/184 192/192 200/200 208/208
+DECODE MATCHES THE INPUT STRIPES
+  -> logs/m81-runG/nvenc-c-decoded.png
+
+== d: grc's job, setup rc hrd_type 0 (no HRD), flat stripes ==
+status: picture_index=0x4d383003 error_status=2 ucode_error_status=0x0 total_bit_count=4128 (516 B) pic_type=3 num_slices=1 avgQP=8 QP 8..8 hrdFullness=0 last_valid_byte_offset=516 intra_mbs=3600 inter_mbs=0
+nvenc-d-bits.bin: 65536 B, first bytes 00 00 00 01 65 b8 04 04 bf dc fe 0b b9 fc a3 14
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 65532 B  first_mb=0 slice_type=2 pps_id=0
+no SPS/PPS in the engine's output (expected: grc writes those itself) - prepending ones built from grc's setup
+decoded 1280x720; stripe means (want/got): 32/32 40/40 48/48 56/56 64/64 72/72 80/80 88/88 96/96 104/104 112/112 120/120 128/128 136/136 144/144 152/152 160/160 168/168 176/176 184/184 192/192 200/200 208/208
+DECODE MATCHES THE INPUT STRIPES
+  -> logs/m81-runG/nvenc-d-decoded.png
+nvenc-d-rc.bin: 4096 B, 22 non-zero words:
+  +0x0010 0x00000001 1
+  +0x002c 0x00000001 1
+  +0x0038 0x000000e0 224
+  +0x0040 0x00000022 34
+  +0x0044 0x00000008 8
+  +0x0048 0xffffffd3 -45
+  +0x0050 0x00000019 25
+  +0x0054 0x00000008 8
+  +0x0058 0x08080808 134744072
+  +0x005c 0x08080808 134744072
+  +0x0060 0x08080808 134744072
+  +0x0064 0x08080808 134744072
+  +0x0068 0x08080808 134744072
+  +0x006c 0x08080808 134744072
+  +0x0070 0x08080808 134744072
+  +0x0074 0x08080808 134744072
+  +0x0078 0x08080808 134744072
+  +0x007c 0x08080808 134744072
+  +0x0080 0x08080808 134744072
+  +0x0084 0x00000008 8
+  +0x0088 0x00000002 2
+  +0x00f0 0x00000100 256
+
+== e: grc's job, setup two_pass_rc 0, flat stripes ==
+status: picture_index=0x4d383004 error_status=2 ucode_error_status=0x0 total_bit_count=4128 (516 B) pic_type=3 num_slices=1 avgQP=8 QP 8..8 hrdFullness=0 last_valid_byte_offset=516 intra_mbs=3600 inter_mbs=0
+nvenc-e-bits.bin: 65536 B, first bytes 00 00 00 01 65 b8 04 04 bf dc fe 0b b9 fc a3 14
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 65532 B  first_mb=0 slice_type=2 pps_id=0
+no SPS/PPS in the engine's output (expected: grc writes those itself) - prepending ones built from grc's setup
+decoded 1280x720; stripe means (want/got): 32/32 40/40 48/48 56/56 64/64 72/72 80/80 88/88 96/96 104/104 112/112 120/120 128/128 136/136 144/144 152/152 160/160 168/168 176/176 184/184 192/192 200/200 208/208
+DECODE MATCHES THE INPUT STRIPES
+  -> logs/m81-runG/nvenc-e-decoded.png
+nvenc-e-rc.bin: 4096 B, 22 non-zero words:
+  +0x0010 0x00000001 1
+  +0x002c 0x00000001 1
+  +0x0038 0x000000e0 224
+  +0x0040 0x00000022 34
+  +0x0044 0x00000008 8
+  +0x0048 0xffffffd3 -45
+  +0x0050 0x00000019 25
+  +0x0054 0x00000008 8
+  +0x0058 0x08080808 134744072
+  +0x005c 0x08080808 134744072
+  +0x0060 0x08080808 134744072
+  +0x0064 0x08080808 134744072
+  +0x0068 0x08080808 134744072
+  +0x006c 0x08080808 134744072
+  +0x0070 0x08080808 134744072
+  +0x0074 0x08080808 134744072
+  +0x0078 0x08080808 134744072
+  +0x007c 0x08080808 134744072
+  +0x0080 0x08080808 134744072
+  +0x0084 0x00000008 8
+  +0x0088 0x00000002 2
+  +0x00f0 0x00000100 256
+
