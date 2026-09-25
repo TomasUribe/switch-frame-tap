@@ -330,6 +330,9 @@ All PC-side, all tested before any hardware run: `bash tools/run_pc_tests.sh`.
   console does, from the console's own SPS/PPS array and real NVENC slices.
   It replays the stream through raw-view and re-decodes what raw-view wrote.
   **The whole receive path is tested; only the USB wire is not.**
+- **`tools/sft_tool.py`** summarises a recorded stream (packets, frame-number
+  gaps, sizes, a decode check) and cuts a committable sample; a minute of
+  stream is over a gigabyte.
 - **`tools/run_pc_tests.sh`**: every check above in one command.
 
 ### Run I - `vic exec dbg usb csc nvframe nvstream nvp wait=60`, handheld, `raw-view` running on the PC

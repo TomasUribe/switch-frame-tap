@@ -123,6 +123,7 @@ Run I tests all four, in that order.
 | `nvframe_check.py` | real-frame run checks: deswizzle, layout scoring, decode, PSNR, "which layout did NVENC read", colour check |
 | `nvp_check.py` | P-frame GOP decode and the drift test |
 | `sft_stream_test.py` | builds the console's USB stream byte for byte and replays it through raw-view |
+| `sft_tool.py` | summarises a recorded stream (`raw-view --record`): packets, gaps, sizes, a decode check; cuts a committable sample |
 | `raw-recv/` | `raw-view` (live viewer: raw, packed-4:2:0 and H.264), `raw-recv` (dumper), Makefile, udev rule |
 | `nvrec.py`, `nvsetup-dump.c` | decode the grc observer's records and NVENC setups |
 | `deswizzle.py`, `nv12topng.py`, `compare_vic.py` | older frame tools |

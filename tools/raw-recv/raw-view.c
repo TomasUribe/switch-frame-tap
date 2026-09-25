@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <signal.h>
 #include <libusb-1.0/libusb.h>
 #include <SDL2/SDL.h>
 #ifdef SFT_H264
@@ -53,7 +54,8 @@ typedef struct {
 } sft_hdr_t;
 #pragma pack(pop)
 
-static volatile int g_quit = 0;
+static volatile sig_atomic_t g_quit = 0;
+static void on_sigint(int s) { (void)s; g_quit = 1; }
 static libusb_device_handle *g_usb = NULL;
 static FILE *g_in = NULL;           /* --file */
 
@@ -144,6 +146,8 @@ int main(int argc, char **argv)
         else { fprintf(stderr, "unknown option %s (see the comment at the top of raw-view.c)\n", argv[i]); return 2; }
     }
     if (scale < 1) scale = 1;
+    /* Ctrl-C before the first frame still ends with the summary below */
+    signal(SIGINT, on_sigint);
 
     libusb_context *ctx = NULL;
     if (file) {
