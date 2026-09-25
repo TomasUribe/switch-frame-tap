@@ -1,0 +1,12 @@
+   none        OK
+   out_k8      OK
+   out_k12     OK
+   out_k16     OK
+   out_k19     OK
+   out_k16_s8  OK
+   out_off     OK
+   out_neg     OK
+   out_dense   OK
+   slot_k16    OK
+   m64_bt601   OK
+the law reproduces 528 of 528 observed values

@@ -1,37 +1,47 @@
 #!/usr/bin/env python3
 """
-vic_csc.py - M82: read sdmc:/vic-csc.bin and measure the VIC's colour matrix.
+vic_csc.py - the VIC's colour matrix: measured (M82 Run H), modelled, designed.
 
-Three attempts to program the VIC's RGB->YUV matrix (M64, M66) produced a
-constant: the offset column landed and every coefficient term vanished. The
-console now runs one VIC job per "probe" (a whole 3x4 matrix, see
-CscProbes in applet_mitm_nv.cpp) on a 64x64 card of 16 flat 16x16 patches,
-and saves the source card and every NV12 output here.
+M64-M66 tried three times to program the VIC's RGB->YUV matrix and got a
+constant picture. M82 ran 11 probe jobs (CscProbes in applet_mitm_nv.cpp) on
+a 64x64 card of 16 flat patches and saved every output to sdmc:/vic-csc.bin.
+Run H's file is logs/m82-runH-vic-csc.bin.
 
-For every probe this fits each output plane (Y, U, V) as
+THE LAW (derived from Run H; `verify` shows it reproduces all 528 observed
+values - 11 probes x 16 patches x 3 planes - with zero error):
 
-    plane = a*R + b*G + c*B + d          (8-bit units, R/G/B = the card's bytes)
+    inputs   in = (B, G, R)             the card's bytes R,G,B,A, declared
+                                        A8R8G8B8 as the game path declares it
+             in10 = in8 << 2            the pipeline is 10-bit
+    per row  acc = (sum_j c[j] * in10[j]) >> matrix_r_shift  +  c[3]
+             out10 = clamp(acc >> 8, 0, 1023)
+             out8  = out10 >> 2
+    rows ->  planes (Y, V, U)           row 1 is Cr, row 2 is Cb
+    pass-through (matrix off) is the identity: Y = B, V = G, U = R
 
-over the patch centres, leaving out clipped samples (0-1 or 254-255). Flat
-patches make the chroma filter irrelevant. What the fits say, together:
+  so a coefficient has 8 fraction bits (256 = 1.0), matrix_r_shift divides
+  the products only, and the offset is in 1/256ths of a 10-bit step (16 in
+  8-bit terms is 16 * 4 * 256 = 16384). Both stages truncate.
 
-  - the diagonal probes (one coefficient K per row, shift 0) give, for each
-    row, the plane it lands in, the input it reads and its gain; gain / K is
-    what one coefficient unit is worth, the number M64-M66 were missing
-  - out_k16_s8 against out_k16: whether matrix_r_shift divides the products
-  - out_off: the unit of the offset column
-  - out_neg: whether a negative coefficient works (two's complement)
-  - out_dense: whether all nine coefficient fields sit where the struct says
-  - slot_k16: the slot matrix under the same law
-  - m64_bt601 must reproduce M64's constant, or the harness is not
-    measuring what M64 did
+What M64-M66 got wrong, all at once: coefficients scaled for "shift 8 means
+/256" on top of the 8 fraction bits the hardware already has (so 256x too
+small: 66..129 became 0.004), offsets scaled for 8-bit instead of 10-bit
+units (4x too small), and rows/columns in R,G,B / Y,U,V order instead of the
+B,G,R / Y,V,U the hardware uses. M82's m64_bt601 probe reproduced M64's
+constant 4/32/32 exactly under this law.
 
-  python3 tools/vic_csc.py vic-csc.bin
+  python3 tools/vic_csc.py FILE            fit every probe's planes
+  python3 tools/vic_csc.py verify FILE     the law against every value in FILE
+  python3 tools/vic_csc.py design          BT.709 / BT.601 limited-range matrices,
+                                           checked through the law against the
+                                           ideal float conversion
+  python3 tools/vic_csc.py gen             write tier4/applet-mitm/source/vic_csc_bt709.h
   python3 tools/vic_csc.py selftest
 """
 import math
 import struct
 import sys
+from pathlib import Path
 
 HDR = struct.Struct("<8I")                       # magic version count w h src_fmt out_fmt reserved
 REC = struct.Struct("<16sII12iI")                # name where shift c[3][4] completed
@@ -142,6 +152,13 @@ def analyse(f, out=print):
                 a, b, c, d = ft["coef"]
                 out(f"   {pl} = {a:+.4f}*R {b:+.4f}*G {c:+.4f}*B {d:+.2f}   (rms {ft['rms']:.2f}, {ft['n']} used, {ft['clipped']} clipped)")
         results[p["name"]] = (p, fits)
+        std = next((k for k in STANDARDS if p["name"].startswith(k)), None)
+        if std is not None:
+            worst = max(abs(o - i) for s_ in samples for o, i in zip(s_[3:], ideal(std, s_[:3])))
+            law_bad = sum(1 for s_ in samples for o, i in zip(s_[3:], law(p["where"], p["shift"], p["c"], s_[:3])) if o != i)
+            out(f"   against the float {std} conversion: worst {worst:.2f} steps over the 16 patches"
+                f"{'  -> REAL ' + std.upper() + ' YUV' if worst <= 1.0 else '  -> NOT within one step'};"
+                f" the law predicts {48 - law_bad} of 48 values exactly")
     out("")
     summarize(results, out)
     return results
@@ -188,35 +205,174 @@ def summarize(results, out=print):
         out("   offsets alone: " + "; ".join(parts))
 
 
+# ------------------------------------------------------------------ the law
+
+def law(where, shift, c, rgb):
+    """What the VIC writes for one pixel (R, G, B) under a probe/matrix,
+    as (Y, U, V). where 0 = matrix off."""
+    r, g, b = rgb
+    ins10 = [b << 2, g << 2, r << 2]
+    rows = []
+    for i in range(3):
+        if where == 0:
+            out10 = ins10[i]
+        else:
+            acc = (sum(c[i][j] * ins10[j] for j in range(3)) >> shift) + c[i][3]
+            out10 = max(0, min(1023, acc >> 8))
+        rows.append(out10 >> 2)
+    y, v, u = rows
+    return y, u, v
+
+
+def verify(f, out=print):
+    """Every observed patch value against the law. Returns mismatches."""
+    w = f["w"]
+    total = bad = 0
+    for p in f["probes"]:
+        pbad = 0
+        for py in range(f["h"] // 16):
+            for px in range(w // 16):
+                cx, cy = px * 16 + 8, py * 16 + 8
+                rgb = tuple(f["card"][(cy * w + cx) * 4:(cy * w + cx) * 4 + 3])
+                obs = (p["y"][cy * w + cx], p["uv"][(cy // 2) * w + (cx & ~1)], p["uv"][(cy // 2) * w + (cx & ~1) + 1])
+                pred = law(p["where"], p["shift"], p["c"], rgb)
+                for a, o in zip(pred, obs):
+                    total += 1
+                    if a != o:
+                        bad += 1
+                        pbad += 1
+        out(f"   {p['name']:11} {'OK' if pbad == 0 else f'{pbad} MISMATCHES'}")
+    out(f"the law reproduces {total - bad} of {total} observed values")
+    return bad
+
+
+# ------------------------------------------------------------------ design
+
+STANDARDS = {"bt709": (0.2126, 0.0722), "bt601": (0.299, 0.114)}
+
+
+def ideal(standard, rgb):
+    """Float limited-range Y, Cb, Cr (8-bit) for an 8-bit R, G, B."""
+    kr, kb = STANDARDS[standard]
+    kg = 1 - kr - kb
+    r, g, b = rgb
+    yl = kr * r + kg * g + kb * b
+    y = 16 + 219 / 255 * yl
+    cb = 128 + 224 / 255 * (b - yl) / (2 * (1 - kb))
+    cr = 128 + 224 / 255 * (r - yl) / (2 * (1 - kr))
+    return y, cb, cr
+
+
+DESIGN_SHIFT = 8   # proven by Run H's out_k16_s8 and m64_bt601 probes
+
+
+def design(standard="bt709", shift=DESIGN_SHIFT):
+    """The 3x4 matrix in the hardware's order: rows (Y, V, U), columns (B, G, R,
+    offset). With matrix_r_shift 8 a coefficient has 8 + 8 = 16 fraction bits
+    (65536 = 1.0), so quantisation error is negligible; the offsets are in
+    1/256 of a 10-bit step whatever the shift, plus 512 (half an 8-bit step)
+    so the two truncations round to nearest."""
+    kr, kb = STANDARDS[standard]
+    kg = 1 - kr - kb
+    sy, sc = 219 / 255, 224 / 255
+    rows_rgb = {
+        "Y": (sy * kr, sy * kg, sy * kb),
+        "U": (-sc * kr / (2 * (1 - kb)), -sc * kg / (2 * (1 - kb)), sc * (1 - kb) / (2 * (1 - kb))),
+        "V": (sc * (1 - kr) / (2 * (1 - kr)), -sc * kg / (2 * (1 - kr)), -sc * kb / (2 * (1 - kr))),
+    }
+    offs = {"Y": 16 * 4 * 256 + 512, "U": 128 * 4 * 256 + 512, "V": 128 * 4 * 256 + 512}
+    out = []
+    for plane in ("Y", "V", "U"):
+        fr, fg, fb = rows_rgb[plane]
+        one = 256 << shift
+        q = [round(fb * one), round(fg * one), round(fr * one)]
+        if plane != "Y":
+            # keep each chroma row summing to zero, so grey stays exactly neutral
+            err = [fb * one - q[0], fg * one - q[1], fr * one - q[2]]
+            while sum(q) != 0:
+                k = max(range(3), key=lambda i: err[i]) if sum(q) < 0 else min(range(3), key=lambda i: err[i])
+                q[k] += 1 if sum(q) < 0 else -1
+                err[k] = [fb, fg, fr][k] * one - q[k]
+        out.append(q + [offs[plane]])
+    return out
+
+
+def check_design(standard, m, out=print, shift=DESIGN_SHIFT):
+    """Push every RGB triple on a 0..255 grid (step 5, plus the card's
+    patches) through the law and compare with the float conversion."""
+    worst = [0.0, 0.0, 0.0]
+    for r in list(range(0, 256, 5)) + [255]:
+        for g in list(range(0, 256, 5)) + [255]:
+            for b in list(range(0, 256, 5)) + [255]:
+                got = law(1, shift, m, (r, g, b))
+                want = ideal(standard, (r, g, b))
+                for i in range(3):
+                    worst[i] = max(worst[i], abs(got[i] - want[i]))
+    out(f"   {standard}: worst error against the float conversion over the RGB cube: "
+        f"Y {worst[0]:.2f}, U {worst[1]:.2f}, V {worst[2]:.2f} (8-bit steps)")
+    return max(worst)
+
+
+HEADER = __import__("pathlib").Path(__file__).resolve().parent.parent / "tier4/applet-mitm/source/vic_csc_bt709.h"
+
+
+def gen():
+    m = design("bt709")
+    assert check_design("bt709", m, out=lambda *_: None) <= 1.0
+    rows = ",\n".join("        { " + ", ".join(f"{v:7d}" for v in row) + " }" for row in m)
+    HEADER.write_text(f"""/*
+ * vic_csc_bt709.h - GENERATED by tools/vic_csc.py gen. Do not edit.
+ *
+ * RGB -> BT.709 limited-range YCbCr for the VIC's output matrix, in the
+ * encoding M82 Run H measured (see tools/vic_csc.py for the law and the
+ * check): rows (Y, Cr, Cb), columns (B, G, R, offset) for a source declared
+ * A8R8G8B8 whose bytes are R,G,B,A; matrix_r_shift {DESIGN_SHIFT}, so 16 fraction
+ * bits (65536 = 1.0); offsets in 1/256 of a 10-bit step, +512 so the output
+ * rounds.
+ */
+#pragma once
+
+namespace ams::mitm::applet::vic_csc {{
+
+    constexpr u32 Shift = {DESIGN_SHIFT};
+    constexpr s32 Bt709[3][4] = {{
+{rows},
+    }};
+
+}}
+""")
+    print(f"wrote {HEADER.name}: " + "  ".join(str(r) for r in m))
+
+
 # ------------------------------------------------------------------ selftest
 
-def synth(law_f=16, clip=True):
-    """A file as the console would write it, under a made-up law:
-    out = clip((sum c*in) / 2^law_f + off / 4) in 8-bit, rows -> (Y, U, V)
-    with input order (B, G, R), and the documented pass-through for 'none'."""
+PATCHES = [(40, 40, 40), (200, 40, 40), (40, 200, 40), (40, 40, 200), (200, 200, 40), (200, 40, 200),
+           (40, 200, 200), (200, 200, 200), (120, 120, 120), (200, 120, 40), (40, 200, 120), (120, 40, 200),
+           (160, 80, 200), (80, 160, 40), (200, 200, 120), (60, 100, 160)]
+K8, K11, K12, K16, K19 = 1 << 8, 1 << 11, 1 << 12, 1 << 16, (1 << 19) - 1
+PROBES = [
+    ("none", 0, 0, [[0] * 4] * 3),
+    ("out_k8", 1, 0, [[K8, 0, 0, 0], [0, K8, 0, 0], [0, 0, K8, 0]]),
+    ("out_k12", 1, 0, [[K12, 0, 0, 0], [0, K12, 0, 0], [0, 0, K12, 0]]),
+    ("out_k16", 1, 0, [[K16, 0, 0, 0], [0, K16, 0, 0], [0, 0, K16, 0]]),
+    ("out_k19", 1, 0, [[K19, 0, 0, 0], [0, K19, 0, 0], [0, 0, K19, 0]]),
+    ("out_k16_s8", 1, 8, [[K16, 0, 0, 0], [0, K16, 0, 0], [0, 0, K16, 0]]),
+    ("out_off", 1, 0, [[0, 0, 0, 256], [0, 0, 0, 512], [0, 0, 0, 768]]),
+    ("out_neg", 1, 0, [[K16, 0, 0, 0], [0, -K16, 0, 768], [0, 0, K16, 0]]),
+    ("out_dense", 1, 0, [[K11, 2 * K11, 3 * K11, 0], [4 * K11, 5 * K11, 6 * K11, 0], [7 * K11, 8 * K11, 9 * K11, 0]]),
+    ("slot_k16", 2, 0, [[K16, 0, 0, 0], [0, K16, 0, 0], [0, 0, K16, 0]]),
+    ("m64_bt601", 1, 8, [[66, 129, 25, 4096], [-38, -74, 112, 32768], [112, -94, -18, 32768]]),
+]
+
+
+def synth(probes=PROBES):
+    """A file as the console writes it, produced by the law."""
     w = h = 64
-    patches = [(40, 40, 40), (200, 40, 40), (40, 200, 40), (40, 40, 200), (200, 200, 40), (200, 40, 200),
-               (40, 200, 200), (200, 200, 200), (120, 120, 120), (200, 120, 40), (40, 200, 120), (120, 40, 200),
-               (160, 80, 200), (80, 160, 40), (200, 200, 120), (60, 100, 160)]
     card = bytearray(w * h * 4)
     for y in range(h):
         for x in range(w):
-            r, g, b = patches[(y // 16) * 4 + x // 16]
+            r, g, b = PATCHES[(y // 16) * 4 + x // 16]
             card[(y * w + x) * 4:(y * w + x) * 4 + 4] = bytes((r, g, b, 255))
-    k8, k11, k12, k16, k19 = 1 << 8, 1 << 11, 1 << 12, 1 << 16, (1 << 19) - 1
-    probes = [
-        ("none", 0, 0, [[0] * 4] * 3),
-        ("out_k8", 1, 0, [[k8, 0, 0, 0], [0, k8, 0, 0], [0, 0, k8, 0]]),
-        ("out_k12", 1, 0, [[k12, 0, 0, 0], [0, k12, 0, 0], [0, 0, k12, 0]]),
-        ("out_k16", 1, 0, [[k16, 0, 0, 0], [0, k16, 0, 0], [0, 0, k16, 0]]),
-        ("out_k19", 1, 0, [[k19, 0, 0, 0], [0, k19, 0, 0], [0, 0, k19, 0]]),
-        ("out_k16_s8", 1, 8, [[k16, 0, 0, 0], [0, k16, 0, 0], [0, 0, k16, 0]]),
-        ("out_off", 1, 0, [[0, 0, 0, 256], [0, 0, 0, 512], [0, 0, 0, 768]]),
-        ("out_neg", 1, 0, [[k16, 0, 0, 0], [0, -k16, 0, 768], [0, 0, k16, 0]]),
-        ("out_dense", 1, 0, [[k11, 2 * k11, 3 * k11, 0], [4 * k11, 5 * k11, 6 * k11, 0], [7 * k11, 8 * k11, 9 * k11, 0]]),
-        ("slot_k16", 2, 0, [[k16, 0, 0, 0], [0, k16, 0, 0], [0, 0, k16, 0]]),
-        ("m64_bt601", 1, 8, [[66, 129, 25, 4096], [-38, -74, 112, 32768], [112, -94, -18, 32768]]),
-    ]
     data = bytearray(HDR.pack(MAGIC, 1, len(probes), w, h, 32, 67, 0)) + card
     for name, where, shift, c in probes:
         data += REC.pack(name.encode().ljust(16, b"\0"), where, shift, *[v for row in c for v in row], 1)
@@ -224,49 +380,66 @@ def synth(law_f=16, clip=True):
         uvp = bytearray(w * h // 2)
         for y in range(h):
             for x in range(w):
-                r, g, b = patches[(y // 16) * 4 + x // 16]
-                if where == 0:
-                    yuv = (b, r, g)
-                else:
-                    ins = (b, g, r)
-                    yuv = []
-                    for i in range(3):
-                        v = sum(c[i][j] * ins[j] for j in range(3)) / (2 ** law_f) / (2 ** shift) + c[i][3] / 4 / (2 ** shift)
-                        yuv.append(max(0, min(255, round(v))) if clip else round(v) & 255)
-                yp[y * w + x] = yuv[0]
+                yy, u, v = law(where, shift, c, PATCHES[(y // 16) * 4 + x // 16])
+                yp[y * w + x] = yy
                 if y % 2 == 0 and x % 2 == 0:
-                    uvp[(y // 2) * w + x] = yuv[1]
-                    uvp[(y // 2) * w + x + 1] = yuv[2]
+                    uvp[(y // 2) * w + x] = u
+                    uvp[(y // 2) * w + x + 1] = v
         data += yp + uvp
     return bytes(data)
 
 
 def selftest():
-    f = parse(synth())
     lines = []
+    f = parse(synth())
+    assert verify(f, out=lines.append) == 0
     res = analyse(f, out=lines.append)
-    # the pass-through is Y=B, U=R, V=G with gain 1
-    fits = res["none"][1]
-    assert [dominant(ft)[0] for ft in fits] == [2, 0, 1], [dominant(ft) for ft in fits]
-    # under the synthetic law (inputs B,G,R; unit 2^-16), out_k16 is gain 1:
-    #   row 0 (Y) reads B, row 1 (U) G, row 2 (V) R
-    fits = res["out_k16"][1]
-    got = [(dominant(ft)[0], round(dominant(ft)[1], 3)) for ft in fits]
-    assert got == [(2, 1.0), (1, 1.0), (0, 1.0)], got
-    # the offset column: 256/4 = 64 per the law
-    fits = res["out_off"][1]
-    assert abs(fits[0]["lo"] - 64) < 0.6, fits[0]
-    # the negative row: V... U = 192 - G
-    fits = res["out_neg"][1]
-    assert abs(fits[1]["coef"][1] + 1) < 0.02 and abs(fits[1]["coef"][3] - 192) < 1, fits[1]["coef"]
+    # under the law, out_k8 is the identity: Y<-B, U<-R, V<-G at gain 1
+    got = [(dominant(ft)[0], round(dominant(ft)[1], 3)) for ft in res["out_k8"][1]]
+    assert got == [(2, 1.0), (0, 1.0), (1, 1.0)], got
+    # M64's matrix gives a constant 4 / 32 / 32 (M64's observation)
+    ft = res["m64_bt601"][1]
+    assert round(ft[0]["coef"][3]) == 4 and abs(ft[1]["coef"][3] - 32) < 1.5, ft
+    # the designed matrices land within one step of the float conversion
+    for std in STANDARDS:
+        assert check_design(std, design(std), out=lines.append) <= 1.0
+    # and the M83 matrix, run as a probe, fits as BT.709 on the card
+    m = design("bt709")
+    fm = parse(synth([("bt709", 1, DESIGN_SHIFT, m)]))
+    ft = analyse(fm, out=lines.append)["bt709"][1]
+    assert any("REAL BT709 YUV" in ln for ln in lines), "bt709 probe check"
+    kr, kb = STANDARDS["bt709"]
+    assert abs(ft[0]["coef"][0] - 219 / 255 * kr) < 0.01 and abs(ft[0]["coef"][3] - 16) < 1.0, ft[0]
+    # the real Run H file, if present, must still verify
+    run_h = Path(__file__).resolve().parent.parent / "logs/m82-runH-vic-csc.bin"
+    if run_h.exists():
+        assert verify(parse(run_h.read_bytes()), out=lines.append) == 0
+        lines.append("Run H's file verifies under the law")
+    # the generated header matches the design
+    if HEADER.exists():
+        txt = HEADER.read_text()
+        for row in design("bt709"):
+            assert "{ " + ", ".join(f"{v:7d}" for v in row) + " }" in txt, "vic_csc_bt709.h is stale - run gen"
     print("\n".join(lines))
     print("selftest OK")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 2 and sys.argv[1] == "selftest":
+    cmd = sys.argv[1] if len(sys.argv) >= 2 else ""
+    if cmd == "selftest":
         selftest()
-    elif len(sys.argv) >= 2:
-        analyse(parse(open(sys.argv[1], "rb").read()))
+    elif cmd == "verify" and len(sys.argv) >= 3:
+        sys.exit(1 if verify(parse(open(sys.argv[2], "rb").read())) else 0)
+    elif cmd == "design":
+        for std in STANDARDS:
+            m = design(std)
+            print(f"{std}: rows (Y, V, U) x columns (B, G, R, offset), shift {DESIGN_SHIFT}")
+            for plane, row in zip("YVU", m):
+                print(f"   {plane}: {row}")
+            check_design(std, m)
+    elif cmd == "gen":
+        gen()
+    elif cmd:
+        analyse(parse(open(cmd, "rb").read()))
     else:
         print(__doc__)

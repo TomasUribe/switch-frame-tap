@@ -51,6 +51,20 @@ int main() {
     ExpectContains("vic exec dbg csc nvframe wait=60\n", "dump", false);
     ExpectNumber("vic exec dbg csc nvframe wait=60\n", "nvframe", 120, 120);
     ExpectNumber("vic exec dbg csc nvframe=60 wait=60\n", "nvframe", 120, 60);
+    /* M83: Run I's exact arm file. "nvstream" must not arm the raw "stream",
+     * "nvp" must not read "nvqp", and neither may arm "grc". */
+    ExpectContains("vic exec dbg usb csc nvframe nvstream nvp wait=60\n", "grc", false);
+    ExpectContains("vic exec dbg usb csc nvframe nvstream nvp wait=60\n", "stream", false);
+    ExpectContains("vic exec dbg usb csc nvframe nvstream nvp wait=60\n", "nvstream", true);
+    ExpectContains("vic exec dbg usb csc nvframe nvstream nvp wait=60\n", "nvp", true);
+    ExpectContains("vic exec dbg usb csc nvframe nvstream nvp wait=60\n", "usb", true);
+    ExpectContains("vic exec dbg usb csc nvframe nvstream nvp wait=60\n", "nvqp", false);
+    ExpectNumber("vic exec dbg usb csc nvframe nvstream nvp wait=60\n", "nvstream", 3600, 3600);
+    ExpectNumber("vic exec dbg usb csc nvframe nvstream nvp wait=60\n", "nvqp", 20, 20);
+    ExpectNumber("vic exec dbg usb nvstream=7200 nvqp=24 nvp=15\n", "nvstream", 3600, 7200);
+    ExpectNumber("vic exec dbg usb nvstream=7200 nvqp=24 nvp=15\n", "nvqp", 20, 24);
+    ExpectNumber("vic exec dbg usb nvstream=7200 nvqp=24 nvp=15\n", "nvp", 30, 15);
+    ExpectContains("vic exec dbg usb nvqp=24\n", "nvp", false);
     ExpectContains("jpg jpgdec", "jpg", true);
     ExpectContains("clk\n", "clk", true);
     ExpectContains("vic\r\nclk\r\n", "clk", true);

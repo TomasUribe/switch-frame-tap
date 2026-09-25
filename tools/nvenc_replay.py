@@ -53,7 +53,13 @@ def parse_setup(b):
     w1, h1 = struct.unpack_from("<HH", b, 4)
     sps, = struct.unpack_from("<I", b, 0x64)
     pps0, pps1 = struct.unpack_from("<II", b, 0x68)
-    pc0, = struct.unpack_from("<I", b, 0xC8)
+    # M83: the pic_control bitfield word is at 0x1A8 (pic_control starts at
+    # 0xC8; the word follows bitstream_start_pos at 0x1A4 - offsets from
+    # NVIDIA's struct, compiled). M80-M82 read 0xC8, the first byte of a
+    # reference-list array, which happened to give pic_type 3 for grc's IDR
+    # setup (0xfe) and 0 for its P setups (0x00), but ref_pic_flag wrong.
+    pc0, = struct.unpack_from("<I", b, 0x1A8)
+    hist_buf_size, bitstream_buf_size = struct.unpack_from("<II", b, 0x19C)
     frame_num, poc_lsb, idr_pic_id = struct.unpack_from("<HHH", b, 0x17C)
 
     def sx(v, bits):
@@ -73,6 +79,7 @@ def parse_setup(b):
         pic_order_present=(pps1 >> 8) & 1, weighted_pred=(pps1 >> 9) & 1,
         pic_type=(pc0 >> 2) & 3, ref_pic_flag=(pc0 >> 4) & 1,
         frame_num=frame_num, poc_lsb=poc_lsb, idr_pic_id=idr_pic_id,
+        hist_buf_size=hist_buf_size, bitstream_buf_size=bitstream_buf_size,
     )
 
 
@@ -261,10 +268,33 @@ def nal(nal_ref_idc, nal_type, rbsp):
     return b"\x00\x00\x00\x01" + bytes([(nal_ref_idc << 5) | nal_type]) + ep_add(rbsp)
 
 
-def headers_from_setup(s):
+def vui_bt709(max_dec_frame_buffering, fps=60):
+    """VUI for the M83 stream: square pixels; BT.709 primaries, transfer and
+    matrix in limited range (what the VIC now writes); a 60 fps tick; and a
+    bitstream restriction of no reordering, so a decoder outputs each frame
+    the moment it has it (FFmpeg otherwise may hold frames back)."""
+    w = BitW()
+    w.u(1, 1); w.u(8, 1)                     # aspect_ratio_info: 1:1
+    w.u(1, 0)                                # overscan_info_present
+    w.u(1, 1)                                # video_signal_type_present
+    w.u(3, 5); w.u(1, 0)                     #   video_format unspecified, limited range
+    w.u(1, 1); w.u(8, 1); w.u(8, 1); w.u(8, 1)   # colour description: BT.709 x3
+    w.u(1, 0)                                # chroma_loc_info_present
+    w.u(1, 1); w.u(32, 1); w.u(32, 2 * fps); w.u(1, 0)   # timing: 1/(2*fps) tick, not fixed
+    w.u(1, 0); w.u(1, 0)                     # no NAL / VCL HRD
+    w.u(1, 0)                                # pic_struct_present
+    w.u(1, 1)                                # bitstream_restriction
+    w.u(1, 1); w.ue(0); w.ue(0); w.ue(16); w.ue(16)
+    w.ue(0)                                  #   max_num_reorder_frames
+    w.ue(max_dec_frame_buffering)
+    return w.bits
+
+
+def headers_from_setup(s, vui=False):
     """SPS/PPS for the stream NVENC writes from grc's setup. The setup has no
     max_num_ref_frames or direct_8x8_inference; 1 and 1 match its single L0
-    reference and what High-profile encoders emit."""
+    reference and what High-profile encoders emit. vui=True adds the M83
+    stream's VUI (BT.709 limited, 60 fps, no reordering)."""
     mbw, mbh = (s["width"] + 15) // 16, (s["height"] + 15) // 16
     crop_bottom = (mbh * 16 - s["height"]) // 2
     crop_right = (mbw * 16 - s["width"]) // 2
@@ -278,7 +308,7 @@ def headers_from_setup(s):
                width_mbs_minus1=mbw - 1, height_map_units_minus1=mbh - 1,
                frame_mbs_only=s["frame_mbs_only"], mb_adaptive=0, direct_8x8_inference=1,
                cropping=int(bool(crop_bottom or crop_right)), crop=[0, crop_right, 0, crop_bottom],
-               vui_present=0, vui_bits=[])
+               vui_present=int(vui), vui_bits=vui_bt709(s["num_ref_idx_l0_minus1"] + 1) if vui else [])
     pps = dict(pps_id=s["pps_id"], sps_id=0, entropy=s["entropy"], pic_order_present=s["pic_order_present"],
                num_ref_idx_l0_minus1=s["num_ref_idx_l0_minus1"], num_ref_idx_l1_minus1=s["num_ref_idx_l1_minus1"],
                weighted_pred=s["weighted_pred"], weighted_bipred_idc=s["weighted_bipred_idc"],
@@ -399,6 +429,87 @@ namespace ams::mitm::applet::nvenc_grc_idr {{
           ", ".join(f"{k}={s[k]}" for k in ("width", "height", "profile_idc", "level_idc", "pic_type", "frame_num", "idr_pic_id")))
 
 
+HDRS = REPO / "tier4/applet-mitm/source/nvenc_grc_hdrs.h"
+SETUP_P = REPO / "logs/m79-runE-setups/setup_2.bin"
+HEADER_P = REPO / "tier4/applet-mitm/source/nvenc_grc_p.h"
+# every byte where grc's P setup differs from its IDR setup (Run E setups 2,
+# 5 and 6 against 8): the reference-list arrays at the start of pic_control,
+# frame_num / POC, the picture-type word, and the MD control's intra4x4 enable
+P_DIFF = [0xc8, 0xd8, 0xe8, 0xe9, 0xf8, 0xf9, 0x108, 0x109, 0x118, 0x119, 0x128, 0x129, 0x138, 0x139,
+          0x148, 0x149, 0x158, 0x159, 0x17c, 0x17e, 0x1a8, 0x404, 0x405]
+
+
+def gen_p():
+    """grc's P setup (frame_num 1, POC 2) for the M83 nvp probe, checked to
+    differ from the IDR setup in exactly the 23 bytes grc's P setups do."""
+    b, i = SETUP_P.read_bytes(), SETUP.read_bytes()
+    s = parse_setup(b)
+    assert (s["pic_type"], s["ref_pic_flag"], s["frame_num"], s["poc_lsb"]) == (0, 1, 1, 2), s
+    assert [k for k in range(len(b)) if b[k] != i[k]] == P_DIFF
+    mfn = 1 << (s["log2_max_frame_num_minus4"] + 4)
+    mpoc = 1 << (s["log2_max_poc_lsb_minus4"] + 4)
+    rows = [", ".join(f"0x{x:02x}" for x in b[k:k + 16]) for k in range(0, len(b), 16)]
+    body = ",\n        ".join(rows)
+    HEADER_P.write_text(f"""/*
+ * nvenc_grc_p.h - GENERATED by tools/nvenc_replay.py gen from
+ * logs/m79-runE-setups/setup_2.bin. Do not edit.
+ *
+ * grc's own P-frame setup (pic_type 0, ref_pic_flag 1, frame_num 1, POC 2).
+ * It differs from the IDR setup (nvenc_grc_idr.h) in exactly 23 bytes: the
+ * reference-list arrays at the start of pic_control, frame_num (0x17C) and
+ * POC lsb (0x17E), the picture-type word (0x1A8) and the MD control's intra4x4
+ * enable (0x404). grc's P setups for frame_num 1, 2 and 3 differ from each
+ * other only in frame_num and POC (= 2 x frame_num), which the probe sets per
+ * frame, modulo the SPS limits below.
+ */
+#pragma once
+
+namespace ams::mitm::applet::nvenc_grc_p {{
+
+    constexpr u32 MaxFrameNum = {mfn};
+    constexpr u32 MaxPocLsb   = {mpoc};
+
+    alignas(0x100) constexpr u8 Setup[{len(b)}] = {{
+        {body},
+    }};
+
+}}
+""")
+    print(f"wrote {HEADER_P.relative_to(REPO)} from {SETUP_P.relative_to(REPO)}: MaxFrameNum {mfn}, MaxPocLsb {mpoc}")
+
+
+def stream_headers():
+    """The SPS + PPS the console puts in front of every streamed frame."""
+    return headers_from_setup(parse_setup(SETUP.read_bytes()), vui=True)
+
+
+def gen_hdrs():
+    hb = stream_headers()
+    rows = [", ".join(f"0x{x:02x}" for x in hb[i:i + 16]) for i in range(0, len(hb), 16)]
+    body = ",\n        ".join(rows)
+    HDRS.write_text(f"""/*
+ * nvenc_grc_hdrs.h - GENERATED by tools/nvenc_replay.py gen. Do not edit.
+ *
+ * Annex-B SPS + PPS for the stream NVENC writes with grc's setup
+ * (logs/m79-runE-setups/setup_8.bin): NVENC emits slices only, and grc writes
+ * its own parameter sets. The VUI says BT.709 limited range (the VIC's M83
+ * matrix), 60 fps, and no frame reordering. The console puts these in front
+ * of every IDR frame it streams, so the stream decodes from any frame and can
+ * be fed straight to a stock decoder.
+ */
+#pragma once
+
+namespace ams::mitm::applet::nvenc_grc_hdrs {{
+
+    constexpr u8 SpsPps[{len(hb)}] = {{
+        {body},
+    }};
+
+}}
+""")
+    print(f"wrote {HDRS.relative_to(REPO)}: {len(hb)} B of SPS + PPS")
+
+
 def selftest():
     import av
     import numpy as np
@@ -438,6 +549,31 @@ def selftest():
     p = pps_parse(ep_remove(got[1][1:]))
     assert (p["entropy"], p["transform_8x8"], p["deblocking_present"]) == (1, 1, 1), p
     print(f"SPS/PPS from grc's setup: {len(hdr)} B, fields check out")
+    # 4) the stream's headers (with VUI) parse back, and a decoder reads the
+    #    colour description from them
+    hb = stream_headers()
+    nals = [n for _, n in split_nals(hb)]
+    f = sps_parse(ep_remove(nals[0][1:]))
+    assert f["vui_present"] == 1 and nals[0][1:] == ep_add(sps_write(f)), "VUI SPS round trip"
+    # a real NVENC IDR frame (M82 Run H, else M80 Run F) behind these headers
+    # decodes, and the decoder reports the colour the VUI declares
+    for cand in (REPO / "logs/m82-runH/nvframe-q20-bits.bin", REPO / "logs/m80-runF/nvenc-bits.bin"):
+        if cand.exists():
+            ctx = av.CodecContext.create("h264", "r")
+            frames = []
+            for pkt in list(ctx.parse(hb + cand.read_bytes())) + list(ctx.parse(None)):
+                frames += ctx.decode(pkt)
+            frames += ctx.decode(None)
+            assert len(frames) == 1, (cand, len(frames))
+            fr = frames[0]
+            assert (fr.width, fr.height) == (1280, 720)
+            assert int(fr.colorspace) == 1 and int(fr.color_range) == 1, (fr.colorspace, fr.color_range)
+            print(f"{cand.relative_to(REPO)} behind the stream headers: 1 frame, 1280x720, colorspace BT.709, limited range")
+            break
+    print(f"stream SPS/PPS with BT.709 VUI: {len(hb)} B, round-trips")
+    if HDRS.exists():
+        assert f"SpsPps[{len(hb)}]" in HDRS.read_text() and ", ".join(f"0x{x:02x}" for x in hb[:16]) in HDRS.read_text(), \
+            "nvenc_grc_hdrs.h is stale - run gen"
     print("selftest OK")
 
 
@@ -532,6 +668,8 @@ def check(d):
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "gen":
         gen()
+        gen_hdrs()
+        gen_p()
     elif len(sys.argv) >= 2 and sys.argv[1] == "selftest":
         selftest()
     elif len(sys.argv) >= 3 and sys.argv[1] == "check":

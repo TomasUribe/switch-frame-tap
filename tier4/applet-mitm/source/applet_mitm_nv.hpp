@@ -82,6 +82,10 @@ namespace ams::mitm::applet {
     extern bool g_csc_armed;      /* M82: VIC colour-matrix probe sweep */
     extern bool g_nvframe_armed;  /* M82: real game frames -> VIC NV12 -> NVENC */
     extern u32  g_nvframe_n;
+    extern bool g_nvstream_armed; /* M83: game -> VIC -> NVENC H.264 -> USB */
+    extern u32  g_nvstream_n, g_nvstream_qp;
+    extern bool g_nvp_armed;      /* M83: IDR + P frames probe */
+    extern u32  g_nvp_n;
     extern u32  g_matrix_mode;
     extern bool g_stream_armed;
     extern u32  g_stream_w, g_stream_h, g_stream_frames;
