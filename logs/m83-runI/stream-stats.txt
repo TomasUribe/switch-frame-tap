@@ -1,0 +1,4 @@
+/tmp/m83-runI.sft: 1883 packets (1883 H.264, 0 other)
+   frame numbers 0..1882: 0 missing in 0 gap(s)
+   payload avg 64 KB, min 64 KB, max 64 KB -> 32 Mbps / 4.0 MB/s at 60 fps
+   decoded 600 frame(s) from the first 600 packets, 0 error(s); 1280x720 colorspace 1 range 1
