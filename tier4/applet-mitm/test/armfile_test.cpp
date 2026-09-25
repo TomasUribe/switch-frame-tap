@@ -30,6 +30,10 @@ int main() {
     ExpectContains("vic grcscan wait=90", "vic", true);
     ExpectContains("vic grcscan wait=90", "wait", true);
     ExpectContains("jpgdec", "jpg", false);
+    /* M80: "nvgrc" must never arm the grc IPC interceptor */
+    ExpectContains("vic nvgrc wait=60", "grc", false);
+    ExpectContains("vic nvgrc wait=60", "nvgrc", true);
+    ExpectContains("vic nvgrc wait=60", "nvenc", false);
     ExpectContains("jpg jpgdec", "jpg", true);
     ExpectContains("clk\n", "clk", true);
     ExpectContains("vic\r\nclk\r\n", "clk", true);

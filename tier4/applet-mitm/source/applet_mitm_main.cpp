@@ -625,7 +625,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm M79: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm M80: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -643,6 +643,7 @@ namespace ams {
         mitm::applet::g_grcscan_armed = ArmFileContains("grcscan");
         mitm::applet::g_clk_armed     = ArmFileContains("clk");
         mitm::applet::g_jpgdec_armed  = ArmFileContains("jpgdec");
+        mitm::applet::g_nvgrc_armed   = ArmFileContains("nvgrc");
         mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);
         mitm::applet::g_stream_armed  = ArmFileContains("stream");
         mitm::applet::g_stream_w      = ArmFileNumber("sw", 0);
@@ -654,7 +655,7 @@ namespace ams {
         mitm::applet::g_stream_frames = ArmFileNumber("sframes", 600);
         mitm::applet::g_probe_delay_s = ArmFileNumber("wait", 120);
         mitm::applet::LogLine("ARMED FLAGS: vic=%d exec=%d dbg=%d dump=%d usb=%d bench=%d nvenc=%d "
-                              "jpg=%d sweep=%d mtx=%d stream=%d grc=%d grcscan=%d clk=%d jpgdec=%d wait=%u",
+                              "jpg=%d sweep=%d mtx=%d stream=%d grc=%d grcscan=%d clk=%d jpgdec=%d nvgrc=%d wait=%u",
                               mitm::applet::g_vic_armed, mitm::applet::g_vic_execute,
                               mitm::applet::g_dbg_armed, mitm::applet::g_dump_armed,
                               g_usb_armed, mitm::applet::g_bench_armed,
@@ -662,9 +663,9 @@ namespace ams {
                               mitm::applet::g_sweep_armed, mitm::applet::g_matrix_armed,
                               mitm::applet::g_stream_armed, mitm::applet::g_grc_armed,
                               mitm::applet::g_grcscan_armed, mitm::applet::g_clk_armed,
-                              mitm::applet::g_jpgdec_armed, mitm::applet::g_probe_delay_s);
-        if (mitm::applet::g_jpgdec_armed && !mitm::applet::g_vic_armed) {
-            mitm::applet::LogLine("jpgdec is armed without vic: it runs inside the VIC worker, so it will NOT run");
+                              mitm::applet::g_jpgdec_armed, mitm::applet::g_nvgrc_armed, mitm::applet::g_probe_delay_s);
+        if ((mitm::applet::g_jpgdec_armed || mitm::applet::g_nvgrc_armed) && !mitm::applet::g_vic_armed) {
+            mitm::applet::LogLine("jpgdec/nvgrc armed without vic: they run inside the VIC worker, so they will NOT run");
         }
         mitm::applet::LogLine("arm file (sdmc:/applet-mitm.armed): vic=%s exec=%s",
                               mitm::applet::g_vic_armed   ? "ARMED" : "absent - observer only",
@@ -703,7 +704,7 @@ namespace ams {
          * hold up vi:u registration below. Holds the clocks past the survey
          * only when an engine probe in this run needs them. */
         mitm::applet::StartClockProbe(mitm::applet::g_jpgdec_armed || mitm::applet::g_nvenc_armed ||
-                                      mitm::applet::g_nvjpg_armed);
+                                      mitm::applet::g_nvjpg_armed || mitm::applet::g_nvgrc_armed);
 
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");

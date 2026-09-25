@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 75 hardware test cycles (through M78 Run D). Current build: **M79** (not yet run).
+`0100000000000C20`. 76 hardware test cycles (through M79 Run E). Current build: **M80** (not yet run).
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -88,7 +88,119 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M79: grc's live encoder config is in hand - now its command buffer and an intra frame (built, not yet run) ***
+## *** M80: grc's IDR job, replayed from our own channel (built, not yet run) ***
+
+### M79 Run E, read
+
+Facts in `RESULT-M79-RUNE.md`. `grc-scan.bin` verified here too: its FNV-1a
+equals the console's `sd(...)` line (`796a134f`).
+
+- **The command buffers are a ring inside grc's own data.** All 326
+  `SET_IN_DRV_PIC_SETUP` writes sit in one 32 KB region
+  (`0x62a37cd000+0x8000`, state 0x4). A P job is 0xC8 bytes (50 words); the
+  IDR job is 0xA4 (41 words), which is exactly the three method writes it
+  leaves out. 70 jobs were decoded across the eight dumps (four windows,
+  each dumped twice).
+- **Every job has the same shape**, and there is a SETCL after all. M78's
+  SETCL rule wanted the next word to write register 0x10, but grc's next word
+  writes THI register 0x0B, so the rule was too strict. The method-write search
+  found the jobs anyway:
+
+```
+SETCL 0x21 ; INCR THI 0x0B = 0
+SET_CONTROL_PARAMS   0x12001103   H.264, FORCE_OUT_PIC, GPTIMER_ON, RCMODE 18
+SET_PICTURE_INDEX    n
+SET_APPLICATION_ID   1
+SET_IN_DRV_PIC_SETUP / SET_OUT_ENC_STATUS / SET_IO_RC_PROCESS / SET_OUT_BITSTREAM /
+SET_IOHISTORY / SET_IN_CUR_PIC / SET_IN_CUR_PIC_CHROMA_U / SET_OUT_REF_PIC_LUMA
+[P frames only: SET_IN_MEPRED_DATA / SET_OUT_MEPRED_DATA / SET_IN_REF_PIC0_LUMA]
+EXECUTE 0x100 ; INCR_SYNCPT OP_DONE, syncpoint 14
+```
+
+- **The IDR job binds no ME or reference inputs.** Among the 70 jobs, the
+  one with picture index 660 (= 44 x 15, and grc's GOP is 15) goes from
+  `SET_OUT_REF_PIC_LUMA` straight to `EXECUTE`. Every P job around it binds
+  all three.
+- **Buffers:**
+  - Setup, status and bitstream alternate between two sets (ping-pong).
+  - The reference and ME buffers ping-pong as well.
+  - The input picture rotates.
+  - RC-process and IO-history are one shared buffer each.
+  - From the IOVA spacing: bitstream 0x160000, history 0xC0000, input luma
+    1280x736 then chroma (so it is 32-row aligned, which matches the setup's
+    `block_height` 2).
+- **SET_CONTROL_PARAMS was M71's biggest gap.** M71 sent only the codec bits
+  (`3`). grc also sets FORCE_OUT_PIC, GPTIMER_ON and RCMODE 18, and binds
+  IO_RC_PROCESS, which M71 never did.
+- **The IDR setups** (slots 3, 8, 9) agree with each other except for
+  `idr_pic_id`. Against the P setups, 24 bytes differ: picture type,
+  reference-list entries, frame_num / POC, and the inter-mode enables in the
+  MD control.
+- **The two "implausible" setups** (setup_0, setup_1) are the heap objects
+  seen in Run D. They are ignored.
+- **grc was not disturbed.** The observer stayed attached 382 ms, drained 0
+  debug events, and a video capture afterwards saved fine. It skipped 3
+  regions over 8 MB (86 MB of frame and bitstream storage).
+
+### What M80 builds: `nvgrc`
+
+One IDR frame, submitted from our own msenc channel. It is the job grc
+submits, with our buffers:
+
+- **The setup is grc's**, byte for byte: `setup_8.bin`, IDR, frame_num 0,
+  idr_pic_id 0. `tools/nvenc_replay.py gen` generates `nvenc_grc_idr.h` from
+  it and checks its fields first. The setup holds no addresses; every surface
+  is bound by a method.
+- **The command buffer is grc's IDR job**, word for word: SETCL, the THI 0x0B
+  write, `0x12001103`, the twelve methods in grc's order, EXECUTE, and an
+  OP_DONE increment.
+- **Buffers mirror grc's sizes** in one 5.1 MB cached nvmap arena, flushed
+  before the submit and after completion. The RC-process and history buffers
+  start zeroed, which is what grc's must look like before its first frame.
+- **The input is 32-row luma stripes** (32 + 8k) on neutral chroma. A 32-row
+  band is one contiguous byte range both in pitch-linear and in grc's 32-row
+  block-linear input, so no swizzle is needed, and every stage can be checked
+  band by band.
+- **The clock:** ClockEnsure on NVENC, then a final read immediately before
+  the submit, as for jpgdec.
+- **Completion is judged by the status buffer.** Our channel gets syncpoint 14,
+  the same one grc's jobs increment (as ours shares 12 with the compositor on
+  the VIC), so a grc job can advance the fence. The job carries its own
+  picture index (`0x4D383000`) and counts as done only when the engine has
+  written that index into our poisoned status block.
+- **On completion:** the status fields are logged, the bitstream's first bytes
+  and the reconstructed luma's stripe means are checked on the console, and
+  `nvenc-status.bin`, `nvenc-bits.bin` and `nvenc-recon-y.bin` are written
+  through `WriteEngineOutputToSd`. On a stall the channel is left open and
+  engine work stops for the boot, as for jpgdec.
+- **`tools/nvenc_replay.py check`** prints the status and lists the NAL units.
+  NVENC writes slices; grc writes SPS/PPS itself, so if the stream has none,
+  the tool builds them from grc's setup. It then decodes with PyAV and
+  compares each stripe with the input. Its `selftest` proves the SPS/PPS
+  writer: it rewrites libx264's headers byte for byte from parsed fields, and
+  decodes an x264 encode of the same stripes to the exact band values. The
+  full check path ran on a synthetic output directory.
+- `stage-buffer` users now also check that the heap actually reaches the stage
+  buffer. `armfile_test` gains the case that matters here: `nvgrc` must never
+  arm the `grc` interceptor.
+
+### Run F - `vic nvgrc wait=60`
+
+In a race, as before; grc keeps running its own encodes alongside ours.
+
+| reading | meaning |
+|---|---|
+| status WRITTEN, error 0, bits > 0, stripes match on the console, and `check` decodes to the stripes | **NVENC encodes from this process.** The encoder door is open; M81 feeds it real frames (game -> VIC -> NV12 -> NVENC -> USB) |
+| status written with a non-zero `error_status` / `ucode_error_status` | the engine ran our job and rejected something; the ucode error names what (the NVC5B7 error enum) |
+| status not written in 1 s | treated as a stall: channel left open, no more engine work this boot |
+| submit rejected | nothing reached the engine |
+
+**Risk:** our job shares NVENC with grc's. M68-M71's NVENC stalls never
+stopped the game from presenting; the compositor wedges (M73/M74) were NVJPG
+and happened at channel teardown, which a stall here does not do. A stall could
+still break grc's recording for that boot.
+
+## *** M79: grc's live encoder config is in hand - now its command buffer and an intra frame (Run E: both captured) ***
 
 ### M78 Run D, read
 
