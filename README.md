@@ -20,14 +20,21 @@ developed on and for the author's own console.
 > finished is finished properly and verified on hardware; what is not is marked
 > as such throughout. See [Roadmap](#roadmap).
 >
-> **Latest (M76, desk review, not yet run):** the hardware encoders were never
-> given a clock. On Horizon a client requests NVENC/NVJPG clocks from `mm:u`,
-> and this project never did — which fits every "accepted, never executed"
-> result since M68. M76 adds a clock survey and the project's first
-> known-good engine job as a control. See [M76](#m76-the-encoders-were-never-clocked).
+> **Latest (M82 Run H, on hardware; M83 built):** real game frames went
+> through the VIC and NVENC at **60.5 fps** (120/120 frames, 12.7 ms of a
+> 16.7 ms budget). The decode did not match, and Run H's own data says why:
+> NVENC reads 16-row blocks where the VIC wrote 32 (the decode matches the
+> VIC's bytes read that way at 42-48 dB). The same run solved the VIC's
+> colour matrix: an exact model of its arithmetic reproduces all 528 measured
+> values, and explains why three earlier attempts produced a flat picture.
+> **M83 is the first end-to-end stream:** game -> VIC (BT.709) -> NVENC H.264
+> -> USB -> a PC viewer that decodes live, IDR-only at native 720p handheld,
+> plus an opt-in P-frame probe. Every PC-side part is tested
+> (`bash tools/run_pc_tests.sh`); the hardware run is next. **Picking the
+> project up? Start at [PROJECT-HANDOFF.md](tier4/mitm/PROJECT-HANDOFF.md).**
 
 **Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
-71 hardware test cycles.
+79 hardware test cycles.
 
 ![Mario Kart 8 Deluxe captured at native 1920x1080 from the game's own swapchain](docs/frame-1080p.png)
 
@@ -424,10 +431,17 @@ version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
 | **End-to-end stream** | **done, on hardware** — **768x432 at 59.6 fps**, 3600 frames, 0 stale; user-confirmed playable |
 | VIC scale + packed 4:2:0 in the stream path | **done, on hardware** — 2.1 ms/frame, 1.5 B/px, no codec |
 | Native resolution at 60 fps | **blocked on bandwidth, now measured.** The link saturates at ~37 MB/s, capping 60 fps at ~800x450. Raw 1080p60 needs 186.6 MB/s |
-| NVENC H.264 encode | **channel proven, engine silent.** host1x retires a full 39-word job with every surface populated; the engine never completes it. Prime suspect since M76: no `mm:u` clock request — see [M76](#m76-the-encoders-were-never-clocked) |
-| Engine clocks via `mm:u` (M76) | **built, not yet run.** `clk`: survey + request, no engine contact |
-| NVJPG decode positive control (M76) | **built, not yet run.** `jpgdec`: one known-good job, record verified byte-for-byte against oss-nvjpg |
-| **Compressed stream over USB 2.0** — the main goal | **in progress.** The link carries ~290 Mbps; H.264 1080p60 is visually lossless at 100–150 Mbps even all-intra, so bitrate has 2–3x headroom and the tuning target is quality and latency, not size. Waiting on NVENC |
+| NVENC H.264 encode | **done, on hardware (M80 Run F).** One 1280x720 IDR frame in 2.1 ms; decodes on the PC to the input, reconstruction exact. M68-M71's hand-built jobs never completed; grc's job, replayed verbatim, does. Constant-QP mode works too (M81) |
+| Engine clocks via `mm:u` (M76) | **done, on hardware.** NVJPG 0 -> 652.8 MHz on request; NVENC already clocked. NVJPG's rate does not persist on its own (M76 Run B) |
+| NVJPG decode positive control (M76/M77) | **done, on hardware (M77 Run C).** 64x64 decode in 314 us, output matches. First completed non-VIC engine job; the submit path is proven |
+| grc's NVENC job, read out of grc (M75 observer, M78/M79 dumps) | **done, on hardware (M79 Run E).** IDR and P setups plus the command buffer, decoded with NVIDIA's headers |
+| NVENC job replayed from our own channel (M80) | **done, on hardware (M80 Run F).** All three output files verified byte for byte against the console's own hashes |
+| What `error_status` 2 means (M81) | **done, on hardware (M81 Run G): nothing.** grc's own frames carry it; so does every variant (over-budget frame, no rate control, HRD off, two-pass off) |
+| Real game frames through NVENC (M82) | **on hardware (M82 Run H): 60.5 fps, 12.7 ms/frame, 0 errors - but the wrong block height** (NVENC reads 16-row blocks; the VIC wrote 32). Fixed in M83, not yet re-run |
+| VIC RGB->YUV matrix (M82) | **solved (M82 Run H).** An exact model reproduces all 528 measured values ([`tools/vic_csc.py`](tools/vic_csc.py)); M83 programs real BT.709 with it |
+| **H.264 stream over USB (M83)** — the main goal, handheld | **built, not yet run.** game -> VIC BT.709 -> NVENC IDR -> USB -> [`raw-view`](tools/raw-recv/) decoding live; the PC side is tested end to end without hardware |
+| P frames (M83 `nvp`) | **built, not yet run.** grc's own P setup and P job; the PC checks the GOP for drift |
+| **Compressed stream over USB 2.0** — the main goal | **in progress.** The link carries ~290 Mbps; H.264 1080p60 is visually lossless at 100–150 Mbps even all-intra, so bitrate has 2–3x headroom and the tuning target is quality and latency, not size. NVENC encodes real frames at 60 fps (M82); M83 streams them (IDR-only QP 20 measured 165 Mbps, inside the link); P frames next |
 | grc recorder (M72) — capture how the system drives NVENC | **built, not yet run on hardware** |
 | USB 3.0 SuperSpeed — **handheld only** | descriptors **and BOS** accepted, link still negotiates High. Device side now matches haze exactly; the cable is the one untested variable. Docked, the dock owns the USB-C port, so this can never carry a docked stream |
 | Docked 1080p transport | **not started.** USB device mode is impossible while docked; it needs Wi-Fi or a LAN adapter in the dock, and therefore compression. `switch-stream`'s TCP path is the starting point |

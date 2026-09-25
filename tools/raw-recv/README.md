@@ -57,3 +57,36 @@ title shows live fps and worst frame gap.
 Pixel order: M60 sends the capture's native bytes (R,G,B,A), so the default is
 `SDL_PIXELFORMAT_ABGR8888`. `--swap` selects ARGB for a VIC-produced stream,
 which transposes R and B.
+
+## raw-view — the H.264 stream (M83, `nvstream`)
+
+Build (needs `libusb-1.0-0-dev libsdl2-dev libavcodec-dev libavutil-dev`):
+
+```
+make                      # says "raw-view built WITH H.264 (libavcodec)"
+make test                 # replays real NVENC output through raw-view (no console needed)
+```
+
+Start it **before** the console's probe fires (the module waits up to 5 s for
+a host, then gives up on the stream):
+
+```
+until lsusb -d 1209:5f1e >/dev/null 2>&1; do sleep 1; done
+./raw-view --record /tmp/run.sft --h264 /tmp/run.h264
+```
+
+- Each SFTR packet with `flags & 2` is a complete H.264 access unit: SPS +
+  PPS + one IDR slice, 1280x720, BT.709 limited range (the SPS's VUI says so,
+  and the viewer sets SDL's YUV conversion to BT.709). `kind` is the
+  console's frame number; gaps are counted as lost.
+- `--record FILE` keeps every packet (header + payload) for later replay with
+  `--file FILE`; `--h264 FILE` keeps the elementary stream, which any player
+  opens (`ffplay FILE`).
+- Decoding an IDR-only stream at ~150-170 Mbps is heavy. By default the
+  viewer uses FFmpeg's frame threads (throughput, a few frames of latency);
+  `--low-latency` uses one thread and shows each frame the moment it decodes.
+- The last stdout line is machine-readable:
+  `packets=N frames=N undecoded=N lost=N`.
+
+The old `raw-view` binary that used to be committed here predates all of
+this; build from source.

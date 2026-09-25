@@ -36,6 +36,10 @@
 #include "nvjpg_drv.h"
 #include "applet_mitm_clk.hpp"
 #include "nvjpg_dec_control.h"
+#include "nvenc_grc_idr.h"
+#include "nvenc_grc_hdrs.h"
+#include "vic_csc_bt709.h"
+#include "nvenc_grc_p.h"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -60,6 +64,15 @@ namespace ams::mitm::applet {
     constinit bool g_matrix_armed  = false;
     constinit bool g_grcscan_armed = false;
     constinit bool g_jpgdec_armed  = false;
+    constinit bool g_nvgrc_armed   = false;
+    constinit bool g_csc_armed     = false;
+    constinit bool g_nvframe_armed = false;
+    constinit u32  g_nvframe_n     = 120;
+    constinit bool g_nvstream_armed = false;
+    constinit u32  g_nvstream_n    = 3600;
+    constinit u32  g_nvstream_qp   = 20;
+    constinit bool g_nvp_armed     = false;
+    constinit u32  g_nvp_n         = 30;
     constinit u32  g_matrix_mode   = 0;
     constinit bool g_stream_armed  = false;
     constinit u32  g_stream_w      = 480;
@@ -523,7 +536,10 @@ namespace ams::mitm::applet {
         /* The OUTPUT format has been hardcoded A8B8G8R8 since M19 and never
          * swept. The 64x64 self-blit could not reveal an R<->B swap either: its
          * painted ramp differed in R and B only by a constant. */
-        struct OutDesc { u32 w, h, stride_px, fmt; };
+        /* M82: block-linear output, for NVENC's input. NVENC reads GPU
+         * block-linear only (its surface config has no pitch mode), with
+         * grc's block height 2 = 32-row blocks. Pitch stays the default. */
+        struct OutDesc { u32 w, h, stride_px, fmt; u32 blk_kind = vic::BLK_KIND_PITCH; u32 blk_h_log2 = 0; };
 
         /* the 64x64 self-blit target, unchanged: it is the byte-exact regression
          * reference and must keep producing identical output */
@@ -616,8 +632,8 @@ namespace ams::mitm::applet {
             c->outputConfig.TargetRectBottom = out.h - 1;
 
             c->outputSurfaceConfig.OutPixelFormat   = out.fmt;
-            c->outputSurfaceConfig.OutBlkKind       = vic::BLK_KIND_PITCH;
-            c->outputSurfaceConfig.OutBlkHeight     = 0;
+            c->outputSurfaceConfig.OutBlkKind       = out.blk_kind;
+            c->outputSurfaceConfig.OutBlkHeight     = out.blk_h_log2;
             c->outputSurfaceConfig.OutSurfaceWidth  = out.w - 1;
             c->outputSurfaceConfig.OutSurfaceHeight = out.h - 1;
             c->outputSurfaceConfig.OutLumaWidth     = out.stride_px - 1;
@@ -703,8 +719,18 @@ namespace ams::mitm::applet {
 
         /* Bytes of the luma plane, i.e. where the interleaved UV plane starts.
          * Must be 256-aligned because host1x carries addresses shifted right by
-         * 8; every resolution we use satisfies that (1920x1080 = 256*8100). */
-        constexpr u32 Nv12LumaBytes(const OutDesc &out) { return out.stride_px * out.h; }
+         * 8; every resolution we use satisfies that (1920x1080 = 256*8100).
+         * M82: a block-linear plane occupies whole blocks, so its height
+         * rounds up to 8 << blk_h_log2 rows (720 -> 736 at grc's 32). */
+        constexpr u32 Nv12PlaneRows(u32 rows, const OutDesc &out) {
+            const u32 bh = (out.blk_kind == vic::BLK_KIND_PITCH) ? 1u : (8u << out.blk_h_log2);
+            return (rows + bh - 1) / bh * bh;
+        }
+        constexpr u32 Nv12LumaBytes(const OutDesc &out) { return out.stride_px * Nv12PlaneRows(out.h, out); }
+        constexpr u32 Nv12ChromaBytes(const OutDesc &out) { return out.stride_px * Nv12PlaneRows(out.h / 2, out); }
+        static_assert(Nv12LumaBytes(OutDesc{ 1280, 720, 1280, vic::PIXFMT_Y8_U8V8_N420, vic::BLK_KIND_GENERIC_16Bx2, 2 }) == 1280 * 736);
+        static_assert(Nv12ChromaBytes(OutDesc{ 1280, 720, 1280, vic::PIXFMT_Y8_U8V8_N420, vic::BLK_KIND_GENERIC_16Bx2, 2 }) == 1280 * 384);
+        static_assert(Nv12LumaBytes(OutDesc{ 640, 360, 640, vic::PIXFMT_Y8_U8V8_N420 }) == 640 * 360, "pitch output unchanged");
 
         /* libdrm vic40_fill / vic_clear: paint the whole target one colour with
          * no slot enabled. Anything non-zero in dst afterwards proves the whole
@@ -812,7 +838,32 @@ namespace ams::mitm::applet {
         void TryNvencProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
         void TryNvjpgProbe(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
         void TryNvjpgDecodeControl(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle);
+        void TryNvencGrcReplay(u32 nvmap_fd, u32 cmd_handle);
         void TryGrcScan();
+        void TryCscSweep(u32 vfd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 dst_addr, u32 self_addr);
+        void TryNvencRealFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
+                                u32 cmd_handle, u32 vsyncpt, u32 cfg_addr);
+        void TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
+                            u32 cmd_handle, u32 vsyncpt, u32 cfg_addr);
+        void TryNvencPFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
+                             u32 cmd_handle, u32 vsyncpt, u32 cfg_addr);
+        bool WriteSdVerified(const char *path, const u8 *src, size_t len, u8 *verify, u32 *out_fnv);
+        bool WriteEngineOutputToSd(const char *path, const u8 *uncached_src, size_t len, u32 *out_fnv);
+
+        /* ---- M82: the VIC colour matrix, measured rather than guessed -----
+         * Three attempts to program RGB->YUV (M64 output matrix, M66 slot
+         * matrix) produced a constant: the offset column landed and every
+         * coefficient term came out as zero. The field layout matches the one
+         * Ryujinx and our header agree on, so the unknown is the arithmetic -
+         * what one unit of a coefficient is worth. A probe states a whole 3x4
+         * matrix; RunOneJob applies it after the normal config fill. */
+        struct CscProbe {
+            char name[16];
+            u32  where;         /* 0 none, 1 output matrix, 2 slot-0 matrix */
+            u32  shift;         /* matrix_r_shift */
+            s32  c[3][4];       /* row i: c[i][0..2] on inputs 0..2, c[i][3] the offset column */
+        };
+        constinit const CscProbe *g_csc_override = nullptr;
 
         /* M76: set when an engine job never completed and its channel was left
          * open. Every later engine probe in this boot refuses to run. */
@@ -825,6 +876,11 @@ namespace ams::mitm::applet {
             u32 cfg_addr, dst_addr, src_addr, src_off;
             u32 cfg_handle, dst_handle, src_handle;
             SrcDesc game_src;
+            /* M83: false when dst_addr is NOT g_vic_dst_buf (nvframe/nvstream
+             * write into their own arena). M82 Run H's "[nf:vic0] changed=0/65536
+             * (untouched)" was this check reading g_vic_dst_buf while the VIC
+             * wrote the arena - the output was fine. */
+            bool out_is_dst_buf = true;
         };
 
 
@@ -903,6 +959,17 @@ namespace ams::mitm::applet {
                 case VicJob::BlitGame:  FillBlitConfig(cfg, c.game_src, SelfOut); break;
                 case VicJob::BlitStrip: FillBlitConfig(cfg, g_strip_src, g_strip_out); break;
             }
+            if (g_csc_override != nullptr && g_csc_override->where != 0) {
+                const CscProbe &p = *g_csc_override;
+                auto s20 = [](s32 v) -> u64 { return static_cast<u64>(static_cast<u32>(v) & 0xFFFFFu); };
+                cfg->outColorMatrixStruct.matrix_enable = 0;
+                auto &m = (p.where == 2) ? cfg->slotStruct[0].colorMatrixStruct : cfg->outColorMatrixStruct;
+                m.matrix_coeff00 = s20(p.c[0][0]); m.matrix_coeff01 = s20(p.c[0][1]); m.matrix_coeff02 = s20(p.c[0][2]); m.matrix_coeff03 = s20(p.c[0][3]);
+                m.matrix_coeff10 = s20(p.c[1][0]); m.matrix_coeff11 = s20(p.c[1][1]); m.matrix_coeff12 = s20(p.c[1][2]); m.matrix_coeff13 = s20(p.c[1][3]);
+                m.matrix_coeff20 = s20(p.c[2][0]); m.matrix_coeff21 = s20(p.c[2][1]); m.matrix_coeff22 = s20(p.c[2][2]); m.matrix_coeff23 = s20(p.c[2][3]);
+                m.matrix_r_shift = p.shift;
+                m.matrix_enable  = 1;
+            }
 
             /* pick the OutDesc this job will actually use, so the chroma base
              * matches the config struct we just filled */
@@ -917,7 +984,7 @@ namespace ams::mitm::applet {
             /* Prefill with a poison pattern rather than zero. "All zero" cannot
              * distinguish "engine wrote zeros" from "engine never touched our
              * memory"; surviving 0xAB proves the latter outright. */
-            if (!g_vic_quiet) { std::memset(g_vic_dst_buf, 0xAB, DstSize); }
+            if (!g_vic_quiet && c.out_is_dst_buf) { std::memset(g_vic_dst_buf, 0xAB, DstSize); }
             armDCacheFlush(g_vic_dst_buf, DstSize);
             armDCacheFlush(g_vic_cfg_buf, VicCfgSize);
             armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
@@ -1025,6 +1092,10 @@ namespace ams::mitm::applet {
              * guaranteed to look empty no matter what the engine did. */
             armDCacheFlush(g_vic_dst_buf, DstSize);
             if (g_vic_quiet) { return completed; }
+            if (!c.out_is_dst_buf) {
+                LogLine("   [%s] output went to a caller-owned buffer at %#x - the caller checks and saves it", stage, c.dst_addr);
+                return completed;
+            }
 
             u32 sum = 0, changed = 0;
             for (u32 i = 0; i < DstSize; i++) {
@@ -1042,6 +1113,130 @@ namespace ams::mitm::applet {
             LogLine("   [%s] row %u: %02x %02x %02x %02x %02x %02x %02x %02x",
                     stage, DstH / 2, mid[0], mid[1], mid[2], mid[3], mid[4], mid[5], mid[6], mid[7]);
             return completed;
+        }
+
+        /* ---- M82: the colour-matrix probe sweep ---------------------------
+         * Source: a 64x64 card in our own buffer, 16 flat 16x16 patches, bytes
+         * R,G,B,A in memory - the game's order - declared A8R8G8B8 exactly as
+         * the game path declares it, so what the fit finds applies to game
+         * frames unchanged. Output: NV12, pitch. Flat patches make the chroma
+         * subsampling filter irrelevant: the PC reads each patch's centre and
+         * fits every plane as a*R + b*G + c*B + d over the 16 patches.
+         *
+         * The probes separate the unknowns one at a time:
+         *   none        the known pass-through (M67: luma = B, U = R, V = G)
+         *   out_k8..k19 one coefficient per row, 2^8 to 2^19-1, shift 0: which
+         *               scale gives a gain of 1 is what a coefficient unit is
+         *               worth, and row i -> plane / input i -> channel falls out
+         *   out_k16_s8  whether matrix_r_shift divides the products too
+         *   out_off     the offset column alone: its unit
+         *   out_neg     a negative coefficient: is it two's complement?
+         *   out_dense   all nine coefficients distinct: is every field where
+         *               the struct says?
+         *   slot_k16    the slot-side matrix under the same law?
+         *   m64_bt601   M64's exact matrix: the harness must reproduce M64's
+         *               constant output, or it is not measuring the same thing
+         * Pure arithmetic in a VIC job on our own buffers: nothing here can
+         * hand the engine a bad address. */
+        constexpr u32 CscW = 64, CscH = 64, CscStridePx = 256;
+        constexpr s32 K8 = 1 << 8, K11 = 1 << 11, K12 = 1 << 12, K16 = 1 << 16, K19 = (1 << 19) - 1;
+        constexpr CscProbe CscProbes[] = {
+            { "none",       0, 0, {} },
+            { "out_k8",     1, 0, { { K8, 0, 0, 0 },  { 0, K8, 0, 0 },  { 0, 0, K8, 0 } } },
+            { "out_k12",    1, 0, { { K12, 0, 0, 0 }, { 0, K12, 0, 0 }, { 0, 0, K12, 0 } } },
+            { "out_k16",    1, 0, { { K16, 0, 0, 0 }, { 0, K16, 0, 0 }, { 0, 0, K16, 0 } } },
+            { "out_k19",    1, 0, { { K19, 0, 0, 0 }, { 0, K19, 0, 0 }, { 0, 0, K19, 0 } } },
+            { "out_k16_s8", 1, 8, { { K16, 0, 0, 0 }, { 0, K16, 0, 0 }, { 0, 0, K16, 0 } } },
+            { "out_off",    1, 0, { { 0, 0, 0, 256 }, { 0, 0, 0, 512 }, { 0, 0, 0, 768 } } },
+            { "out_neg",    1, 0, { { K16, 0, 0, 0 }, { 0, -K16, 0, 768 }, { 0, 0, K16, 0 } } },
+            { "out_dense",  1, 0, { { 1 * K11, 2 * K11, 3 * K11, 0 }, { 4 * K11, 5 * K11, 6 * K11, 0 }, { 7 * K11, 8 * K11, 9 * K11, 0 } } },
+            { "slot_k16",   2, 0, { { K16, 0, 0, 0 }, { 0, K16, 0, 0 }, { 0, 0, K16, 0 } } },
+            { "m64_bt601",  1, 8, { { 66, 129, 25, 4096 }, { -38, -74, 112, 32768 }, { 112, -94, -18, 32768 } } },
+            /* M83: the production matrix, measured on the card (tools/vic_csc.py
+             * checks it against the float BT.709 conversion) */
+            { "bt709",      1, vic_csc::Shift, {
+                { vic_csc::Bt709[0][0], vic_csc::Bt709[0][1], vic_csc::Bt709[0][2], vic_csc::Bt709[0][3] },
+                { vic_csc::Bt709[1][0], vic_csc::Bt709[1][1], vic_csc::Bt709[1][2], vic_csc::Bt709[1][3] },
+                { vic_csc::Bt709[2][0], vic_csc::Bt709[2][1], vic_csc::Bt709[2][2], vic_csc::Bt709[2][3] } } },
+        };
+        constexpr u32 CscNumProbes = sizeof(CscProbes) / sizeof(CscProbes[0]);
+        /* the 16 patch colours, R,G,B: the corners of the {40,200} cube, grey,
+         * and seven mixed colours, so the per-plane fit is well conditioned */
+        constexpr u8 CscPatch[16][3] = {
+            {  40,  40,  40 }, { 200,  40,  40 }, {  40, 200,  40 }, {  40,  40, 200 },
+            { 200, 200,  40 }, { 200,  40, 200 }, {  40, 200, 200 }, { 200, 200, 200 },
+            { 120, 120, 120 }, { 200, 120,  40 }, {  40, 200, 120 }, { 120,  40, 200 },
+            { 160,  80, 200 }, {  80, 160,  40 }, { 200, 200, 120 }, {  60, 100, 160 },
+        };
+        struct __attribute__((packed)) CscFileHdr { u32 magic, version, count, w, h, src_fmt, out_fmt, reserved; };
+        struct __attribute__((packed)) CscFileRec { char name[16]; u32 where, shift; s32 c[3][4]; u32 completed; };
+        static_assert(sizeof(CscFileHdr) == 32 && sizeof(CscFileRec) == 76, "must match tools/vic_csc.py");
+        constexpr size_t CscRecBytes = sizeof(CscFileRec) + CscW * CscH * 3 / 2;
+        constexpr size_t CscFileBytes = sizeof(CscFileHdr) + CscW * CscH * 4 + CscNumProbes * CscRecBytes;
+        static_assert(CscStridePx * 4 * CscH <= VicSrcSize, "the card must fit our source buffer");
+        static_assert(CscStridePx * CscH * 3 / 2 <= DstSize, "the output must fit what RunOneJob poisons and flushes");
+
+        void TryCscSweep(u32 vfd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 dst_addr, u32 self_addr) {
+            VicStage("csc:1");
+            LogLine("   ---- VIC COLOUR-MATRIX PROBES (M82/M83): %u jobs on a 64x64 card we own ----", CscNumProbes);
+            if (g_stage_buf == nullptr || 2 * ((CscFileBytes + 0xFFF) & ~static_cast<size_t>(0xFFF)) > StreamStageSize
+                || g_ind_size < FbBlockRowStage + StreamStageSize) {
+                LogLine("   csc: no stage buffer - not running");
+                return;
+            }
+            /* the card: bytes R,G,B,A per pixel, like the game's surface */
+            for (u32 y = 0; y < CscH; ++y) {
+                u8 *row = g_vic_src_buf + y * CscStridePx * 4;
+                for (u32 x = 0; x < CscW; ++x) {
+                    const u8 *c = CscPatch[(y / 16) * 4 + (x / 16)];
+                    row[x * 4 + 0] = c[0]; row[x * 4 + 1] = c[1]; row[x * 4 + 2] = c[2]; row[x * 4 + 3] = 0xFF;
+                }
+            }
+            armDCacheFlush(g_vic_src_buf, VicSrcSize);
+
+            u8 *const f = g_stage_buf;
+            const CscFileHdr hdr = { 0x43534356u /* "VCSC" */, 1, CscNumProbes, CscW, CscH,
+                                     vic::PIXFMT_A8R8G8B8, vic::PIXFMT_Y8_U8V8_N420, 0 };
+            std::memcpy(f, std::addressof(hdr), sizeof(hdr));
+            size_t off = sizeof(hdr);
+            for (u32 y = 0; y < CscH; ++y) { std::memcpy(f + off, g_vic_src_buf + y * CscStridePx * 4, CscW * 4); off += CscW * 4; }
+
+            const JobCtx ctx{ vfd, cmd_handle, syncpt, cfg_addr, dst_addr, self_addr, 0, 0, 0, 0, SelfSrc };
+            u32 n_ok = 0;
+            for (u32 i = 0; i < CscNumProbes; ++i) {
+                const CscProbe &p = CscProbes[i];
+                g_strip_src = SrcDesc{ CscW, CscH, CscStridePx, vic::BLK_KIND_PITCH, 0, vic::PIXFMT_A8R8G8B8,
+                                       vic::CACHE_WIDTH_64Bx4, CscW, CscH };
+                g_strip_out = OutDesc{ CscW, CscH, CscStridePx, vic::PIXFMT_Y8_U8V8_N420 };
+                g_csc_override = std::addressof(p);
+                char stage[32];
+                std::snprintf(stage, sizeof(stage), "csc:%s", p.name);
+                const bool ok = RunOneJob(stage, VicJob::BlitStrip, true, ctx);
+                g_csc_override = nullptr;
+                if (ok) { ++n_ok; }
+
+                CscFileRec rec = {};
+                std::memcpy(rec.name, p.name, sizeof(rec.name));
+                rec.where = p.where; rec.shift = p.shift; rec.completed = ok ? 1 : 0;
+                std::memcpy(rec.c, p.c, sizeof(rec.c));
+                std::memcpy(f + off, std::addressof(rec), sizeof(rec)); off += sizeof(rec);
+                /* g_vic_dst_buf is uncached: these reads see what the engine wrote */
+                const u8 *yp = g_vic_dst_buf, *uvp = g_vic_dst_buf + CscStridePx * CscH;
+                for (u32 y = 0; y < CscH; ++y)     { std::memcpy(f + off, yp + y * CscStridePx, CscW); off += CscW; }
+                for (u32 y = 0; y < CscH / 2; ++y) { std::memcpy(f + off, uvp + y * CscStridePx, CscW); off += CscW; }
+                /* the centre of patch 7 (white-ish 200,200,200) and patch 1 (red), for the log */
+                const u32 cy = 16 * 1 + 8, cx7 = 16 * 3 + 8, cx1 = 16 * 1 + 8;
+                LogLine("   csc[%-10s] %s  patch(200,200,200): Y=%u U=%u V=%u  patch(200,40,40): Y=%u U=%u V=%u",
+                        p.name, ok ? "done" : "DID NOT COMPLETE",
+                        yp[cy * CscStridePx + cx7], uvp[(cy / 2) * CscStridePx + (cx7 & ~1u)], uvp[(cy / 2) * CscStridePx + (cx7 & ~1u) + 1],
+                        yp[8 * CscStridePx + cx1], uvp[4 * CscStridePx + (cx1 & ~1u)], uvp[4 * CscStridePx + (cx1 & ~1u) + 1]);
+                if (!ok) { LogLine("   csc: stopping at the first job that did not complete"); break; }
+            }
+            u32 fnv = 0;
+            const size_t slot = (off + 0xFFF) & ~static_cast<size_t>(0xFFF);
+            WriteSdVerified("sdmc:/vic-csc.bin", f, off, f + slot, std::addressof(fnv));
+            LogLine("   csc: %u of %u probes completed; %zu B -> sdmc:/vic-csc.bin (decode: tools/vic_csc.py)", n_ok, CscNumProbes, off);
+            VicStage("csc:done");
         }
 
 
@@ -1323,18 +1518,28 @@ namespace ams::mitm::applet {
         }
         VicStage("vb:ALL_JOBS_DONE");
 
+        /* M82: VIC arithmetic on our own buffers, before anything touches the
+         * game or another engine */
+        if (g_csc_armed && self_addr != 0 && cfg_addr != 0 && dst_addr != 0 && !g_engine_wedged) {
+            TryCscSweep(vfd, cmd_handle, syncpt, cfg_addr, dst_addr, self_addr);
+        }
+
         TryIndirectCapture();
         TryDebugCapture(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, dst_addr);
         /* M75: gated. This has completed cleanly in every run (its cmdbuf is an
          * IMMEDIATE increment with no engine op), but the point of an observer
          * run is to touch no engine channel at all. */
-        /* M76: the positive control goes first. If it wedges the engine,
-         * nothing after it would be informative anyway. */
+        /* M81: the observer goes first. It touches no engine, and this way it
+         * reads grc's status blocks before any job of ours has shared NVENC
+         * with grc. */
+        if (g_grcscan_armed) { TryGrcScan(); }
+        /* M76: the positive control goes first among the engine jobs. If it
+         * wedges the engine, nothing after it would be informative anyway. */
         if (g_jpgdec_armed) { TryNvjpgDecodeControl(nvmap_fd, cmd_handle, dst_handle); }
+        if (g_nvgrc_armed)  { TryNvencGrcReplay(nvmap_fd, cmd_handle); }
         if (g_nvenc_armed) { TryNvencPhaseA(nvmap_fd, cmd_handle); }
         if (g_nvenc_armed) { TryNvencProbe(nvmap_fd, cmd_handle, dst_handle); }
         if (g_nvjpg_armed) { TryNvjpgProbe(nvmap_fd, cmd_handle, dst_handle); }
-        if (g_grcscan_armed) { TryGrcScan(); }
 
     close_vic:
         if (cfg_addr != 0) { UnmapCmdBuffer(vfd, cfg_handle); }
@@ -1673,6 +1878,80 @@ namespace ams::mitm::applet {
             fs::CloseFile(f);
             if (R_FAILED(wrc)) { LogLine("   WriteBufToSd(%s) rc=0x%x", path, wrc.GetValue()); }
             return R_SUCCEEDED(wrc);
+        }
+
+        /* ---- M78: SD writes that can be trusted ---------------------------
+         *
+         * M77 Run C decoded correctly on the console, and the nvjpg-dec.rgba it
+         * left on the card held recycled FAT clusters - a fragment of this
+         * run's own log, Mario Kart asset names - instead of the output. The
+         * write handed fs::WriteFile the UNCACHED engine buffer, and
+         * mesosphere refuses any IPC buffer with the Uncached attribute
+         * (kern_k_page_table_base.cpp, SetupForIpcClient's test_attr_mask
+         * for Ipc, NonSecureIpc and NonDeviceIpc alike). CreateFile had
+         * already allocated the clusters, so a file of the right size existed
+         * and nothing said the write had failed, because its Result was
+         * discarded. M41/M42 hit exactly this and left the lesson in the
+         * strip-dump comment below; M76 repeated it anyway.
+         *
+         * So: the source must be cached memory, every fs Result is checked and
+         * logged, the file is read back and compared byte for byte, and the
+         * FNV-1a of what was written goes in the log, where the PC can compare
+         * it with the file it copied off the card. */
+        constexpr u32 Fnv1a32(const u8 *p, size_t n) {
+            u32 h = 0x811C9DC5u;
+            for (size_t i = 0; i < n; ++i) { h = (h ^ p[i]) * 0x01000193u; }
+            return h;
+        }
+
+        /* `src` must be normal cached memory; `verify` is scratch of at least
+         * `len` bytes, also cached. One retry on any failure. */
+        bool WriteSdVerified(const char *path, const u8 *src, size_t len, u8 *verify, u32 *out_fnv) {
+            const u32 fnv = Fnv1a32(src, len);
+            if (out_fnv != nullptr) { *out_fnv = fnv; }
+            for (u32 attempt = 1; attempt <= 2; ++attempt) {
+                static_cast<void>(fs::DeleteFile(path));   /* absent is fine */
+                Result rc = fs::CreateFile(path, static_cast<s64>(len));
+                if (R_FAILED(rc)) { LogLine("   sd(%s) #%u CreateFile rc=0x%x", path, attempt, rc.GetValue()); continue; }
+                fs::FileHandle f;
+                rc = fs::OpenFile(std::addressof(f), path, fs::OpenMode_Write);
+                if (R_FAILED(rc)) { LogLine("   sd(%s) #%u OpenFile(write) rc=0x%x", path, attempt, rc.GetValue()); continue; }
+                rc = fs::WriteFile(f, 0, src, len, fs::WriteOption::Flush);
+                fs::CloseFile(f);
+                if (R_FAILED(rc)) { LogLine("   sd(%s) #%u WriteFile(%zu B) rc=0x%x", path, attempt, len, rc.GetValue()); continue; }
+
+                rc = fs::OpenFile(std::addressof(f), path, fs::OpenMode_Read);
+                if (R_FAILED(rc)) { LogLine("   sd(%s) #%u OpenFile(read-back) rc=0x%x", path, attempt, rc.GetValue()); continue; }
+                size_t got = 0;
+                rc = fs::ReadFile(std::addressof(got), f, 0, verify, len);
+                fs::CloseFile(f);
+                if (R_FAILED(rc) || got != len) {
+                    LogLine("   sd(%s) #%u read-back rc=0x%x got %zu of %zu B", path, attempt, rc.GetValue(), got, len);
+                    continue;
+                }
+                size_t bad = 0;
+                while (bad < len && verify[bad] == src[bad]) { ++bad; }
+                if (bad != len) {
+                    LogLine("   sd(%s) #%u read-back DIFFERS at byte %zu (wrote %02x, read %02x)", path, attempt, bad, src[bad], verify[bad]);
+                    continue;
+                }
+                LogLine("   sd(%s): %zu B written, read back identical, fnv1a32=%08x", path, len, fnv);
+                return true;
+            }
+            LogLine("   sd(%s): FAILED after 2 attempts - the file on the card is NOT this data (fnv1a32 would be %08x)", path, fnv);
+            return false;
+        }
+
+        /* For engine output: copy out of the uncached nvmap buffer into the
+         * cached stage buffer first, then write. */
+        bool WriteEngineOutputToSd(const char *path, const u8 *uncached_src, size_t len, u32 *out_fnv) {
+            const size_t slot = (len + 0xFFF) & ~static_cast<size_t>(0xFFF);
+            if (g_stage_buf == nullptr || 2 * slot > StreamStageSize || g_ind_size < FbBlockRowStage + 2 * slot) {
+                LogLine("   sd(%s): no cached stage buffer for %zu B - not writing", path, len);
+                return false;
+            }
+            std::memcpy(g_stage_buf, uncached_src, len);
+            return WriteSdVerified(path, g_stage_buf, len, g_stage_buf + slot, out_fnv);
         }
 
         constexpr const char *StripBinPath = "sdmc:/applet-mitm-strip.bin";
@@ -2113,7 +2392,9 @@ namespace ams::mitm::applet {
                  * The capture buffer is nvmap'd CACHEABLE: ReadDebugProcessMemory
                  * writes 983,040 B into it and an uncached destination would cost
                  * far more than the explicit flush below. */
-                if (found && !g_stream_armed && g_ind_buf != nullptr && g_ind_size >= FbBlockRow && cfg_addr != 0 && dst_addr != 0) {
+                /* M82: an nvframe run skips the older one-shot steps (strip dump,
+                 * 120-frame read loop); its own loop measures what they did */
+                if (found && !g_stream_armed && !g_nvframe_armed && !g_nvstream_armed && !g_nvp_armed && g_ind_buf != nullptr && g_ind_size >= FbBlockRow && cfg_addr != 0 && dst_addr != 0) {
                     VicStage("vs:1_own_capture_buf");
                     u32 cap_handle = 0, cap_id = 0, cap_addr = 0;
                     const auto orc = NvmapOwn(nvmap_fd, g_ind_buf, static_cast<u32>(FbBlockRow), 0,
@@ -2315,6 +2596,20 @@ namespace ams::mitm::applet {
                     VicStage("bn:done");
                 }
 
+                /* ---- M82: NVENC on real game frames. Below resume_game(): the
+                 * game runs throughout, and only the reads touch it. */
+                if (found && g_nvframe_armed && !g_stream_armed && cfg_addr != 0) {
+                    TryNvencRealFrames(dbg, cand.addr, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr);
+                }
+                /* M83: the H.264 stream, after nvframe's checks, on a fresh channel */
+                if (found && g_nvstream_armed && !g_stream_armed && cfg_addr != 0) {
+                    TryNvencStream(dbg, cand.addr, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr);
+                }
+                /* M83: P frames, opt-in, LAST - the riskiest job this build has */
+                if (found && g_nvp_armed && !g_stream_armed && cfg_addr != 0) {
+                    TryNvencPFrames(dbg, cand.addr, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr);
+                }
+
                 /* ---- M67: stream, through the VIC -------------------------
                  * MUST STAY BELOW resume_game(): M59's first run put this above
                  * it, where DebugActiveProcess still has the game halted, and
@@ -2462,7 +2757,8 @@ namespace ams::mitm::applet {
                          * so it satisfies both of usbDs's requirements. Sending
                          * from the uncached VIC buffers would fail the way
                          * fs::WriteFile did with 0xd401. */
-                        if (!g_stream_armed && g_ind_size >= FbSlotSize) {
+                        /* M83: not after an H.264 stream - its receiver would get a raw frame */
+                        if (!g_stream_armed && !g_nvstream_armed && g_ind_size >= FbSlotSize) {
                             if (!UsbReady()) {
                                 LogLine("   usb: not Configured (no host, or \"usb\" absent from the arm file) - skipping transport");
                             } else {
@@ -2527,7 +2823,7 @@ namespace ams::mitm::applet {
                          * presented into, repeat. It measures the per-frame cost
                          * and - just as important - what the GAME's own frame
                          * rate does while we are doing it. */
-                        if (!g_stream_armed) {
+                        if (!g_stream_armed && !g_nvframe_armed && !g_nvstream_armed && !g_nvp_armed) {
                             constexpr u32 CapFrames = 120;
 
                             const u32 c0 = g_queue_count.load(std::memory_order_relaxed);
@@ -3239,14 +3535,10 @@ namespace ams::mitm::applet {
                                                       g_vic_dst_buf + L.bits_off, scan_len);
                 char path[64];
                 std::snprintf(path, sizeof(path), "sdmc:/nvjpg-%03u.jpg", attempt);
-                fs::DeleteFile(path);
-                if (R_SUCCEEDED(fs::CreateFile(path, total))) {
-                    fs::FileHandle f;
-                    if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Write))) {
-                        static_cast<void>(fs::WriteFile(f, 0, out, total, fs::WriteOption::Flush));
-                        fs::CloseFile(f);
-                        LogLine("   *** NVJPG ENCODED %u BYTES -> %s (%u B file) ***", scan_len, path, total);
-                    }
+                /* M78: `out` is inside the uncached engine buffer - the same
+                 * write that could never have succeeded (see WriteSdVerified) */
+                if (WriteEngineOutputToSd(path, out, total, nullptr)) {
+                    LogLine("   *** NVJPG ENCODED %u BYTES -> %s (%u B file) ***", scan_len, path, total);
                 }
             };
 
@@ -3339,22 +3631,16 @@ namespace ams::mitm::applet {
         void TryNvjpgDecodeControl(u32 nvmap_fd, u32 cmd_handle, u32 dst_handle) {
             namespace ctl = nvjpg_dec_control;
             VicStage("jd:1");
-            LogLine("   ---- M76 NVJPG DECODE POSITIVE CONTROL ----");
+            LogLine("   ---- NVJPG DECODE POSITIVE CONTROL (M77: clock ensured after open, read at submit) ----");
             if (g_engine_wedged) { LogLine("   an earlier engine job never completed - not submitting"); return; }
+            ON_SCOPE_EXIT { ClockWatchStop(); };
 
+            /* M77: informational only. M76 gated the whole probe here on a
+             * hold made ~10 s earlier, and Run B found NVJPG back at 0 by the
+             * time it looked. The clock is now established after the channel
+             * is open (the order oss-nvjpg and nvtegra both use) and checked
+             * immediately before the submit - see ClockEnsure below. */
             ClockSurvey("jpgdec-pre");
-            const bool held = ClocksHoldForEngines("jpgdec");
-            os::SleepThread(TimeSpan::FromMilliSeconds(50));
-            ClockSurvey("jpgdec");
-            u32 jpg_hz = 0;
-            const bool readable = ClockRateOf(PcvModule_NVJPG, std::addressof(jpg_hz));
-            if (!held || !readable || jpg_hz == 0) {
-                LogLine("   jpgdec: NOT submitting - hold=%d clkrst readable=%d NVJPG=%u Hz. An engine that",
-                        held, readable, jpg_hz);
-                LogLine("   cannot run is what wedged M74; the survey lines above are the result of this run.");
-                VicStage("jd:no_clock");
-                return;
-            }
 
             /* Layout inside the (uncached) dst buffer. Every offset is
              * 256-aligned: host1x carries addresses >> 8. */
@@ -3434,10 +3720,35 @@ namespace ams::mitm::applet {
             const u32 fence_off = off; put(0);
             const u32 sz = off;
             const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
-            u32 fence_val = 0; nverr = 0;
+
+            /* M77: the clock, established with the channel already open and
+             * everything else prepared, then read once more with nothing but
+             * a timestamp between that read and the submit. */
+            LogMark("jd:clock");
+            const u32 ensured_hz = ClockEnsure(PcvModule_NVJPG, "jpgdec");
+            /* the breadcrumb goes BEFORE the final read: it is an SD flush,
+             * and nothing that slow may sit between the read and the submit */
             LogMark("jd:submit");
+            u32 jpg_hz = 0;
+            const bool readable = ClockRateOf(PcvModule_NVJPG, std::addressof(jpg_hz));
+            const u64 t_read = armTicksToNs(armGetSystemTick());
+            if (ensured_hz == 0 || !readable || jpg_hz == 0) {
+                /* Nothing has been submitted, so closing is safe. */
+                LogLine("   jpgdec: NOT submitting - ClockEnsure=%u Hz, final read %s %u Hz. An engine that",
+                        ensured_hz, readable ? "=" : "UNREADABLE", jpg_hz);
+                LogLine("   cannot run is what wedged M74. The clk-ensure lines above are this run's result.");
+                UnmapCmdBuffer(jfd, dst_handle);
+                UnmapCmdBuffer(jfd, cmd_handle);
+                NvClose(jfd);
+                VicStage("jd:no_clock");
+                return;
+            }
+
+            u32 fence_val = 0; nverr = 0;
             const auto rc = NvIoctl(jfd, req, sb, sz, std::addressof(nverr));
+            const u64 t_submit = armTicksToNs(armGetSystemTick());
             std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
+            LogMark("jd:submitted");
 
             bool done = false;
             u32 seen = 0;
@@ -3468,10 +3779,14 @@ namespace ams::mitm::applet {
 
             u32 written = 0;
             for (u32 i = 0; i < OutSize; ++i) { if (g_vic_dst_buf[OutOff + i] != 0xAB) { ++written; } }
-            LogLine("   jpgdec: submit rc=0x%x nverr=%u fence %u/%u %s after %llu us | status used=%u mcu=%ux%u result=%u | %u/%u output bytes written",
+            u32 after_hz = 0;
+            const bool after_ok = ClockRateOf(PcvModule_NVJPG, std::addressof(after_hz));
+            LogLine("   jpgdec: submit rc=0x%x nverr=%u fence %u/%u %s after %llu us | NVJPG %u Hz read %llu us before submit returned, %u Hz%s after"
+                    " | status used=%u mcu=%ux%u result=%u | %u/%u output bytes written",
                     rc, nverr, seen, fence_val, done ? "REACHED" : "STALLED",
-                    static_cast<unsigned long long>(us), st.used_bytes, st.mcu_x, st.mcu_y, st.result,
-                    written, OutSize);
+                    static_cast<unsigned long long>(us), jpg_hz,
+                    static_cast<unsigned long long>((t_submit - t_read) / 1000), after_hz, after_ok ? "" : " (unreadable)",
+                    st.used_bytes, st.mcu_x, st.mcu_y, st.result, written, OutSize);
 
             if (done) {
                 /* compare 8x8 block means with what libjpeg decodes on the PC */
@@ -3502,16 +3817,12 @@ namespace ams::mitm::applet {
                         worst <= 6 ? "*** NVJPG RAN AND DECODED CORRECTLY - this process can drive a non-VIC engine ***"
                                    : "engine ran, output differs - check nvjpg-dec.rgba on the PC");
 
-                /* raw surface to SD for tools/nvjpg_dec_control.py check */
+                /* raw surface to SD for tools/nvjpg_dec_control.py check. M78:
+                 * staged through cached memory and verified - see
+                 * WriteSdVerified for what M77 Run C's file actually held. */
                 static_assert(OutSize <= 0x10000);
-                static_cast<void>(fs::DeleteFile("sdmc:/nvjpg-dec.rgba"));
-                if (R_SUCCEEDED(fs::CreateFile("sdmc:/nvjpg-dec.rgba", OutSize))) {
-                    fs::FileHandle f;
-                    if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), "sdmc:/nvjpg-dec.rgba", fs::OpenMode_Write))) {
-                        static_cast<void>(fs::WriteFile(f, 0, g_vic_dst_buf + OutOff, OutSize, fs::WriteOption::Flush));
-                        fs::CloseFile(f);
-                    }
-                }
+                u32 fnv = 0;
+                WriteEngineOutputToSd("sdmc:/nvjpg-dec.rgba", g_vic_dst_buf + OutOff, OutSize, std::addressof(fnv));
                 UnmapCmdBuffer(jfd, dst_handle);
                 UnmapCmdBuffer(jfd, cmd_handle);
                 NvClose(jfd);
@@ -3532,6 +3843,1120 @@ namespace ams::mitm::applet {
                 ClockSurvey("jpgdec-stall");
                 VicStage("jd:STALLED_left_open");
             }
+        }
+
+        /* ---- M80: grc's own IDR job, submitted from our channel -----------
+         *
+         * M79 Run E read both halves of a working NVENC job out of grc: an
+         * IDR setup (pic_type 3, frame_num 0) and the command buffer that
+         * submits it. This replays that job with our own buffers. The setup
+         * holds no addresses, so grc's bytes go in verbatim (nvenc_grc_idr.h,
+         * generated by tools/nvenc_replay.py); the method sequence is grc's,
+         * word for word, down to the THI register 0x0B write after SETCL and
+         * SET_CONTROL_PARAMS = 0x12001103 (H.264, FORCE_OUT_PIC, GPTIMER_ON,
+         * RCMODE 18). M71 sent none of those, bound none of IO_RC_PROCESS or
+         * the ME prediction buffers, and ran a hand-built setup that differed
+         * from grc's in a dozen fields. For an IDR frame grc binds twelve
+         * methods; the ME and reference inputs appear only on its P frames.
+         *
+         * Buffers mirror grc's (sizes from its IOVA spacing and the setup's
+         * own size fields), in one cached nvmap arena flushed around the job.
+         * The input is 32-row luma stripes (32 + 8k) on neutral chroma: a
+         * 32-row band is one contiguous range in pitch-linear and in grc's
+         * 32-row block-linear input alike, so it needs no swizzle, and the PC
+         * can check the decoded picture band by band.
+         *
+         * Completion is judged by the status buffer, not the fence alone: our
+         * channel shares syncpoint 14 with grc's (as ours shares 12 with the
+         * compositor on the VIC), so a grc job can advance it. The job carries
+         * a unique picture index and counts as ours only when the engine has
+         * written that index back. */
+        constexpr u32 NvgrcPictureIndex = 0x4D383000u;   /* "M80\0", + variant */
+
+        /* ---- M81: three variants of the same job --------------------------
+         *
+         * Run F encoded correctly (the decode matched the input, band for band)
+         * and the engine still reported error_status = 2, a 2-bit field NVIDIA's
+         * header documents only as "report error if any". It was written by the
+         * engine, not left over: the status block was poisoned and every byte
+         * of it came back rewritten. Each variant below changes one thing, so
+         * the flag can be pinned to a cause rather than guessed at:
+         *   a  Run F's job exactly                   - is the 2 reproducible?
+         *   b  the same job, input that costs bits   - Run F's flat stripes
+         *      took 516 B against a 5 Mbps / 30 fps budget and the rate control
+         *      fell to QP 8; if the flag is rate control noting that, a frame
+         *      near its budget clears it
+         *   c  RCMODE 0 (constant QP) in SET_CONTROL_PARAMS, flat stripes
+         *   d  grc's job with the setup's rc hrd_type 1 -> 0, flat stripes:
+         *      rate control on, HRD verification off. The header says
+         *      picture-level RC "will also perform HRD verification", and grc's
+         *      VCL HRD (5 Mbit CPB at 5 Mbps) is the only part of the job that
+         *      passes a verdict beyond "ran"
+         *   e  grc's job with the setup's two_pass_rc 1 -> 0 ("1: first pass of
+         *      2 pass rc"), flat stripes
+         * All five are IDR frames with fresh RC and history buffers, so each
+         * is an independent first frame. d and e are the only ones that change
+         * grc's setup, so they go last: M68-M71's hand-built setups stalled,
+         * and a stall ends engine work for the boot. */
+        constexpr u32 SetupRc = __builtin_offsetof(nvenc_h264_drv_pic_setup_s, rate_control);
+        constexpr u32 SetupRcHrdType = SetupRc + __builtin_offsetof(nvenc_h264_rc_s, hrd_type);
+        constexpr u32 SetupRcTwoPass = SetupRc + __builtin_offsetof(nvenc_h264_rc_s, two_pass_rc);
+        static_assert(SetupRcHrdType == 0x70 && SetupRcTwoPass == 0xBA, "nvsetup-dump reads these offsets");
+        static_assert(nvenc_grc_idr::Setup[SetupRcHrdType] == 1 && nvenc_grc_idr::Setup[SetupRcTwoPass] == 1,
+                      "grc's IDR setup has VCL HRD and two_pass_rc 1");
+        struct NvgrcVariant { char tag; u32 control; bool noise; u32 patch_off; u8 patch_val; const char *what; };
+        constexpr NvgrcVariant NvgrcVariants[] = {
+            { 'a', 0x12001103u, false, 0, 0, "grc's job, flat stripes (Run F)" },
+            { 'b', 0x12001103u, true,  0, 0, "grc's job, stripes + balanced noise" },
+            { 'c', 0x00001103u, false, 0, 0, "RCMODE 0 (constant QP), flat stripes" },
+            { 'd', 0x12001103u, false, SetupRcHrdType, 0, "grc's job, setup rc hrd_type 0 (no HRD), flat stripes" },
+            { 'e', 0x12001103u, false, SetupRcTwoPass, 0, "grc's job, setup two_pass_rc 0, flat stripes" },
+        };
+
+        void TryNvencGrcReplay(u32 nvmap_fd, u32 cmd_handle) {
+            namespace idr = nvenc_grc_idr;
+            VicStage("ng:1");
+            LogLine("   ---- NVENC: REPLAY OF GRC'S IDR JOB (M81: five variants) ----");
+            if (g_engine_wedged) { LogLine("   an earlier engine job never completed - not submitting"); return; }
+            ON_SCOPE_EXIT { ClockWatchStop(); };
+
+            constexpr u32 LumaAlloc = idr::Width * ((idr::Height + 31) / 32 * 32);        /* 1280 x 736 */
+            constexpr u32 ChromaAlloc = idr::Width * ((idr::Height / 2 + 31) / 32 * 32);  /* 1280 x 368 */
+            constexpr u32 OffSetup  = 0x000000;
+            constexpr u32 OffStatus = 0x003000;
+            constexpr u32 OffRc     = OffStatus + 0x20000;
+            constexpr u32 OffBits   = OffRc + 0x20000;      constexpr u32 BitsSize = 0x160000;
+            constexpr u32 OffHist   = OffBits + BitsSize;   constexpr u32 HistSize = 0x0C0000;
+            constexpr u32 OffCur    = OffHist + HistSize;
+            constexpr u32 OffCurUV  = OffCur + LumaAlloc;
+            constexpr u32 RefSize   = 0x160000;
+            constexpr u32 OffRefOut = (OffCurUV + ChromaAlloc + 0xFFF) & ~0xFFFu;
+            constexpr u32 ArenaSize = OffRefOut + RefSize;
+            constexpr u32 ArenaOff  = 0x10000;             /* past TryGrcScan's 64 KB scratch */
+            constexpr u32 ReconY    = idr::Width * idr::Height;
+            constexpr u32 BandBytes = idr::Width * 32;
+            static_assert(sizeof(idr::Setup) <= OffStatus - OffSetup);
+            static_assert(ArenaOff + ArenaSize <= FbBlockRowStage, "the arena must stay clear of the stage buffers");
+            static_assert(ReconY + idr::Width * idr::Height / 2 <= RefSize);
+            static_assert(HistSize >= 706560 && BitsSize >= 1382400, "grc's setup names these sizes");
+            static_assert(BandBytes % 2 == 0);
+            if (g_ind_buf == nullptr || g_ind_size < FbBlockRowStage + 2 * ((ReconY + 0xFFF) & ~0xFFFu)) {
+                LogLine("   nvgrc: heap too small (capture region %zu KB) - not running", g_ind_size / 1024);
+                return;
+            }
+            u8 *const a = g_ind_buf + ArenaOff;
+            std::memset(a, 0, ArenaSize);
+
+            u32 ah = 0, aid = 0;
+            if (R_FAILED(NvmapOwn(nvmap_fd, a, ArenaSize, 0, std::addressof(ah), std::addressof(aid), true))) {
+                LogLine("   nvgrc: nvmap of the %u KB arena failed - not running", ArenaSize / 1024);
+                VicStage("ng:nvmap_FAILED");
+                return;
+            }
+
+            u32 efd = 0, nverr = 0;
+            if (R_FAILED(NvOpen("/dev/nvhost-msenc", std::addressof(efd), std::addressof(nverr))) || nverr != 0) {
+                LogLine("   nvgrc: /dev/nvhost-msenc open FAILED nverr=%u", nverr);
+                VicStage("ng:open_FAILED");
+                return;
+            }
+            u32 syncpt = 0;
+            {
+                struct { u32 module_id; u32 syncpt; } gs = { 0, 0 };
+                nverr = 0;
+                NvIoctl(efd, NvHostIocChannelGetSyncpoint, std::addressof(gs), sizeof(gs), std::addressof(nverr));
+                syncpt = gs.syncpt;
+            }
+            if (syncpt == 0 || syncpt == 12) {
+                LogLine("   nvgrc: syncpt=%u - REFUSING", syncpt);
+                NvClose(efd);
+                VicStage("ng:bad_syncpt");
+                return;
+            }
+            { struct { u32 fd; } sn = { nvmap_fd }; nverr = 0;
+              NvIoctl(efd, NvHostIocChannelSetNvmapFd, std::addressof(sn), sizeof(sn), std::addressof(nverr)); }
+
+            u32 base = 0, cmd_addr = 0;
+            MapCmdBuffer(efd, ah, std::addressof(base), "nvgrc-arena", 0);
+            MapCmdBuffer(efd, cmd_handle, std::addressof(cmd_addr), "nvgrc-cmd", 0);
+            auto close_all = [&]() {
+                if (base != 0) { UnmapCmdBuffer(efd, ah); }
+                if (cmd_addr != 0) { UnmapCmdBuffer(efd, cmd_handle); }
+                NvClose(efd);
+            };
+            if (base == 0 || cmd_addr == 0) {
+                LogLine("   nvgrc: pin failed (arena=%#x cmd=%#x) - refusing to submit", base, cmd_addr);
+                close_all();
+                VicStage("ng:pin_FAILED");
+                return;
+            }
+            LogLine("   nvgrc: syncpt=%u arena=%#x (%u KB) setup=%#x status=%#x bits=%#x cur=%#x/%#x ref out=%#x",
+                    syncpt, base, ArenaSize / 1024, base + OffSetup, base + OffStatus, base + OffBits,
+                    base + OffCur, base + OffCurUV, base + OffRefOut);
+
+            u32 n_encoded = 0;
+            for (u32 vi = 0; vi < sizeof(NvgrcVariants) / sizeof(NvgrcVariants[0]); ++vi) {
+                const NvgrcVariant &v = NvgrcVariants[vi];
+                const u32 pic_index = NvgrcPictureIndex + vi;
+                LogLine("   nvgrc[%c]: %s, SET_CONTROL_PARAMS %#010x, picture index %#x%s", v.tag, v.what, v.control, pic_index,
+                        v.patch_off != 0 ? ", setup patched" : "");
+
+                /* fresh first frame: grc's setup, the input, zeroed RC/history/
+                 * bitstream/reference, poisoned status */
+                std::memset(a + OffStatus, 0, OffCur - OffStatus);
+                std::memset(a + OffRefOut, 0, RefSize);
+                std::memcpy(a + OffSetup, idr::Setup, sizeof(idr::Setup));
+                if (v.patch_off != 0) {
+                    LogLine("   nvgrc[%c]: setup byte %#x: %u -> %u", v.tag, v.patch_off, a[OffSetup + v.patch_off], v.patch_val);
+                    a[OffSetup + v.patch_off] = v.patch_val;
+                }
+                u32 lcg = 0x4D383100u + vi;
+                for (u32 k = 0; k < LumaAlloc / BandBytes; ++k) {
+                    const s32 y = static_cast<s32>(32 + 8 * k > 235 ? 235 : 32 + 8 * k);
+                    u8 *band = a + OffCur + k * BandBytes;
+                    if (!v.noise) {
+                        std::memset(band, y, BandBytes);
+                        continue;
+                    }
+                    /* noise in [-24, 24], the second half of the band mirroring
+                     * the first, so every 32-row band keeps its exact mean in
+                     * any layout - the PC's band check still applies */
+                    for (u32 i = 0; i < BandBytes / 2; ++i) {
+                        lcg = lcg * 1664525u + 1013904223u;
+                        const s32 d = static_cast<s32>((lcg >> 16) % 49u) - 24;
+                        band[i] = static_cast<u8>(y + d);
+                        band[BandBytes / 2 + i] = static_cast<u8>(y - d);
+                    }
+                }
+                std::memset(a + OffCurUV, 128, ChromaAlloc);
+                std::memset(a + OffStatus, 0xA5, sizeof(nvenc_pic_stat_s));
+                armDCacheFlush(a, ArenaSize);
+
+                /* grc's IDR command buffer; only the control word varies */
+                auto *w = reinterpret_cast<u32 *>(g_vic_cmd_buf);
+                u32 n = 0;
+                auto m = [&](u32 method, u32 value) {
+                    w[n++] = vic::Host1xOpcodeIncr(vic::UCLASS_METHOD_OFFSET, 2);
+                    w[n++] = method >> 2;
+                    w[n++] = value;
+                };
+                w[n++] = vic::Host1xOpcodeSetClass(0, 0x21, 0);
+                w[n++] = vic::Host1xOpcodeIncr(0x0B, 1);
+                w[n++] = 0;
+                m(0x700, v.control);                      /* SET_CONTROL_PARAMS        */
+                m(0x704, pic_index);                      /* SET_PICTURE_INDEX         */
+                m(0x200, 1);                              /* SET_APPLICATION_ID: H.264 */
+                m(0x710, (base + OffSetup)  >> 8);        /* SET_IN_DRV_PIC_SETUP      */
+                m(0x718, (base + OffStatus) >> 8);        /* SET_OUT_ENC_STATUS        */
+                m(0x724, (base + OffRc)     >> 8);        /* SET_IO_RC_PROCESS         */
+                m(0x71C, (base + OffBits)   >> 8);        /* SET_OUT_BITSTREAM         */
+                m(0x720, (base + OffHist)   >> 8);        /* SET_IOHISTORY             */
+                m(0x734, (base + OffCur)    >> 8);        /* SET_IN_CUR_PIC            */
+                m(0x740, (base + OffCurUV)  >> 8);        /* SET_IN_CUR_PIC_CHROMA_U   */
+                m(0x730, (base + OffRefOut) >> 8);        /* SET_OUT_REF_PIC_LUMA      */
+                /* grc binds IN_MEPRED_DATA, OUT_MEPRED_DATA and IN_REF_PIC0_LUMA on
+                 * its P frames only; its IDR job (picture index 660, a multiple of
+                 * its GOP of 15) goes straight from the reference output to EXECUTE */
+                m(0x300, 0x100);                          /* EXECUTE                   */
+                n = AppendIncrSyncpt(w, n, syncpt, true);
+                armDCacheFlush(g_vic_cmd_buf, VicCmdSize);
+
+                alignas(8) u8 sb[16 + 12 + 20 + 4] = {};
+                u32 off = 0;
+                auto put = [&](u32 x) { std::memcpy(sb + off, std::addressof(x), 4); off += 4; };
+                put(1); put(0); put(1); put(1);
+                put(cmd_handle); put(0); put(n);
+                put(syncpt); put(1); put(0); put(0); put(0);
+                const u32 fence_off = off; put(0);
+                const u32 sz = off;
+                const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
+
+                /* the clock, ensured and then read right before the submit */
+                const u32 ensured_hz = ClockEnsure(PcvModule_NVENC, "nvgrc");
+                LogMark("ng:submit");
+                u32 enc_hz = 0;
+                const bool readable = ClockRateOf(PcvModule_NVENC, std::addressof(enc_hz));
+                const u64 t_read = armTicksToNs(armGetSystemTick());
+                if (ensured_hz == 0 || !readable || enc_hz == 0) {
+                    LogLine("   nvgrc[%c]: NOT submitting - ClockEnsure=%u Hz, final read %s %u Hz", v.tag, ensured_hz,
+                            readable ? "=" : "UNREADABLE", enc_hz);
+                    close_all();
+                    VicStage("ng:no_clock");
+                    return;
+                }
+
+                u32 fence_val = 0; nverr = 0;
+                const auto rc = NvIoctl(efd, req, sb, sz, std::addressof(nverr));
+                const u64 t_submit = armTicksToNs(armGetSystemTick());
+                std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
+                const bool submitted = R_SUCCEEDED(rc) && nverr == 0;
+
+                /* done = fence reached AND the engine wrote OUR picture index:
+                 * our channel shares syncpoint 14 with grc's */
+                bool fence_done = false, status_ours = false;
+                u32 seen = 0;
+                nvenc_pic_stat_s st = {};
+                u64 t_status = 0;
+                if (submitted) {
+                    const u32 cfd = CtrlFd();
+                    while (armTicksToNs(armGetSystemTick()) - t_submit < UINT64_C(1000000000) && !(fence_done && status_ours)) {
+                        if (cfd != 0 && !fence_done) {
+                            struct { u32 id; u32 value; } r = { syncpt, 0 };
+                            u32 e2 = 0;
+                            NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
+                            seen = r.value;
+                            fence_done = (static_cast<s32>(seen - fence_val) >= 0);
+                        }
+                        armDCacheFlush(a + OffStatus, 0x1000);
+                        std::memcpy(std::addressof(st), a + OffStatus, sizeof(st));
+                        if (!status_ours && st.picture_index == pic_index) {
+                            status_ours = true;
+                            t_status = armTicksToNs(armGetSystemTick());
+                        }
+                        if (!(fence_done && status_ours)) { os::SleepThread(TimeSpan::FromMicroSeconds(250)); }
+                    }
+                }
+                u32 after_hz = 0;
+                static_cast<void>(ClockRateOf(PcvModule_NVENC, std::addressof(after_hz)));
+                LogLine("   nvgrc[%c]: submit rc=0x%x nverr=%u fence %u/%u %s, status %s %llu us after submit | NVENC %u Hz read %llu us before submit returned, %u Hz after",
+                        v.tag, rc, nverr, seen, fence_val, fence_done ? "REACHED" : "not reached",
+                        status_ours ? "WRITTEN" : "NOT written",
+                        static_cast<unsigned long long>(status_ours ? (t_status - t_submit) / 1000 : 0), enc_hz,
+                        static_cast<unsigned long long>((t_submit - t_read) / 1000), after_hz);
+
+                if (!submitted) {
+                    LogLine("   nvgrc[%c]: submit REJECTED - nothing reached the engine", v.tag);
+                    close_all();
+                    VicStage("ng:submit_rejected");
+                    return;
+                }
+                if (!status_ours) {
+                    g_engine_wedged = true;
+                    LogLine("   nvgrc[%c]: no status from our job after 1 s. Leaving the channel OPEN (M74: tearing down a", v.tag);
+                    LogLine("   stuck channel took the compositor with it). No further engine work this boot.");
+                    VicStage("ng:STALLED_left_open");
+                    return;
+                }
+
+                armDCacheFlush(a, ArenaSize);
+                std::memcpy(std::addressof(st), a + OffStatus, sizeof(st));
+                LogLine("   nvgrc[%c]: status error_status=%u ucode_error_status=%#x total_bit_count=%u (%u B) pic_type=%u num_slices=%u avgQP=%u QP %u..%u hrdFullness=%d intra/inter MBs=%u/%u",
+                        v.tag, st.error_status, st.ucode_error_status, st.total_bit_count, st.total_bit_count / 8,
+                        st.pic_type, st.num_slices, st.avgQP, st.actual_min_qp_used, st.actual_max_qp_used,
+                        st.hrdFullness, st.intra_mb_count, st.inter_mb_count);
+
+                const u8 *bs = a + OffBits;
+                u32 worst = 0;
+                for (u32 t = 0; t < idr::Height / 16; ++t) {
+                    u64 sum = 0;
+                    const u8 *row = a + OffRefOut + t * idr::Width * 16;
+                    for (u32 i = 0; i < idr::Width * 16; ++i) { sum += row[i]; }
+                    const u32 mean = static_cast<u32>((sum + idr::Width * 8) / (idr::Width * 16));
+                    const u32 want = 32 + 8 * (t / 2);
+                    const u32 d = mean > want ? mean - want : want - mean;
+                    if (d > worst) { worst = d; }
+                }
+                const bool encoded = st.total_bit_count != 0 && st.ucode_error_status == 0;
+                if (encoded) { ++n_encoded; }
+                LogLine("   nvgrc[%c]: bitstream starts %02x %02x %02x %02x %02x; reconstructed luma worst stripe deviation %u -> %s",
+                        v.tag, bs[0], bs[1], bs[2], bs[3], bs[4], worst,
+                        !encoded ? "NO OUTPUT" : (worst <= 8 ? "encoded, reconstruction matches the input" : "encoded, reconstruction differs"));
+
+                u32 bits_len = st.total_bit_count / 8 + st.bitstream_start_pos + 16;
+                if (st.last_valid_byte_offset + 1 > bits_len) { bits_len = st.last_valid_byte_offset + 1; }
+                if (bits_len < 0x1000 || st.total_bit_count == 0) { bits_len = 0x10000; }
+                if (bits_len > 0x100000) {
+                    LogLine("   nvgrc[%c]: bitstream is %u B, saving only the first 1 MB (the stage buffer's limit)", v.tag, bits_len);
+                    bits_len = 0x100000;
+                }
+                char path[48];
+                std::snprintf(path, sizeof(path), "sdmc:/nvenc-%c-status.bin", v.tag);
+                WriteEngineOutputToSd(path, a + OffStatus, 0x1000, nullptr);
+                std::snprintf(path, sizeof(path), "sdmc:/nvenc-%c-bits.bin", v.tag);
+                WriteEngineOutputToSd(path, bs, bits_len, nullptr);
+                if (v.tag == 'a') {
+                    WriteEngineOutputToSd("sdmc:/nvenc-a-recon-y.bin", a + OffRefOut, ReconY, nullptr);
+                }
+                /* the RC-process buffer went in zeroed; whatever is non-zero now
+                 * is the rate control's state as the engine left it (HRD
+                 * fullness among it, if error_status is an HRD verdict) */
+                u32 rc_used = 0;
+                for (u32 i = OffBits - OffRc; i > 0; --i) {
+                    if (a[OffRc + i - 1] != 0) { rc_used = i; break; }
+                }
+                LogLine("   nvgrc[%c]: RC-process buffer: last non-zero byte at +%#x of %#x", v.tag, rc_used, OffBits - OffRc);
+                if (rc_used != 0) {
+                    std::snprintf(path, sizeof(path), "sdmc:/nvenc-%c-rc.bin", v.tag);
+                    WriteEngineOutputToSd(path, a + OffRc, (rc_used + 0xFFF) & ~0xFFFu, nullptr);
+                }
+            }
+
+            close_all();
+            LogLine("   nvgrc: %u of %u variants encoded", n_encoded, static_cast<u32>(sizeof(NvgrcVariants) / sizeof(NvgrcVariants[0])));
+            VicStage(n_encoded != 0 ? "ng:ENCODED" : "ng:engine_error");
+        }
+
+        /* ---- M82/M83: NVENC on real game frames ------------------------------
+         *
+         * The presented slot is read out of the game (the debug-SVC route, M56),
+         * the VIC converts it to 1280x720 NV12 in GPU block-linear layout, and
+         * NVENC encodes that as an IDR frame with grc's setup at constant QP
+         * (RCMODE 0: M81 variant c showed the QP then comes from the setup's
+         * I-frame QP, patched per encode, with no rate-control state).
+         *
+         * M83 fixes the two things M82 Run H measured:
+         *   - LAYOUT. M82 wrote 32-row blocks (VIC OutBlkHeight 2, log2 GOBs, the
+         *     same number as grc's NVENC block_height 2). NVENC read those bytes
+         *     as 16-row blocks: Run H's decode matched the VIC's bytes read at
+         *     h=1 at 47.9 dB (QP 16) and at h=2 at 9.5 dB, luma and chroma alike.
+         *     So NVENC's block_height 2 means 16 rows, and the VIC writes
+         *     OutBlkHeight 1. Planes round to 16 rows: luma 720, chroma 368 -
+         *     grc's own chroma allocation was 368 rows, which already said so.
+         *   - COLOUR. The VIC's matrix is now understood (tools/vic_csc.py: the
+         *     law reproduces all 528 values Run H measured) and programmed with
+         *     real BT.709 limited range, generated into vic_csc_bt709.h.
+         *
+         * One arena, past the three stage buffers, holds every NVENC surface
+         * plus the NVENC pushbuffer, and is mapped into BOTH channels: the VIC
+         * writes the picture into it and NVENC reads it from there. The NVENC
+         * pushbuffer does not share the VIC's: the VIC's completion is judged
+         * on syncpoint 12, which the compositor also advances, so overwriting
+         * the VIC's pushbuffer with NVENC methods after a fence that fired early
+         * could feed them to the VIC. */
+        constexpr u32 NvfW = 1280, NvfH = 720;
+        constexpr OutDesc NvfOut{ NvfW, NvfH, NvfW, vic::PIXFMT_Y8_U8V8_N420, vic::BLK_KIND_GENERIC_16Bx2, 1 };
+        constexpr u32 NvfLuma = Nv12LumaBytes(NvfOut), NvfChroma = Nv12ChromaBytes(NvfOut);
+        constexpr u32 NvfOffSetup  = 0x000000;
+        constexpr u32 NvfOffStatus = 0x001000;
+        constexpr u32 NvfOffRc     = 0x002000;
+        constexpr u32 NvfOffCmd    = 0x006000;
+        constexpr u32 NvfOffBits   = 0x010000;  constexpr u32 NvfBitsSize = 0x160000;
+        constexpr u32 NvfOffHist   = NvfOffBits + NvfBitsSize;
+        constexpr u32 NvfOffCur    = NvfOffHist + 0x0C0000;
+        constexpr u32 NvfOffCurUV  = NvfOffCur + NvfLuma;
+        constexpr u32 NvfOffRefOut = (NvfOffCurUV + NvfChroma + 0xFFF) & ~0xFFFu;
+        constexpr u32 NvfArenaSize = NvfOffRefOut + 0x160000;
+        constexpr size_t NvfArenaBase = FbBlockRowStage + 3 * StreamStageSize;   /* past both stream stages */
+        static_assert(NvfLuma == 1280 * 720 && NvfChroma == 1280 * 368, "16-row blocks: what NVENC reads");
+        static_assert(NvfOffCurUV % 0x100 == 0 && NvfArenaBase % 0x1000 == 0);
+        static_assert(sizeof(nvenc_grc_idr::Setup) <= NvfOffStatus && sizeof(nvenc_pic_stat_s) <= NvfOffRc - NvfOffStatus);
+        constexpr u32 NvfPictureIndex = 0x4D383300u;   /* "M83\0" + n */
+        constexpr u32 SetupRcQpI = SetupRc + __builtin_offsetof(nvenc_h264_rc_s, QP) + 2;   /* QP[P,B,I] */
+        static_assert(SetupRcQpI == 0x73 && nvenc_grc_idr::Setup[SetupRcQpI] == 24, "grc's I-frame QP is 24");
+        constexpr u32 SetupIdrPicId = __builtin_offsetof(nvenc_h264_drv_pic_setup_s, pic_control)
+                                    + __builtin_offsetof(nvenc_h264_pic_control_s, idr_pic_id);
+        static_assert(SetupIdrPicId == 0x180 && nvenc_grc_idr::Setup[SetupIdrPicId] == 0,
+                      "tools/nvenc_replay.py reads idr_pic_id at 0x180; grc's setup_8 has 0");
+
+        /* the production matrix: RGB -> BT.709 limited range (tools/vic_csc.py gen) */
+        constexpr CscProbe NvfBt709 = { "bt709", 1, vic_csc::Shift, {
+            { vic_csc::Bt709[0][0], vic_csc::Bt709[0][1], vic_csc::Bt709[0][2], vic_csc::Bt709[0][3] },
+            { vic_csc::Bt709[1][0], vic_csc::Bt709[1][1], vic_csc::Bt709[1][2], vic_csc::Bt709[1][3] },
+            { vic_csc::Bt709[2][0], vic_csc::Bt709[2][1], vic_csc::Bt709[2][2], vic_csc::Bt709[2][3] } } };
+
+        /* Handheld, MK8 renders 1280x720 into the top-left of the same
+         * 1920x1080 surface (M36/M37). That corner is block-rows 0-5 (128 rows
+         * each) and, in each, the first 80 of 120 GOB columns (1280 px x 4 B /
+         * 64 B) - 655,360 contiguous bytes per block-row. Reading just those is
+         * 3.9 MB instead of 8.8 MB, and the VIC samples only that rectangle. */
+        constexpr u64 CornerBlockRowBytes = 80ull * 8192;
+        constexpr u32 CornerBlockRows = 6;
+        static_assert(CornerBlockRows * 128 >= NvfH && CornerBlockRowBytes * 120 / 80 == FbBlockRow);
+
+        struct NvfCtx {
+            u8  *a;             /* arena, CPU view (cached) */
+            u32 ah;             /* its nvmap handle */
+            u32 efd, esyncpt;   /* msenc channel */
+            u32 enc;            /* arena IOVA in the msenc channel */
+        };
+
+        /* Where one job's setup and references live in the arena. The default
+         * is the IDR job; a P job (M83 nvp) adds grc's three P-only bindings. */
+        struct NvfJob {
+            u32 setup  = NvfOffSetup;
+            u32 ref_out = NvfOffRefOut;
+            u32 ref_in = 0;           /* 0: IDR - no ME or reference inputs */
+            u32 me_in = 0, me_out = 0;
+        };
+
+        /* One job, grc's shape, RCMODE 0. Returns 0 done, 1 rejected, 2 no
+         * status within 1 s (the caller treats that as a stall). */
+        int NvfEncode(const NvfCtx &x, u32 pic_index, nvenc_pic_stat_s *st, u64 *enc_ns, const NvfJob &j = NvfJob{}) {
+            u8 *const a = x.a;
+            /* poison only the picture index: it is what says "our job wrote this" */
+            const u32 poison = 0xA5A5A5A5u;
+            std::memcpy(a + NvfOffStatus, std::addressof(poison), 4);
+            armDCacheFlush(a + NvfOffStatus, 0x40);
+
+            auto *w = reinterpret_cast<u32 *>(a + NvfOffCmd);
+            u32 n = 0;
+            auto m = [&](u32 method, u32 value) {
+                w[n++] = vic::Host1xOpcodeIncr(vic::UCLASS_METHOD_OFFSET, 2);
+                w[n++] = method >> 2;
+                w[n++] = value;
+            };
+            w[n++] = vic::Host1xOpcodeSetClass(0, 0x21, 0);
+            w[n++] = vic::Host1xOpcodeIncr(0x0B, 1);
+            w[n++] = 0;
+            m(0x700, 0x00001103u);                    /* SET_CONTROL_PARAMS: H.264, RCMODE 0 */
+            m(0x704, pic_index);                      /* SET_PICTURE_INDEX         */
+            m(0x200, 1);                              /* SET_APPLICATION_ID: H.264 */
+            m(0x710, (x.enc + j.setup)      >> 8);    /* SET_IN_DRV_PIC_SETUP      */
+            m(0x718, (x.enc + NvfOffStatus) >> 8);    /* SET_OUT_ENC_STATUS        */
+            m(0x724, (x.enc + NvfOffRc)     >> 8);    /* SET_IO_RC_PROCESS         */
+            m(0x71C, (x.enc + NvfOffBits)   >> 8);    /* SET_OUT_BITSTREAM         */
+            m(0x720, (x.enc + NvfOffHist)   >> 8);    /* SET_IOHISTORY             */
+            m(0x734, (x.enc + NvfOffCur)    >> 8);    /* SET_IN_CUR_PIC            */
+            m(0x740, (x.enc + NvfOffCurUV)  >> 8);    /* SET_IN_CUR_PIC_CHROMA_U   */
+            m(0x730, (x.enc + j.ref_out)    >> 8);    /* SET_OUT_REF_PIC_LUMA      */
+            if (j.ref_in != 0) {
+                /* grc's P job, in grc's order (Run E / Run G CMDBUF blocks) */
+                m(0x738, (x.enc + j.me_in)  >> 8);    /* SET_IN_MEPRED_DATA        */
+                m(0x73C, (x.enc + j.me_out) >> 8);    /* SET_OUT_MEPRED_DATA       */
+                m(0x400, (x.enc + j.ref_in) >> 8);    /* SET_IN_REF_PIC0_LUMA      */
+            }
+            m(0x300, 0x100);                          /* EXECUTE                   */
+            n = AppendIncrSyncpt(w, n, x.esyncpt, true);
+            armDCacheFlush(w, 0x1000);
+
+            alignas(8) u8 sb[16 + 12 + 20 + 4] = {};
+            u32 off = 0;
+            auto put = [&](u32 v) { std::memcpy(sb + off, std::addressof(v), 4); off += 4; };
+            put(1); put(0); put(1); put(1);
+            put(x.ah); put(NvfOffCmd); put(n);
+            put(x.esyncpt); put(1); put(0); put(0); put(0);
+            const u32 fence_off = off; put(0);
+            const u32 sz = off;
+            const u32 req = (UINT32_C(3) << 30) | (sz << 16) | (0x00u << 8) | 0x01u;
+
+            const u64 t0 = armTicksToNs(armGetSystemTick());
+            u32 nverr = 0, fence_val = 0;
+            const auto rc = NvIoctl(x.efd, req, sb, sz, std::addressof(nverr));
+            std::memcpy(std::addressof(fence_val), sb + fence_off, 4);
+            if (R_FAILED(rc) || nverr != 0) { *enc_ns = 0; return 1; }
+
+            const u32 cfd = CtrlFd();
+            bool fence_done = false, ours = false;
+            while (armTicksToNs(armGetSystemTick()) - t0 < UINT64_C(1000000000)) {
+                if (cfd != 0 && !fence_done) {
+                    struct { u32 id; u32 value; } r = { x.esyncpt, 0 };
+                    u32 e2 = 0;
+                    NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
+                    fence_done = (static_cast<s32>(r.value - fence_val) >= 0);
+                }
+                armDCacheFlush(a + NvfOffStatus, 0x80);
+                std::memcpy(st, a + NvfOffStatus, sizeof(*st));
+                ours = (st->picture_index == pic_index);
+                if (fence_done && ours) { break; }
+                os::SleepThread(TimeSpan::FromMicroSeconds(50));
+            }
+            *enc_ns = armTicksToNs(armGetSystemTick()) - t0;
+            return (fence_done && ours) ? 0 : 2;
+        }
+
+        /* All zero outside the top-left 1280x720 means handheld content. */
+        bool SlotContentIs720(const u8 *slot, u32 *out_samples) {
+            auto px = [&](u32 x, u32 y) -> const u8 * {
+                const u32 xb = x * 4;
+                const u32 addr = (y / 128) * 120 * 8192 + (xb / 64) * 8192 + ((y % 128) / 8) * 512
+                               + ((xb % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((xb % 32) / 16) * 32 + (y % 2) * 16 + (xb % 16);
+                return slot + addr;
+            };
+            u32 n = 0;
+            bool zero = true;
+            for (u32 y = 10; y < 1080; y += 100) {
+                for (u32 x = 1300; x < 1920; x += 100) { const u8 *p = px(x, y); zero &= (p[0] | p[1] | p[2]) == 0; ++n; }
+            }
+            for (u32 y = 740; y < 1080; y += 50) {
+                for (u32 x = 10; x < 1280; x += 150) { const u8 *p = px(x, y); zero &= (p[0] | p[1] | p[2]) == 0; ++n; }
+            }
+            *out_samples = n;
+            return zero;
+        }
+
+        /* the encode's bitstream length, as M81 sized it */
+        u32 NvfBitsLen(const nvenc_pic_stat_s &st) {
+            u32 len = st.total_bit_count / 8 + st.bitstream_start_pos + 16;
+            if (st.last_valid_byte_offset + 1 > len) { len = st.last_valid_byte_offset + 1; }
+            if (len > 0x100000) { len = 0x100000; }   /* the stage buffer's limit */
+            return len;
+        }
+
+        /* Everything one real-frame run needs, opened fresh and torn down in
+         * reverse: the slot copy pinned for the VIC, the arena pinned for the
+         * VIC and for a new msenc channel. A channel whose job stalled is left
+         * OPEN (M74: tearing down a stuck channel took the compositor with it). */
+        struct NvfSession {
+            u32 vfd = 0, cmd_handle = 0, vsyncpt = 0, cfg_addr = 0;
+            u32 sh = 0, slot_vic = 0, arena_vic = 0;
+            NvfCtx x = {};
+            bool efd_open = false, keep_open = false;
+            SrcDesc src{ 1920, 1080, 1920, vic::BLK_KIND_GENERIC_16Bx2, 4, vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, 1920, 1080 };
+            bool corner = false;       /* handheld: read and convert the 1280x720 corner 1:1 */
+            u32 seen = 0;              /* g_queue_count at the last capture */
+            size_t arena_base = NvfArenaBase;
+            u32 arena_size = NvfArenaSize;
+
+            ~NvfSession() {
+                if (efd_open && !keep_open) {
+                    if (x.enc != 0) { UnmapCmdBuffer(x.efd, x.ah); }
+                    NvClose(x.efd);
+                }
+                if (arena_vic != 0) { UnmapCmdBuffer(vfd, x.ah); }
+                if (slot_vic != 0) { UnmapCmdBuffer(vfd, sh); }
+            }
+
+            bool Open(u32 v, u32 nvmap_fd, u32 cmd, u32 vsp, u32 cfg, const char *who) {
+                vfd = v; cmd_handle = cmd; vsyncpt = vsp; cfg_addr = cfg;
+                if (g_engine_wedged) { LogLine("   %s: an earlier engine job never completed - not submitting", who); return false; }
+                if (g_ind_buf == nullptr || g_ind_size < arena_base + arena_size || cfg_addr == 0) {
+                    LogLine("   %s: capture region %zu KB, need %zu KB (cfg %#x) - not running",
+                            who, g_ind_size / 1024, (arena_base + arena_size) / 1024, cfg_addr);
+                    return false;
+                }
+                u32 si = 0;
+                if (R_FAILED(NvmapOwn(nvmap_fd, g_ind_buf, static_cast<u32>(FbSlotSize), 0, std::addressof(sh), std::addressof(si), true))) {
+                    LogLine("   %s: nvmap of the slot copy failed", who); return false;
+                }
+                MapCmdBuffer(vfd, sh, std::addressof(slot_vic), "nvf-slot", 0);
+                if (slot_vic == 0) { LogLine("   %s: slot pin returned 0 - refusing", who); return false; }
+
+                /* zeroed and flushed BEFORE any engine writes it, so no dirty
+                 * line from the memset can be written back over engine output */
+                x.a = g_ind_buf + arena_base;
+                std::memset(x.a, 0, arena_size);
+                std::memcpy(x.a + NvfOffSetup, nvenc_grc_idr::Setup, sizeof(nvenc_grc_idr::Setup));
+                armDCacheFlush(x.a, arena_size);
+                u32 aid = 0;
+                if (R_FAILED(NvmapOwn(nvmap_fd, x.a, arena_size, 0, std::addressof(x.ah), std::addressof(aid), true))) {
+                    LogLine("   %s: nvmap of the %u KB arena failed", who, arena_size / 1024); return false;
+                }
+                MapCmdBuffer(vfd, x.ah, std::addressof(arena_vic), "nvf-arena(vic)", 0);
+                if (arena_vic == 0) { LogLine("   %s: arena pin (VIC) returned 0 - refusing", who); return false; }
+
+                u32 nverr = 0;
+                if (R_FAILED(NvOpen("/dev/nvhost-msenc", std::addressof(x.efd), std::addressof(nverr))) || nverr != 0) {
+                    LogLine("   %s: /dev/nvhost-msenc open FAILED nverr=%u", who, nverr); return false;
+                }
+                efd_open = true;
+                {
+                    struct { u32 module_id; u32 syncpt; } gs = { 0, 0 };
+                    nverr = 0;
+                    NvIoctl(x.efd, NvHostIocChannelGetSyncpoint, std::addressof(gs), sizeof(gs), std::addressof(nverr));
+                    x.esyncpt = gs.syncpt;
+                }
+                if (x.esyncpt == 0 || x.esyncpt == 12) { LogLine("   %s: msenc syncpt=%u - REFUSING", who, x.esyncpt); return false; }
+                { struct { u32 fd; } sn = { nvmap_fd }; nverr = 0;
+                  NvIoctl(x.efd, NvHostIocChannelSetNvmapFd, std::addressof(sn), sizeof(sn), std::addressof(nverr)); }
+                MapCmdBuffer(x.efd, x.ah, std::addressof(x.enc), "nvf-arena(enc)", 0);
+                if (x.enc == 0) { LogLine("   %s: arena pin (NVENC) returned 0 - refusing", who); return false; }
+                LogLine("   %s: arena %u KB at +%zu KB; VIC sees it at %#x, NVENC at %#x (syncpt %u); picture %#x/%#x, bits %#x",
+                        who, arena_size / 1024, arena_base / 1024, arena_vic, x.enc, x.esyncpt,
+                        x.enc + NvfOffCur, x.enc + NvfOffCurUV, x.enc + NvfOffBits);
+                seen = g_queue_count.load(std::memory_order_relaxed);
+                return true;
+            }
+
+            /* wait (briefly) for a new present, then read the slot it presented */
+            bool Capture(::ams::svc::Handle dbg, u64 slot_base, u64 *read_ns, u32 *sig, u32 *dropped = nullptr) {
+                for (u32 spins = 0; g_queue_count.load(std::memory_order_relaxed) == seen && spins < 20; ++spins) {
+                    os::SleepThread(TimeSpan::FromMilliSeconds(1));
+                }
+                const u32 now = g_queue_count.load(std::memory_order_relaxed);
+                if (dropped != nullptr && now - seen > 1) { *dropped += now - seen - 1; }
+                seen = now;
+                const s32 slot = g_queue_slot.load(std::memory_order_relaxed);
+                const u64 base = slot_base + ((slot >= 0 && slot < 3) ? FbSlotOff[slot] : 0);
+                const u64 t0 = armTicksToNs(armGetSystemTick());
+                if (corner) {
+                    for (u32 br = 0; br < CornerBlockRows; ++br) {
+                        u8 *dst = g_ind_buf + br * FbBlockRow;
+                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(dst), dbg, base + br * FbBlockRow, CornerBlockRowBytes))) {
+                            return false;
+                        }
+                        armDCacheFlush(dst, CornerBlockRowBytes);
+                    }
+                } else {
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, base, FbSlotSize))) {
+                        return false;
+                    }
+                    armDCacheFlush(g_ind_buf, FbSlotSize);
+                }
+                u32 h = 0;
+                for (u32 k = 0; k < 8192; k += 8) { h = h * 31u + g_ind_buf[k]; }
+                *sig = h;
+                *read_ns = armTicksToNs(armGetSystemTick()) - t0;
+                return true;
+            }
+
+            /* after the first full capture: handheld content -> corner mode */
+            void Decide(const char *who) {
+                u32 samples = 0;
+                corner = SlotContentIs720(g_ind_buf, std::addressof(samples));
+                if (corner) { src.rect_w = NvfW; src.rect_h = NvfH; }
+                LogLine("   %s: content %s (%u samples outside the top-left 1280x720 %s) -> %s",
+                        who, corner ? "1280x720 (handheld)" : "1920x1080 (docked)", samples, corner ? "all zero" : "not all zero",
+                        corner ? "the VIC converts the corner 1:1; later frames read only its 3.9 MB" : "the VIC scales it to 1280x720");
+            }
+
+            /* RGB -> BT.709 NV12, 16-row block-linear, into the arena */
+            bool Vic(const char *stage) {
+                g_strip_src = src;
+                g_strip_out = NvfOut;
+                JobCtx vc{ vfd, cmd_handle, vsyncpt, cfg_addr, arena_vic + NvfOffCur, slot_vic, 0, 0, 0, 0, SelfSrc };
+                vc.out_is_dst_buf = false;
+                g_csc_override = std::addressof(NvfBt709);
+                const bool ok = RunOneJob(stage, VicJob::BlitStrip, true, vc);
+                g_csc_override = nullptr;
+                return ok;
+            }
+
+            void SetSetupByte(u32 off, u8 v) {
+                x.a[NvfOffSetup + off] = v;
+                armDCacheFlush(x.a + NvfOffSetup + (off & ~0x3Fu), 0x40);
+            }
+
+            void Stall(const char *who, const char *what) {
+                g_engine_wedged = true;
+                keep_open = true;
+                LogLine("   %s: %s: no status from our job in 1 s. Leaving the NVENC channel OPEN (M74).", who, what);
+                LogLine("   No further engine work this boot.");
+            }
+
+            /* the clock, re-ensured: before the first submit, and in a long run
+             * whenever a periodic read finds it below 400 MHz */
+            bool EnsureClock(const char *who, u32 *hz) {
+                const u32 ensured = ClockEnsure(PcvModule_NVENC, who);
+                *hz = 0;
+                return ensured != 0 && ClockRateOf(PcvModule_NVENC, hz) && *hz != 0;
+            }
+        };
+
+        void TryNvencRealFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
+                                u32 cmd_handle, u32 vsyncpt, u32 cfg_addr) {
+            VicStage("nf:1");
+            LogLine("   ---- NVENC ON REAL GAME FRAMES (M83): game slot -> VIC BT.709 NV12, 16-row block-linear -> IDR ----");
+            ON_SCOPE_EXIT { ClockWatchStop(); };
+            NvfSession s;
+            if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvframe")) { VicStage("nf:open_FAILED"); return; }
+
+            char path[48];
+            auto save = [&](const char *tag, const nvenc_pic_stat_s &st) {
+                std::snprintf(path, sizeof(path), "sdmc:/nvframe-%s-status.bin", tag);
+                WriteEngineOutputToSd(path, s.x.a + NvfOffStatus, 0x1000, nullptr);
+                std::snprintf(path, sizeof(path), "sdmc:/nvframe-%s-bits.bin", tag);
+                WriteEngineOutputToSd(path, s.x.a + NvfOffBits, NvfBitsLen(st), nullptr);
+            };
+            auto save_picture = [&](const char *tag) {
+                armDCacheFlush(s.x.a + NvfOffCur, NvfLuma + NvfChroma);
+                std::snprintf(path, sizeof(path), "sdmc:/nvframe-%s-y.bin", tag);
+                WriteEngineOutputToSd(path, s.x.a + NvfOffCur, NvfLuma, nullptr);
+                std::snprintf(path, sizeof(path), "sdmc:/nvframe-%s-uv.bin", tag);
+                WriteEngineOutputToSd(path, s.x.a + NvfOffCurUV, NvfChroma, nullptr);
+            };
+
+            /* ---- frame 0: one picture, three QPs, everything saved ---- */
+            u32 enc_hz = 0;
+            if (!s.EnsureClock("nvframe", std::addressof(enc_hz))) {
+                LogLine("   nvframe: NOT submitting - NVENC clock not established (%u Hz)", enc_hz);
+                VicStage("nf:no_clock");
+                return;
+            }
+            u64 read_ns = 0; u32 sig = 0;
+            if (!s.Capture(dbg, slot_base, std::addressof(read_ns), std::addressof(sig))) { LogLine("   nvframe: slot read failed"); VicStage("nf:read_FAILED"); return; }
+            s.Decide("nvframe");
+            if (s.corner) {
+                /* the game's own pixels for the picture's top 128 rows, as read:
+                 * the PC converts them in float and checks the VIC's colour */
+                WriteSdVerified("sdmc:/nvframe-0-src.bin", g_ind_buf, CornerBlockRowBytes, g_stage_buf, nullptr);
+            }
+            const u64 v0 = armTicksToNs(armGetSystemTick());
+            g_vic_quiet = false;
+            const bool vic_ok = s.Vic("nf:vic0");
+            const u64 vic_ns = armTicksToNs(armGetSystemTick()) - v0;
+            LogLine("   nvframe[0]: slot read %llu us, VIC -> BT.709 NV12 (16-row blocks) %s in %llu us incl. logging (NVENC %u Hz)",
+                    static_cast<unsigned long long>(read_ns / 1000), vic_ok ? "done" : "DID NOT COMPLETE",
+                    static_cast<unsigned long long>(vic_ns / 1000), enc_hz);
+            if (!vic_ok) { VicStage("nf:vic_FAILED"); return; }
+
+            constexpr u8 Qps[] = { 16, 20, 24 };
+            u32 pic = NvfPictureIndex;
+            for (const u8 qp : Qps) {
+                s.SetSetupByte(SetupRcQpI, qp);
+                nvenc_pic_stat_s st = {};
+                u64 enc_ns = 0;
+                const int r = NvfEncode(s.x, pic, std::addressof(st), std::addressof(enc_ns));
+                if (r == 1) { LogLine("   nvframe[0] QP %u: submit REJECTED", qp); VicStage("nf:submit_rejected"); return; }
+                if (r == 2) { s.Stall("nvframe", "frame 0"); VicStage("nf:STALLED_left_open"); return; }
+                LogLine("   nvframe[0] QP %2u: %u B in %llu us (status: error %u ucode %#x pic_type %u avgQP %u intra %u)",
+                        qp, st.total_bit_count / 8, static_cast<unsigned long long>(enc_ns / 1000),
+                        st.error_status, st.ucode_error_status, st.pic_type, st.avgQP, st.intra_mb_count);
+                char tag[8];
+                std::snprintf(tag, sizeof(tag), "q%u", qp);
+                save(tag, st);
+                ++pic;
+            }
+            save_picture("0");
+
+            /* ---- N frames back to back: read, VIC, encode; nothing else ---- */
+            const u32 nframes = g_nvframe_n > 600 ? 600 : g_nvframe_n;
+            constexpr u8 LoopQp = 20;
+            s.SetSetupByte(SetupRcQpI, LoopQp);
+            g_vic_quiet = true;
+            u64 s_read = 0, s_vic = 0, s_enc = 0, s_work = 0, s_wait = 0, m_read = 0, m_vic = 0, m_enc = 0, m_work = 0;
+            u64 s_bytes = 0;
+            u32 b_min = ~0u, b_max = 0, done = 0, distinct = 0, last_sig = 0, errs = 0;
+            nvenc_pic_stat_s last = {};
+            const u32 q0 = g_queue_count.load(std::memory_order_relaxed);
+            const u64 loop_t0 = armTicksToNs(armGetSystemTick());
+            bool stalled = false;
+            for (u32 i = 0; i < nframes; ++i) {
+                const u64 t0 = armTicksToNs(armGetSystemTick());
+                u64 rn = 0; u32 sg = 0;
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvframe: slot read failed at frame %u", i); break; }
+                const u64 t1 = armTicksToNs(armGetSystemTick());
+                if (!s.Vic("nf:vic")) { LogLine("   nvframe: VIC did not complete at frame %u", i); break; }
+                const u64 t2 = armTicksToNs(armGetSystemTick());
+                nvenc_pic_stat_s st = {};
+                u64 en = 0;
+                const int r = NvfEncode(s.x, pic++, std::addressof(st), std::addressof(en));
+                if (r == 1) { LogLine("   nvframe: submit REJECTED at frame %u", i); break; }
+                if (r == 2) { g_vic_quiet = false; s.Stall("nvframe", "loop"); stalled = true; break; }
+                const u64 t3 = armTicksToNs(armGetSystemTick());
+                if (st.ucode_error_status != 0 || st.total_bit_count == 0) { ++errs; }
+                const u32 bytes = st.total_bit_count / 8;
+                s_bytes += bytes;
+                if (bytes < b_min) { b_min = bytes; }
+                if (bytes > b_max) { b_max = bytes; }
+                if (sg != last_sig) { ++distinct; last_sig = sg; }
+                /* rn is the read + flush alone; the rest of t1 - t0 is the wait
+                 * for the game's next present */
+                const u64 dr = rn, dv = t2 - t1, de = t3 - t2, dw = dr + dv + de;
+                s_read += dr; s_vic += dv; s_enc += de; s_work += dw; s_wait += (t1 - t0) - rn;
+                if (dr > m_read) { m_read = dr; }
+                if (dv > m_vic) { m_vic = dv; }
+                if (de > m_enc) { m_enc = de; }
+                if (dw > m_work) { m_work = dw; }
+                last = st;
+                ++done;
+            }
+            const u64 wall = armTicksToNs(armGetSystemTick()) - loop_t0;
+            const u32 presented = g_queue_count.load(std::memory_order_relaxed) - q0;
+            g_vic_quiet = false;
+            if (stalled) { VicStage("nf:STALLED_left_open"); return; }
+
+            u32 after_hz = 0;
+            static_cast<void>(ClockRateOf(PcvModule_NVENC, std::addressof(after_hz)));
+            const u32 nd = done ? done : 1;
+            const u64 fps_x10 = wall ? static_cast<u64>(done) * UINT64_C(10000000000) / wall : 0;
+            const u64 game_x10 = wall ? static_cast<u64>(presented) * UINT64_C(10000000000) / wall : 0;
+            LogLine("   nvframe: %u of %u frames at QP %u in %llu ms -> %llu.%llu fps (game presented %llu.%llu fps), %u distinct, %u with errors",
+                    done, nframes, LoopQp, static_cast<unsigned long long>(wall / 1000000),
+                    static_cast<unsigned long long>(fps_x10 / 10), static_cast<unsigned long long>(fps_x10 % 10),
+                    static_cast<unsigned long long>(game_x10 / 10), static_cast<unsigned long long>(game_x10 % 10),
+                    distinct, errs);
+            LogLine("   nvframe: per frame avg/max us: read+flush %llu/%llu  VIC %llu/%llu  NVENC %llu/%llu  work %llu/%llu  (60 fps budget 16667); waiting for presents avg %llu",
+                    static_cast<unsigned long long>(s_read / nd / 1000), static_cast<unsigned long long>(m_read / 1000),
+                    static_cast<unsigned long long>(s_vic / nd / 1000), static_cast<unsigned long long>(m_vic / 1000),
+                    static_cast<unsigned long long>(s_enc / nd / 1000), static_cast<unsigned long long>(m_enc / 1000),
+                    static_cast<unsigned long long>(s_work / nd / 1000), static_cast<unsigned long long>(m_work / 1000),
+                    static_cast<unsigned long long>(s_wait / nd / 1000));
+            LogLine("   nvframe: IDR size avg %llu B (min %u, max %u) -> %llu Mbps at 60 fps; NVENC %u Hz after",
+                    static_cast<unsigned long long>(s_bytes / nd), done ? b_min : 0, b_max,
+                    static_cast<unsigned long long>(s_bytes / nd * 8 * 60 / 1000000), after_hz);
+            if (done != 0) {
+                save("last", last);
+                save_picture("last");
+            }
+            VicStage(done == nframes ? "nf:DONE" : "nf:partial");
+        }
+
+        /* ---- M83: the stream -----------------------------------------------
+         *
+         * game frame -> VIC (BT.709 NV12) -> NVENC IDR -> USB bulk -> PC.
+         *
+         * Each frame goes out as one SFTR packet, the transport M57-M71 proved:
+         * a 32-byte header in its own transfer (a short packet the host reads
+         * on its own), then the payload posted asynchronously, so frame N's
+         * transfer runs while frame N+1 is captured and encoded. flags bit 1
+         * marks an H.264 payload: SPS + PPS + one IDR slice, a complete Annex-B
+         * access unit. Every frame is an IDR and carries its parameter sets, so
+         * the receiver can start, drop or resync anywhere; idr_pic_id alternates
+         * 0/1 as H.264 requires of back-to-back IDR pictures (grc's own IDR
+         * setups differ exactly there). kind carries the frame number.
+         *
+         * IDR-only is deliberate for this first cut. P frames need the ME and
+         * reference buffers grc binds on its P jobs, a P setup per frame, and a
+         * reference ping-pong; the setup data is in hand (Run E) but a wrong P
+         * setup can stall the engine mid-stream. IDR-only QP 20 measured 344 KB a
+         * frame in Run H, 165 Mbps at 60 fps - inside the ~290 Mbps link. */
+        void TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
+                            u32 cmd_handle, u32 vsyncpt, u32 cfg_addr) {
+            VicStage("ns:1");
+            const u32 nframes = g_nvstream_n > 36000 ? 36000 : g_nvstream_n;
+            const u8 qp = static_cast<u8>(g_nvstream_qp < 10 ? 10 : (g_nvstream_qp > 40 ? 40 : g_nvstream_qp));
+            LogLine("   ---- H.264 STREAM OVER USB (M83): %u frames, IDR-only, QP %u, BT.709 ----", nframes, qp);
+            if (g_stream_stage[0] == nullptr || g_stream_stage[1] == nullptr) { LogLine("   nvstream: no stage buffers"); return; }
+            /* the receiver should already be running; give a late one 5 s */
+            for (u32 t = 0; t < 50 && !UsbReady(); ++t) { os::SleepThread(TimeSpan::FromMilliSeconds(100)); }
+            if (!UsbReady()) { LogLine("   nvstream: USB not Configured (no host, or \"usb\" absent from the arm file) - not streaming"); VicStage("ns:no_usb"); return; }
+            ON_SCOPE_EXIT { ClockWatchStop(); };
+            NvfSession s;
+            if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvstream")) { VicStage("ns:open_FAILED"); return; }
+            u32 enc_hz = 0;
+            if (!s.EnsureClock("nvstream", std::addressof(enc_hz))) {
+                LogLine("   nvstream: NOT submitting - NVENC clock not established (%u Hz)", enc_hz);
+                VicStage("ns:no_clock");
+                return;
+            }
+            s.SetSetupByte(SetupRcQpI, qp);
+            {
+                u64 rn = 0; u32 sg = 0;
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvstream: slot read failed"); return; }
+                s.Decide("nvstream");
+            }
+
+            constexpr size_t HdrsLen = sizeof(nvenc_grc_hdrs::SpsPps);
+            static_assert(HdrsLen + 0x100000 <= StreamStageSize, "a frame must fit a stage buffer");
+            std::memcpy(g_stream_stage[0], nvenc_grc_hdrs::SpsPps, HdrsLen);
+            std::memcpy(g_stream_stage[1], nvenc_grc_hdrs::SpsPps, HdrsLen);
+
+            g_vic_quiet = true;
+            u32 parity = 0, urb = 0, sent = 0, errs = 0, dropped = 0, done = 0, clock_fixes = 0;
+            bool pending = false, stalled = false;
+            const char *why = "all frames sent";
+            u64 s_read = 0, s_vic = 0, s_enc = 0, s_copy = 0, s_usb = 0, s_bytes = 0, m_work = 0, m_bytes = 0;
+            u32 pic = NvfPictureIndex + 0x100;
+            const u32 q0 = g_queue_count.load(std::memory_order_relaxed);
+            const u64 loop_t0 = armTicksToNs(armGetSystemTick());
+            for (u32 i = 0; i < nframes; ++i) {
+                u64 rn = 0; u32 sg = 0;
+                const u64 t0 = armTicksToNs(armGetSystemTick());
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped))) { why = "slot read failed"; break; }
+                const u64 t1 = armTicksToNs(armGetSystemTick());
+                if (!s.Vic("ns:vic")) { why = "VIC did not complete"; break; }
+                const u64 t2 = armTicksToNs(armGetSystemTick());
+                s.SetSetupByte(SetupIdrPicId, static_cast<u8>(i & 1));
+                nvenc_pic_stat_s st = {};
+                u64 en = 0;
+                const int r = NvfEncode(s.x, pic++, std::addressof(st), std::addressof(en));
+                if (r == 1) { why = "NVENC submit rejected"; break; }
+                if (r == 2) { g_vic_quiet = false; s.Stall("nvstream", "stream"); stalled = true; why = "NVENC stalled"; break; }
+                const u64 t3 = armTicksToNs(armGetSystemTick());
+                const u32 bytes = st.total_bit_count / 8;
+                if (st.ucode_error_status != 0 || bytes == 0 || st.bitstream_start_pos != 0 || bytes > 0x100000) { ++errs; continue; }
+
+                /* the previous transfer has had this whole frame to finish in */
+                if (pending) {
+                    size_t got = 0;
+                    if (!UsbWaitAsync(urb, std::addressof(got))) { pending = false; why = "USB transfer did not complete (host gone?)"; break; }
+                    ++sent;
+                    pending = false;
+                }
+                const u64 t4 = armTicksToNs(armGetSystemTick());
+                armDCacheFlush(s.x.a + NvfOffBits, bytes);
+                std::memcpy(g_stream_stage[parity] + HdrsLen, s.x.a + NvfOffBits, bytes);
+                const u32 payload = static_cast<u32>(HdrsLen + bytes);
+                SftHdrWire h = {};
+                h.magic = 0x52544653u;        /* "SFTR" */
+                h.version = 2;
+                h.flags = 2;                  /* bit 1: H.264 Annex-B access unit */
+                h.width = NvfW; h.height = NvfH; h.stride = 0;
+                h.length = payload;
+                h.block_h_log2 = 0;
+                h.kind = i;                   /* frame number */
+                std::memcpy(g_usb_hdr, std::addressof(h), sizeof(h));
+                const u64 t5 = armTicksToNs(armGetSystemTick());
+                size_t hs = 0;
+                if (!UsbSendBuffer(g_usb_hdr, sizeof(SftHdrWire), std::addressof(hs))) { why = "USB header send failed"; break; }
+                if (!UsbPostAsync(g_stream_stage[parity], payload, std::addressof(urb))) { why = "USB post failed"; break; }
+                pending = true;
+                parity ^= 1;
+                const u64 t6 = armTicksToNs(armGetSystemTick());
+
+                ++done;
+                s_read += rn; s_vic += t2 - t1; s_enc += t3 - t2; s_copy += t5 - t4; s_usb += (t4 - t3) + (t6 - t5);
+                s_bytes += bytes;
+                if (bytes > m_bytes) { m_bytes = bytes; }
+                const u64 work = (t6 - t0) - ((t1 - t0) - rn);
+                if (work > m_work) { m_work = work; }
+
+                /* every ~10 s: the clock (re-ensured if it fell) and a progress
+                 * line, so a stream that dies midway says how far it got */
+                if ((i + 1) % 600 == 0) {
+                    u32 hz = 0;
+                    if (!ClockRateOf(PcvModule_NVENC, std::addressof(hz)) || hz < 400000000u) {
+                        ++clock_fixes;
+                        static_cast<void>(s.EnsureClock("nvstream", std::addressof(hz)));
+                    }
+                    const u64 el = armTicksToNs(armGetSystemTick()) - loop_t0;
+                    LogLine("   nvstream: %u frames in %llu ms, %u sent, avg %llu B/frame, NVENC %u Hz",
+                            i + 1, static_cast<unsigned long long>(el / 1000000), sent,
+                            static_cast<unsigned long long>(done ? s_bytes / done : 0), hz);
+                }
+                /* hand the core back: every thread in this process shares core 3
+                 * with the IPC thread that answers the game (M60b) */
+                os::SleepThread(TimeSpan::FromMicroSeconds(500));
+            }
+            if (pending) {
+                size_t got = 0;
+                if (UsbWaitAsync(urb, std::addressof(got))) { ++sent; }
+            }
+            g_vic_quiet = false;
+            const u64 wall = armTicksToNs(armGetSystemTick()) - loop_t0;
+            const u32 presented = g_queue_count.load(std::memory_order_relaxed) - q0;
+            const u32 nd = done ? done : 1;
+            const u64 fps_x10 = wall ? static_cast<u64>(sent) * UINT64_C(10000000000) / wall : 0;
+            const u64 game_x10 = wall ? static_cast<u64>(presented) * UINT64_C(10000000000) / wall : 0;
+            LogLine("   nvstream: stopped: %s", why);
+            LogLine("   nvstream: %u frames sent in %llu ms -> %llu.%llu fps (game presented %llu.%llu fps, %u presents skipped), %u encodes with errors",
+                    sent, static_cast<unsigned long long>(wall / 1000000),
+                    static_cast<unsigned long long>(fps_x10 / 10), static_cast<unsigned long long>(fps_x10 % 10),
+                    static_cast<unsigned long long>(game_x10 / 10), static_cast<unsigned long long>(game_x10 % 10),
+                    dropped, errs);
+            LogLine("   nvstream: per frame avg us: read+flush %llu  VIC %llu  NVENC %llu  copy %llu  usb %llu; worst work %llu us",
+                    static_cast<unsigned long long>(s_read / nd / 1000), static_cast<unsigned long long>(s_vic / nd / 1000),
+                    static_cast<unsigned long long>(s_enc / nd / 1000), static_cast<unsigned long long>(s_copy / nd / 1000),
+                    static_cast<unsigned long long>(s_usb / nd / 1000), static_cast<unsigned long long>(m_work / 1000));
+            LogLine("   nvstream: avg %llu B/frame (max %llu) -> %llu Mbps at the achieved rate; clock re-ensured %u time(s)",
+                    static_cast<unsigned long long>(s_bytes / nd), static_cast<unsigned long long>(m_bytes),
+                    static_cast<unsigned long long>(wall ? s_bytes * 8 * 1000 / wall : 0), clock_fixes);
+            VicStage(stalled ? "ns:STALLED_left_open" : (sent == nframes ? "ns:DONE" : "ns:stopped"));
+        }
+
+        /* ---- M83: P frames, an opt-in probe ("nvp") ---------------------------
+         *
+         * One IDR then N-1 P frames of real game frames, with grc's own P setup
+         * (nvenc_grc_p.h, generated from Run E's setup_2 and checked to differ
+         * from the IDR setup in exactly the 23 bytes grc's P setups do) and
+         * grc's P job: the IDR job's methods plus SET_IN_MEPRED_DATA,
+         * SET_OUT_MEPRED_DATA and SET_IN_REF_PIC0_LUMA, in grc's order. The
+         * references ping-pong as grc's do (Run E: each job's OUT_REF_PIC is the
+         * next job's IN_REF_PIC0; the MEPRED buffers swap). Per P frame only
+         * frame_num (0x17C) and POC lsb (0x17E, = 2 x frame_num) change, as in
+         * grc's setups 2, 6 and 5 (frame_num 1, 2, 3).
+         *
+         * It runs LAST: a P job is the first job since M71 whose setup is not an
+         * IDR, and a stall ends engine work for the boot. The frames go to the
+         * SD (not USB): tools/nvp_check.py decodes the GOP, checks every frame
+         * decoded, and compares the last one - a P frame predicted from a chain
+         * of P frames - with the VIC's own picture, which is the drift test. */
+        constexpr u32 NvpOffSetupP = NvfArenaSize;
+        constexpr u32 NvpOffRefB   = NvpOffSetupP + 0x1000;
+        constexpr u32 NvpOffMeA    = NvpOffRefB + 0x160000;
+        constexpr u32 NvpOffMeB    = NvpOffMeA + 0x40000;     /* grc's MEPRED buffers are 128 KB apart */
+        constexpr u32 NvpArenaSize = NvpOffMeB + 0x40000;
+        constexpr size_t NvpArenaBase = FbBlockRowStage + StreamStageSize;   /* past g_stage_buf */
+        constexpr size_t NvpAccBase   = NvpArenaBase + NvpArenaSize;        /* CPU-only: the GOP's bitstreams */
+        constexpr u32 SetupFrameNum = __builtin_offsetof(nvenc_h264_drv_pic_setup_s, pic_control)
+                                    + __builtin_offsetof(nvenc_h264_pic_control_s, frame_num);
+        constexpr u32 SetupRcQpP = SetupRc + __builtin_offsetof(nvenc_h264_rc_s, QP);   /* QP[P] */
+        static_assert(SetupFrameNum == 0x17C && nvenc_grc_p::Setup[SetupFrameNum] == 1 && nvenc_grc_p::Setup[SetupFrameNum + 2] == 2,
+                      "grc's P setup: frame_num 1 at 0x17C, POC lsb 2 at 0x17E");
+        static_assert(nvenc_grc_p::Setup[0x1A8] == 0x90 && nvenc_grc_idr::Setup[0x1A8] == 0x9C,
+                      "pic_control word: P (type 0, ref 1) vs IDR (type 3, ref 1)");
+        static_assert(sizeof(nvenc_grc_p::Setup) <= 0x1000);
+        static_assert((SetupFrameNum & ~0x3Fu) == ((SetupFrameNum + 3) & ~0x3Fu), "frame_num and POC share a cache line");
+
+        void TryNvencPFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
+                             u32 cmd_handle, u32 vsyncpt, u32 cfg_addr) {
+            VicStage("np:1");
+            const u32 n = g_nvp_n < 2 ? 2 : (g_nvp_n > 60 ? 60 : g_nvp_n);
+            constexpr u8 Qp = 20;
+            LogLine("   ---- P FRAMES (M83 nvp): 1 IDR + %u P from real frames, QP %u, grc's P setup and P job ----", n - 1, Qp);
+            if (g_ind_buf == nullptr || g_ind_size < NvpAccBase + 0x100000) {
+                LogLine("   nvp: capture region %zu KB, need %zu KB - not running", g_ind_size / 1024, (NvpAccBase + 0x100000) / 1024);
+                return;
+            }
+            ON_SCOPE_EXIT { ClockWatchStop(); };
+            NvfSession s;
+            s.arena_base = NvpArenaBase;
+            s.arena_size = NvpArenaSize;
+            if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvp")) { VicStage("np:open_FAILED"); return; }
+            std::memcpy(s.x.a + NvpOffSetupP, nvenc_grc_p::Setup, sizeof(nvenc_grc_p::Setup));
+            s.x.a[NvpOffSetupP + SetupRcQpP] = Qp;
+            s.x.a[NvpOffSetupP + SetupRcQpI] = Qp;
+            armDCacheFlush(s.x.a + NvpOffSetupP, 0x1000);
+            s.SetSetupByte(SetupRcQpI, Qp);
+            u32 hz = 0;
+            if (!s.EnsureClock("nvp", std::addressof(hz))) { LogLine("   nvp: NOT submitting - NVENC clock not established"); VicStage("np:no_clock"); return; }
+            {
+                u64 rn = 0; u32 sg = 0;
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvp: slot read failed"); return; }
+                s.Decide("nvp");
+            }
+
+            u8 *const acc = g_ind_buf + NvpAccBase;
+            const size_t acc_cap = g_ind_size - NvpAccBase;
+            u32 lens[64] = {};
+            size_t acc_len = 0;
+            u32 done = 0, errs = 0;
+            u64 s_enc_i = 0, s_enc_p = 0;
+            const u32 refs[2] = { NvfOffRefOut, NvpOffRefB };
+            const u32 mes[2]  = { NvpOffMeA, NvpOffMeB };
+            u32 pic = NvfPictureIndex + 0x200;
+            g_vic_quiet = true;
+            for (u32 i = 0; i < n; ++i) {
+                u64 rn = 0; u32 sg = 0;
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvp: slot read failed at frame %u", i); break; }
+                if (!s.Vic("np:vic")) { LogLine("   nvp: VIC did not complete at frame %u", i); break; }
+                NvfJob j;                          /* frame 0: the IDR job */
+                j.ref_out = refs[i & 1];
+                if (i != 0) {
+                    const u16 fn = static_cast<u16>(i % nvenc_grc_p::MaxFrameNum);
+                    const u16 poc = static_cast<u16>((2 * i) % nvenc_grc_p::MaxPocLsb);
+                    std::memcpy(s.x.a + NvpOffSetupP + SetupFrameNum, std::addressof(fn), 2);
+                    std::memcpy(s.x.a + NvpOffSetupP + SetupFrameNum + 2, std::addressof(poc), 2);
+                    armDCacheFlush(s.x.a + NvpOffSetupP + (SetupFrameNum & ~0x3Fu), 0x40);
+                    j.setup  = NvpOffSetupP;
+                    j.ref_in = refs[(i - 1) & 1];
+                    j.me_in  = mes[(i - 1) & 1];
+                    j.me_out = mes[i & 1];
+                }
+                nvenc_pic_stat_s st = {};
+                u64 en = 0;
+                const int r = NvfEncode(s.x, pic++, std::addressof(st), std::addressof(en), j);
+                if (r == 1) { LogLine("   nvp: submit REJECTED at frame %u", i); break; }
+                if (r == 2) { g_vic_quiet = false; s.Stall("nvp", i == 0 ? "the IDR" : "a P frame"); VicStage("np:STALLED_left_open"); break; }
+                const u32 bytes = st.total_bit_count / 8;
+                const bool bad = st.ucode_error_status != 0 || bytes == 0 || st.bitstream_start_pos != 0;
+                if (bad) { ++errs; }
+                LogLine("   nvp[%2u]: %s pic_type %u  %6u B  intra/inter MBs %4u/%4u  avgQP %u  ucode %#x  %llu us",
+                        i, i == 0 ? "IDR" : "P  ", st.pic_type, bytes, st.intra_mb_count, st.inter_mb_count, st.avgQP,
+                        st.ucode_error_status, static_cast<unsigned long long>(en / 1000));
+                if (i == 0) { s_enc_i += en; } else { s_enc_p += en; }
+                if (bad || acc_len + bytes > acc_cap) { break; }
+                armDCacheFlush(s.x.a + NvfOffBits, bytes);
+                std::memcpy(acc + acc_len, s.x.a + NvfOffBits, bytes);
+                acc_len += bytes;
+                lens[i] = bytes;
+                ++done;
+            }
+            g_vic_quiet = false;
+            if (s.keep_open) { return; }
+            LogLine("   nvp: %u of %u frames encoded, %u with errors; IDR %u B, P avg %llu B; NVENC IDR %llu us, P avg %llu us",
+                    done, n, errs, lens[0], static_cast<unsigned long long>(done > 1 ? (acc_len - lens[0]) / (done - 1) : 0),
+                    static_cast<unsigned long long>(s_enc_i / 1000),
+                    static_cast<unsigned long long>(done > 1 ? s_enc_p / (done - 1) / 1000 : 0));
+            if (done == 0) { VicStage("np:nothing"); return; }
+
+            /* the GOP, as one Annex-B stream split into <= 1 MB files, an index
+             * of frame lengths, and the last frame's VIC planes */
+            u32 index[1 + 64] = { done };
+            for (u32 i = 0; i < done; ++i) { index[1 + i] = lens[i]; }
+            std::memcpy(g_stage_buf + 0x10000, index, sizeof(index));
+            WriteSdVerified("sdmc:/nvp-index.bin", g_stage_buf + 0x10000, 4 * (1 + done), g_stage_buf + 0x20000, nullptr);
+            char path[48];
+            for (size_t off = 0, k = 0; off < acc_len; off += 0x100000, ++k) {
+                const size_t len = (acc_len - off < 0x100000) ? acc_len - off : 0x100000;
+                std::snprintf(path, sizeof(path), "sdmc:/nvp-stream-%u.bin", static_cast<u32>(k));
+                std::memcpy(g_stage_buf, acc + off, len);
+                WriteSdVerified(path, g_stage_buf, len, g_stage_buf + ((len + 0xFFF) & ~static_cast<size_t>(0xFFF)), nullptr);
+            }
+            armDCacheFlush(s.x.a + NvfOffCur, NvfLuma + NvfChroma);
+            WriteEngineOutputToSd("sdmc:/nvp-last-y.bin", s.x.a + NvfOffCur, NvfLuma, nullptr);
+            WriteEngineOutputToSd("sdmc:/nvp-last-uv.bin", s.x.a + NvfOffCurUV, NvfChroma, nullptr);
+            VicStage(done == n ? "np:DONE" : "np:partial");
         }
 
         /* ---- M75: the grc observer ---------------------------------------
@@ -3600,6 +5025,12 @@ namespace ams::mitm::applet {
             /* SETCL word: opcode 0, offset 0, class in bits 15:6. */
             const u32 setcl_nvenc = vic::Host1xOpcodeSetClass(0, 0x21, 0);
             const u32 setcl_nvjpg = vic::Host1xOpcodeSetClass(0, 0xC0, 0);
+            /* M79: SET_IN_DRV_PIC_SETUP as a method-offset value. Run D found
+             * grc's setups and not one NVENC SETCL - like oss-nvjpg on Horizon,
+             * grc evidently leaves the class to nvservices - so its command
+             * buffers are found by the write that points the engine at a
+             * setup, whichever opcode carries it. */
+            constexpr u32 MethodDrvPicSetup = 0x710u >> 2;
 
             /* g_ind_buf is the scratch this scan reads into; it only exists
              * once the VIC heap is up, so "vic" must be armed alongside. */
@@ -3610,15 +5041,93 @@ namespace ams::mitm::applet {
                 return;
             }
 
-            static constexpr u32 MaxHits = 24;
-            ScanHit hits[MaxHits] = {};
-            u32 nhits = 0, nregions = 0;
-            u64 scanned = 0;
-            constexpr u64 ScanCap   = 96ull * 1024 * 1024;
+            enum : u32 { Hit_SetclEnc = 5, Hit_SetclJpg = 6, Hit_Method = 7, Hit_SetclVic = 8, Hit_Status = 9, NumKinds = 10 };
+            const u32 setcl_vic = vic::Host1xOpcodeSetClass(0, 0x5D, 0);
+            /* M81: grc's own NVENC status blocks, found by content. Run F's
+             * job came back with error_status = 2 and an otherwise perfect
+             * encode; if grc's frames - which record and play back fine -
+             * carry the same flag, it is benign. */
+            u32 status_err_hist[4] = {}, status_ucode_nonzero = 0;
+            u32 nvic_dumps = 0;
+            static constexpr u32 MaxVicDumps = 4;
+            static constexpr u32 MaxLogged = 32;
+            ScanHit hits[MaxLogged] = {};
+            u32 nlogged = 0, nkind[NumKinds] = {};
+            u32 nregions = 0, nskipped = 0;
+            u64 scanned = 0, skipped_bytes = 0;
+            /* M79: M78 stopped at a 96 MB cap in address order and may never
+             * have reached grc's command buffers. Command buffers and setups
+             * live in small allocations, so every region up to 8 MB is scanned
+             * in full and only larger ones (frame and bitstream storage) are
+             * skipped - each one noted, so nothing is silently left out. */
+            constexpr u64 MaxRegion = 8ull * 1024 * 1024;
+            constexpr u64 ScanCap   = 256ull * 1024 * 1024;
             constexpr u64 ChunkSize = 64 * 1024;
 
+            /* M78: every hit is dumped, not just located, as records in the
+             * M72 recorder's format (tools/nvrec.py, tools/nvsetup-dump),
+             * built in the cached stage buffer and written with
+             * WriteSdVerified after detaching. M79: a CMDBUF record's `rq`
+             * field carries the offset of the hit inside its payload. */
+            constexpr size_t RecCap = 0x40000;
+            u8 *const rec = g_stage_buf;
+            size_t rec_len = 0;
+            const bool can_dump = rec != nullptr && 2 * RecCap <= StreamStageSize && g_ind_size >= FbBlockRowStage + 2 * RecCap;
+            auto rec_put = [&](u16 kind, u32 rq, u32 a, u32 b, const void *payload, u32 len) -> u8 * {
+                if (!can_dump || rec_len + 32 + len > RecCap) { return nullptr; }
+                const u32 ms = static_cast<u32>(armTicksToNs(armGetSystemTick()) / UINT64_C(1000000));
+                const u32 hdr[8] = { 0x4352564Eu, static_cast<u32>(kind) | (32u << 16), 0, rq, a, b, len, ms };
+                std::memcpy(rec + rec_len, hdr, sizeof(hdr));
+                u8 *body = rec + rec_len + 32;
+                if (payload != nullptr) { std::memcpy(body, payload, len); }
+                rec_len += 32 + len;
+                return body;
+            };
+            char note[160];
+            auto rec_note = [&](int n) {
+                if (n > 0) { rec_put(9, 0, 0, 0, note, static_cast<u32>(n < static_cast<int>(sizeof(note)) ? n : sizeof(note) - 1)); }
+            };
+            /* read `len` bytes of grc at `va` straight into a new record */
+            u32 ndumped = 0;
+            auto dump = [&](u16 kind, u32 rq, u64 va, u32 len) -> u8 * {
+                u8 *body = rec_put(kind, rq, static_cast<u32>(va >> 32), static_cast<u32>(va), nullptr, len);
+                if (body == nullptr) { return nullptr; }
+                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(body), dbg, va, len))) {
+                    std::memset(body, 0, len);
+                    rec_note(std::snprintf(note, sizeof(note), "dump @ %#llx: ReadDebugProcessMemory failed - payload zeroed",
+                                           static_cast<unsigned long long>(va)));
+                    return nullptr;
+                }
+                ++ndumped;
+                return body;
+            };
+
+            /* setups worth watching: magic, and a picture size and profile that
+             * make sense (Run D's two heap hits were some other object) */
+            static constexpr u32 MaxSetups = 6;
+            u64 setup_va[MaxSetups] = {};
+            u32 nsetups = 0;
+            auto plausible = [](const u8 *p) {
+                nvenc_h264_drv_pic_setup_s st;
+                std::memcpy(std::addressof(st), p, sizeof(st));
+                const u32 w = st.input_cfg.frame_width_minus1 + 1u, h = st.input_cfg.frame_height_minus1 + 1u;
+                return st.sps_data.profile_idc != 0 && w >= 16 && w <= 4096 && h >= 16 && h <= 4096;
+            };
+
+            /* command-buffer windows: 2 KB from 0x200 before each hit, at most
+             * two per region and twelve in all */
+            struct Win { u64 va; u32 len; u32 hit_off; };
+            static constexpr u32 MaxWins = 12;
+            Win wins[MaxWins] = {};
+            u32 nwins = 0;
+            /* scan-time dump budgets, so a process full of magic-bearing
+             * objects cannot use up the record buffer before the command
+             * buffers and the watch get their turn */
+            u32 nmagic_dumps = 0, nsetcl_dumps = 0;
+            static constexpr u32 MaxMagicDumps = 8, MaxSetclDumps = 4;
+
             u64 addr = 0;
-            for (u32 steps = 0; steps < 4000; ++steps) {
+            for (u32 steps = 0; steps < 8000; ++steps) {
                 ::ams::svc::MemoryInfo mi = {};
                 ::ams::svc::PageInfo   pi = {};
                 if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr))) { break; }
@@ -3627,15 +5136,22 @@ namespace ams::mitm::applet {
                 const u32 perm  = static_cast<u32>(mi.permission);
                 const u32 state = static_cast<u32>(mi.state);
                 const bool readable = (perm & ::ams::svc::MemoryPermission_Read) != 0;
-                /* Code and stack are not where a driver config struct lives;
-                 * skipping them keeps the scan inside a sane budget. */
+                /* Code and stack are not where a driver config struct lives. */
                 const bool interesting = readable && mi.size >= 0x1000 &&
                                          state != static_cast<u32>(::ams::svc::MemoryState_Free) &&
                                          state != static_cast<u32>(::ams::svc::MemoryState_Code) &&
                                          state != static_cast<u32>(::ams::svc::MemoryState_AliasCode);
 
-                if (interesting && scanned < ScanCap) {
+                if (interesting && mi.size > MaxRegion) {
+                    ++nskipped;
+                    skipped_bytes += mi.size;
+                    rec_note(std::snprintf(note, sizeof(note), "skipped region %#llx+%#llx state %#x perm %#x (over 8 MB)",
+                                           static_cast<unsigned long long>(mi.base_address),
+                                           static_cast<unsigned long long>(mi.size), state, perm));
+                } else if (interesting && scanned < ScanCap) {
                     ++nregions;
+                    u32 region_wins = 0;
+                    const u64 region_end = mi.base_address + mi.size;
                     for (u64 off = 0; off < mi.size && scanned < ScanCap; off += ChunkSize) {
                         const u64 n = (mi.size - off < ChunkSize) ? (mi.size - off) : ChunkSize;
                         if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf),
@@ -3643,14 +5159,99 @@ namespace ams::mitm::applet {
                         scanned += n;
                         const u32 *w = reinterpret_cast<const u32 *>(g_ind_buf);
                         const u64 nw = n / 4;
-                        for (u64 i = 0; i + 4 < nw && nhits < MaxHits; ++i) {
+                        for (u64 i = 0; i + 4 < nw; ++i) {
                             u32 kind = 0;
                             for (u32 m = 0; m < 4; ++m) { if (w[i] == NvencMagics[m]) { kind = 1 + m; } }
-                            if (kind == 0 && w[i] == setcl_nvenc && (w[i+1] >> 28) <= 4) { kind = 5; }
-                            if (kind == 0 && w[i] == setcl_nvjpg && (w[i+1] >> 28) <= 4) { kind = 6; }
+                            /* M78: a SETCL counts only if the next word writes the
+                             * method-offset register (0x10) with INCR, NONINCR or
+                             * MASK. */
+                            const u32 nx = w[i + 1] >> 16;
+                            /* M81: or a write to THI register 0x0B, which is what
+                             * grc's NVENC jobs do right after SETCL (Run E) */
+                            const bool method_next = nx == 0x1010 || nx == 0x2010 || nx == 0x3010 || nx == 0x100b;
+                            if (kind == 0 && w[i] == setcl_nvenc && method_next) { kind = Hit_SetclEnc; }
+                            if (kind == 0 && w[i] == setcl_nvjpg && method_next) { kind = Hit_SetclJpg; }
+                            if (kind == 0 && w[i] == setcl_vic   && method_next) { kind = Hit_SetclVic; }
+                            if (kind == 0 && i + 11 < nw) {
+                                /* nvenc_pic_stat_s: 3600 MBs (720p), pic_type 0-3,
+                                 * 1-64 slices, a bit count that fits the buffer */
+                                const u32 mbs = (w[i + 10] & 0xFFFF) + (w[i + 10] >> 16);
+                                const u32 pt = w[i + 4] & 0xFFFF, ns = w[i + 4] >> 16;
+                                if (mbs == 3600 && pt <= 3 && ns >= 1 && ns <= 64 &&
+                                    w[i + 2] != 0 && w[i + 2] <= 1382400u * 8 && w[i + 9] <= 1382400u) {
+                                    kind = Hit_Status;
+                                    ++status_err_hist[w[i + 1] & 3];
+                                    if ((w[i + 1] >> 2) != 0) { ++status_ucode_nonzero; }
+                                    if (nkind[Hit_Status] < 32) rec_note(std::snprintf(note, sizeof(note),
+                                             "grc status @ %#llx: picture_index %#x error_status %u ucode %#x bits %u pic_type %u slices %u avgQP %u intra/inter %u/%u",
+                                             static_cast<unsigned long long>(mi.base_address + off + i * 4),
+                                             w[i], w[i + 1] & 3, w[i + 1] >> 2, w[i + 2], pt, ns, w[i + 5] >> 16,
+                                             w[i + 10] & 0xFFFF, w[i + 10] >> 16));
+                                }
+                            }
+                            const u32 op = w[i] >> 16;
+                            if (kind == 0 && (((op == 0x1010 || op == 0x2010 || op == 0x3010) && w[i + 1] == MethodDrvPicSetup) ||
+                                              w[i] == (0x40100000u | MethodDrvPicSetup))) {
+                                kind = Hit_Method;
+                            }
                             if (kind == 0) { continue; }
-                            hits[nhits++] = { mi.base_address + off + i * 4, kind,
-                                              w[i], w[i+1], w[i+2], w[i+3] };
+                            ++nkind[kind];
+                            const u64 hit_addr = mi.base_address + off + i * 4;
+                            /* Run E had 326 method writes; list only the first 8 so
+                             * the other kinds still get a line each */
+                            const bool list_it = kind != Hit_Method || nkind[Hit_Method] <= 8;
+                            if (list_it && nlogged < MaxLogged) { hits[nlogged++] = { hit_addr, kind, w[i], w[i+1], w[i+2], w[i+3] }; }
+
+                            if (kind <= 4 && nmagic_dumps < MaxMagicDumps) {
+                                ++nmagic_dumps;
+                                /* 4 KB of setup: the 512-byte header plus the
+                                 * control arrays pic_control points into */
+                                u32 want = 0x1000u;
+                                if (hit_addr + want > region_end) { want = static_cast<u32>(region_end - hit_addr) & ~3u; }
+                                rec_note(std::snprintf(note, sizeof(note), "setup magic @ %#llx in region %#llx+%#llx state %#x perm %#x",
+                                                       static_cast<unsigned long long>(hit_addr),
+                                                       static_cast<unsigned long long>(mi.base_address),
+                                                       static_cast<unsigned long long>(mi.size), state, perm));
+                                const u8 *body = dump(8, 0, hit_addr, want);
+                                if (body != nullptr && want >= sizeof(nvenc_h264_drv_pic_setup_s) && plausible(body) && nsetups < MaxSetups) {
+                                    setup_va[nsetups++] = hit_addr;
+                                }
+                            } else if (kind == Hit_SetclEnc && nsetcl_dumps < MaxSetclDumps) {
+                                ++nsetcl_dumps;
+                                u32 want = 0x400u;
+                                if (hit_addr + want > region_end) { want = static_cast<u32>(region_end - hit_addr) & ~3u; }
+                                rec_note(std::snprintf(note, sizeof(note), "NVENC SETCL @ %#llx", static_cast<unsigned long long>(hit_addr)));
+                                dump(7, 0, hit_addr, want);
+                            } else if (kind == Hit_SetclVic && nvic_dumps < MaxVicDumps) {
+                                /* M81: does grc drive the VIC too? A working VIC job
+                                 * would show how the RGB -> YUV matrix is really set */
+                                ++nvic_dumps;
+                                u32 want = 0x400u;
+                                if (hit_addr + want > region_end) { want = static_cast<u32>(region_end - hit_addr) & ~3u; }
+                                rec_note(std::snprintf(note, sizeof(note), "VIC SETCL @ %#llx in region %#llx+%#llx state %#x",
+                                                       static_cast<unsigned long long>(hit_addr),
+                                                       static_cast<unsigned long long>(mi.base_address),
+                                                       static_cast<unsigned long long>(mi.size), state));
+                                dump(7, 0, hit_addr, want);
+                            } else if (kind == Hit_Method && region_wins < 2 && nwins < MaxWins) {
+                                bool covered = false;
+                                for (u32 k = 0; k < nwins; ++k) {
+                                    if (hit_addr >= wins[k].va && hit_addr < wins[k].va + wins[k].len) { covered = true; }
+                                }
+                                if (!covered) {
+                                    const u64 ws = (hit_addr - mi.base_address > 0x200) ? hit_addr - 0x200 : mi.base_address;
+                                    u32 wl = 0x800u;
+                                    if (ws + wl > region_end) { wl = static_cast<u32>(region_end - ws) & ~3u; }
+                                    wins[nwins] = { ws, wl, static_cast<u32>(hit_addr - ws) };
+                                    rec_note(std::snprintf(note, sizeof(note), "SET_IN_DRV_PIC_SETUP write @ %#llx (+%#x in the dump) in region %#llx+%#llx state %#x",
+                                                           static_cast<unsigned long long>(hit_addr), wins[nwins].hit_off,
+                                                           static_cast<unsigned long long>(mi.base_address),
+                                                           static_cast<unsigned long long>(mi.size), state));
+                                    dump(7, wins[nwins].hit_off, ws, wl);
+                                    ++nwins;
+                                    ++region_wins;
+                                }
+                            }
                         }
                     }
                 }
@@ -3660,23 +5261,102 @@ namespace ams::mitm::applet {
                 addr = next;
             }
 
-            static_cast<void>(::ams::svc::CloseHandle(dbg));
-            LogLine("   scanned %llu KB across %u regions; %u hit(s)%s",
-                    static_cast<unsigned long long>(scanned / 1024), nregions, nhits,
-                    scanned >= ScanCap ? "  (hit the scan cap)" : "");
+            /* ---- M79: watch grc's setup ring --------------------------------
+             * Run D caught three P-frame setups (frame_num 1 and 2). The first
+             * job we replay should be an intra frame, which needs no reference
+             * picture, so poll the plausible setups for up to three seconds and
+             * dump each new (slot, frame_num, pic_type), always keeping intra
+             * ones. At 30 fps and a GOP of 15 an intra frame comes every
+             * 0.5 s. When the first one shows up, the command-buffer windows
+             * are dumped again at that same moment. grc runs throughout; each
+             * pass drains any debug event so nothing is left halted. */
+            u32 polls = 0, extra_setups = 0, extra_nonintra = 0, nev_watch = 0;
+            bool intra_seen = false, cmd_redumped = false;
+            u32 seen_n = 0;
+            struct Seen { u32 slot; u32 frame_num; u32 pic_type; };
+            Seen seen[48] = {};
+            const u64 w0 = armTicksToNs(armGetSystemTick());
+            if (nsetups > 0) {
+                alignas(8) u8 hdr_buf[sizeof(nvenc_h264_drv_pic_setup_s)];
+                while (armTicksToNs(armGetSystemTick()) - w0 < UINT64_C(3000000000)) {
+                    ++polls;
+                    {
+                        ::ams::svc::DebugEventInfo ev;
+                        u32 n = 0;
+                        while (n < 64 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg))) { ++n; }
+                        if (n != 0) {
+                            nev_watch += n;
+                            static_cast<void>(::ams::svc::ContinueDebugEvent(dbg,
+                                ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll, nullptr, 0));
+                        }
+                    }
+                    for (u32 k = 0; k < nsetups; ++k) {
+                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(hdr_buf), dbg, setup_va[k], sizeof(hdr_buf)))) { continue; }
+                        nvenc_h264_drv_pic_setup_s st;
+                        std::memcpy(std::addressof(st), hdr_buf, sizeof(st));
+                        const u32 fn = st.pic_control.frame_num, pt = st.pic_control.pic_type;
+                        bool known = false;
+                        for (u32 j = 0; j < seen_n; ++j) {
+                            if (seen[j].slot == k && seen[j].frame_num == fn && seen[j].pic_type == pt) { known = true; }
+                        }
+                        if (known) { continue; }
+                        if (seen_n < 48) { seen[seen_n++] = { k, fn, pt }; }
+                        const bool intra = pt >= 2;   /* 2 = I, 3 = IDR */
+                        if (extra_setups >= 8 || (!intra && extra_nonintra >= 3)) { continue; }
+                        rec_note(std::snprintf(note, sizeof(note), "watch +%llu ms: slot %u @ %#llx frame_num %u pic_type %u%s",
+                                               static_cast<unsigned long long>((armTicksToNs(armGetSystemTick()) - w0) / 1000000),
+                                               k, static_cast<unsigned long long>(setup_va[k]), fn, pt, intra ? " (INTRA)" : ""));
+                        if (dump(8, 0, setup_va[k], 0x1000) != nullptr) {
+                            ++extra_setups;
+                            if (!intra) { ++extra_nonintra; }
+                        }
+                        if (intra && !cmd_redumped) {
+                            rec_note(std::snprintf(note, sizeof(note), "intra frame seen: command-buffer windows dumped again now"));
+                            for (u32 j = 0; j < nwins; ++j) { dump(7, wins[j].hit_off, wins[j].va, wins[j].len); }
+                            cmd_redumped = true;
+                        }
+                        intra_seen = intra_seen || intra;
+                    }
+                    if (intra_seen && extra_nonintra >= 2) { break; }
+                    os::SleepThread(TimeSpan::FromMilliSeconds(5));
+                }
+            }
+            const u64 watch_ms = (armTicksToNs(armGetSystemTick()) - w0) / 1000000;
 
-            static const char *KindName[7] = { "?", "NVENC magic 5.0", "NVENC magic 6.0",
-                                               "NVENC magic 1.0", "MSENC magic 2.0",
-                                               "SETCL class 0x21 (NVENC)", "SETCL class 0xC0 (NVJPG)" };
-            for (u32 i = 0; i < nhits; ++i) {
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+            LogLine("   scanned %llu KB across %u regions; skipped %u region(s) over 8 MB (%llu KB)%s",
+                    static_cast<unsigned long long>(scanned / 1024), nregions, nskipped,
+                    static_cast<unsigned long long>(skipped_bytes / 1024),
+                    scanned >= ScanCap ? "  (hit the 256 MB cap)" : "");
+            LogLine("   hits: setup magic %u, NVENC SETCL %u, NVJPG SETCL %u, VIC SETCL %u, SET_IN_DRV_PIC_SETUP writes %u, NVENC status blocks %u",
+                    nkind[1] + nkind[2] + nkind[3] + nkind[4], nkind[Hit_SetclEnc], nkind[Hit_SetclJpg],
+                    nkind[Hit_SetclVic], nkind[Hit_Method], nkind[Hit_Status]);
+            LogLine("   grc's own NVENC status blocks: error_status 0:%u 1:%u 2:%u 3:%u, ucode_error_status non-zero in %u",
+                    status_err_hist[0], status_err_hist[1], status_err_hist[2], status_err_hist[3], status_ucode_nonzero);
+
+            static const char *KindName[NumKinds] = { "?", "NVENC magic 5.0", "NVENC magic 6.0",
+                                                      "NVENC magic 1.0", "MSENC magic 2.0",
+                                                      "SETCL class 0x21 (NVENC)", "SETCL class 0xC0 (NVJPG)",
+                                                      "SET_IN_DRV_PIC_SETUP write", "SETCL class 0x5D (VIC)",
+                                                      "NVENC status block" };
+            for (u32 i = 0; i < nlogged; ++i) {
                 LogLine("   hit %2u @ %#llx  %-26s  %08x %08x %08x %08x", i,
                         static_cast<unsigned long long>(hits[i].addr),
-                        KindName[hits[i].kind <= 6 ? hits[i].kind : 0],
+                        KindName[hits[i].kind < NumKinds ? hits[i].kind : 0],
                         hits[i].word0, hits[i].word1, hits[i].word2, hits[i].word3);
             }
-            if (nhits == 0) {
+            LogLine("   plausible setups %u, command-buffer windows %u; watch: %u polls in %llu ms, %u new setups dumped, intra %s, %u debug events",
+                    nsetups, nwins, polls, static_cast<unsigned long long>(watch_ms), extra_setups,
+                    intra_seen ? "CAPTURED" : "not seen", nev_watch);
+            if (nkind[1] + nkind[2] + nkind[3] + nkind[4] + nkind[Hit_Method] == 0) {
                 LogLine("   nothing found. Either grc is idle and has not allocated its encoder");
                 LogLine("   buffers, or they are in memory this process cannot read.");
+            }
+            if (!can_dump) {
+                LogLine("   no cached stage buffer - hits logged above, nothing dumped");
+            } else if (rec_len != 0) {
+                LogLine("   dumped %u block(s) into %zu B of records -> sdmc:/grc-scan.bin (decode: tools/nvrec.py)", ndumped, rec_len);
+                WriteSdVerified("sdmc:/grc-scan.bin", rec, rec_len, rec + RecCap, nullptr);
             }
             VicStage("grcscan:done");
         }

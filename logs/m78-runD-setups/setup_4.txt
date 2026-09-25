@@ -1,0 +1,158 @@
+== logs/m78-runD-setups/setup_4.bin (4096 B) ==
+  magic                                        0xd0b70006  (5.0=0xd0b70006 6.0=0xc1b70006)
+ input_cfg  : 1280x720 pitch=1280 pitch_c=1280 trans=0  luma@0/0 chroma@0/0  block_height=2 tiled16=0 mem_mode=0 nv21=0 bl_mode=0
+ refpic_cfg : 1280x720 pitch=1280 pitch_c=1280 trans=0  luma@0/0 chroma@0xe10/0  block_height=0 tiled16=1 mem_mode=0 nv21=0 bl_mode=0
+ output_cfg : 1280x720 pitch=1280 pitch_c=1280 trans=0  luma@0/0 chroma@0xe10/0  block_height=0 tiled16=1 mem_mode=0 nv21=0 bl_mode=0
+ half_scaled: 1x1 pitch=0 pitch_c=0 trans=0  luma@0/0 chroma@0/0  block_height=0 tiled16=0 mem_mode=0 nv21=0 bl_mode=0
+ sps:
+  s->sps_data.profile_idc                      100
+  s->sps_data.level_idc                        32
+  s->sps_data.chroma_format_idc                1
+  s->sps_data.pic_order_cnt_type               2
+  s->sps_data.log2_max_frame_num_minus4        4
+  s->sps_data.log2_max_pic_order_cnt_lsb_minus4 4
+  s->sps_data.frame_mbs_only                   1
+ pps:
+  s->pps_data.pic_param_set_id                 0
+  s->pps_data.entropy_coding_mode_flag         1
+  s->pps_data.num_ref_idx_l0_active_minus1     0
+  s->pps_data.pic_init_qp_minus26              0
+  s->pps_data.chroma_qp_index_offset           0
+  s->pps_data.deblocking_filter_control_present_flag 1
+  s->pps_data.transform_8x8_mode_flag          1
+  s->pps_data.constrained_intra_pred_flag      0
+ rate_control:
+  rc->hrd_type                                 1
+  QP[P,B,I]=24,28,24  minQP=0,0,0  maxQP=51,51,51  maxQPD=6 baseQPD=3
+  rhopbi=0,0,0
+  rc->framerate                                7680
+  rc->buffersize                               5000000
+  rc->nal_cpb_size                             0
+  rc->nal_bitrate                              0
+  rc->vcl_cpb_size                             5000000
+  rc->vcl_bitrate                              5000000
+  rc->gop_length                               0xf
+  rc->Np                                       14
+  rc->Bmin                                     277
+  rc->Ravg                                     0
+  rc->R                                        46
+  rc->ab_alpha                                 0
+  rc->ab_beta                                  0
+  rc->aqMode                                   0
+  rc->single_frame_VBV                         0
+  rc->two_pass_rc                              1
+  rc->rc_class                                 0
+ pic_control:
+  pc->pic_struct                               0
+  pc->pic_type                                 0
+  pc->ref_pic_flag                             1
+  pc->slice_mode                               0
+  pc->codec                                    0
+  pc->frame_num                                2
+  pc->pic_order_cnt_lsb                        4
+  pc->idr_pic_id                               0
+  pc->max_slice_size                           3600
+  pc->max_byte_count_before_resid_zero         0
+  pc->num_forced_slices_minus1                 0
+  pc->num_me_controls_minus1                   0
+  pc->num_md_controls_minus1                   0
+  pc->num_q_controls_minus1                    0
+  pc->slice_control_offset                     0x300
+  pc->me_control_offset                        0x600
+  pc->md_control_offset                        0x400
+  pc->q_control_offset                         0x500
+  pc->hist_buf_size                            706560
+  pc->bitstream_buf_size                       1382400
+  pc->bitstream_start_pos                      0
+  pc->e4byteStartCode                          1
+  pc->qpfifo                                   0
+  pc->intraRefreshCount                        0
+  pc->mpec_threshold                           0
+  pc->slice_stat_offset                        0x80
+  pc->mpec_stat_offset                         0x1000b0
+  pc->wp_control_offset                        0
+  pc->bit_depth_minus_8                        0
+  pc->enable_source_image_padding              0
+  pc->aq_stat_offset                           0
+  pc->act_stat_offset                          0
+  pc->stats_fifo_offset                        0
+  s->gpTimer_timeout_val                       0
+ slice_control[1] @ 0x300:
+    num_mb=3600 qp_avr=24 qp_min=1 qp_max=51 force_intra=0 deblock_idc=0 cabac_init=0 me/md/q idx=0/0/0
+    0000: 10 0e c0 00 00 00 00 00 00 01 33 00 00 00 00 00
+    0010: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0020: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0030: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0040: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0050: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0060: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0070: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ me_control[1] @ 0x600:
+    0000: 26 40 07 00 01 40 00 08 ff 1f ff 07 00 00 90 28
+    0010: 00 00 00 00 00 00 80 a4 00 00 00 00 00 00 00 00
+    0020: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 0c 0c
+    0030: 00 00 00 00 03 00 00 00 00 00 1c 1c 1c 00 00 00
+    0040: 00 00 00 00 00 00 3e 3e 3e 00 00 00 00 00 00 00
+    0050: 00 08 3e 7f 3e 08 00 00 00 00 00 00 89 1c 1c 7f
+    0060: 1c 1c 08 81 00 00 00 00 00 00 00 00 00 00 00 00
+    0070: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0080: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0090: 6e 04 fe 07 49 56 00 06 00 00 88 46 00 00 00 00
+    00a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ md_control[1] @ 0x400:
+    intra4x4=0 intra8x8=0x1ff intra16x16=0xf chroma=0xf l0_16x16=1
+    0000: 00 00 00 00 00 fe ff 03 7f 0f 0f 08 00 00 00 00
+    0010: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0020: 00 00 00 00 18 00 04 00 00 00 00 00 00 00 00 00
+    0030: 00 00 00 00 00 00 ea 9c 00 00 8b 08 11 00 00 00
+    0040: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0050: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0060: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0070: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ quant_control[1] @ 0x500:
+    0000: 6b 05 ff aa aa ff 0f 00 04 06 07 00 00 00 00 00
+    0010: ff 03 6e 03 34 03 aa 02 6e 03 34 03 aa 02 00 02
+    0020: 34 03 aa 02 00 02 9a 01 aa 02 00 02 9a 01 9a 01
+    0030: aa 02 4a 02 22 02 c8 01 4a 02 22 02 c8 01 56 01
+    0040: 22 02 c8 01 56 01 24 01 c8 01 56 01 24 01 12 01
+    0050: aa 02 56 01 aa 02 aa 02 aa 02 aa 02 aa 02 aa 02
+    0060: aa 02 aa 02 aa 02 aa 02 aa 02 aa 02 aa 02 aa 02
+    0070: aa 02 aa 02 56 01 56 01 56 01 56 01 56 01 56 01
+    0080: 56 01 56 01 56 01 56 01 56 01 56 01 56 01 56 01
+    0090: 56 01 56 01 00 00 00 00 00 00 00 00 00 00 00 00
+    00a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ raw header:
+    0000: 06 00 b7 d0 ff 04 cf 02 00 05 00 05 00 00 00 00
+    0010: 00 00 00 00 00 00 00 00 10 0e 00 00 00 00 00 00
+    0020: 80 00 00 00 ff 04 cf 02 00 05 00 05 00 00 00 00
+    0030: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0040: 02 00 00 00 ff 04 cf 02 00 05 00 05 00 00 00 00
+    0050: 00 00 00 00 00 00 00 00 10 0e 00 00 00 00 00 00
+    0060: 80 00 00 00 64 20 49 14 00 01 00 00 c0 00 00 00
+    0070: 01 18 1c 18 00 00 00 33 33 33 06 03 00 00 00 00
+    0080: 00 00 00 00 00 00 00 00 00 1e 00 00 40 4b 4c 00
+    0090: 00 00 00 00 00 00 00 00 40 4b 4c 00 40 4b 4c 00
+    00a0: 0f 00 00 00 0e 00 00 00 15 01 00 00 00 00 00 00
+    00b0: 2e 00 00 00 00 00 00 00 00 00 01 00 00 02 01 00
+    00c0: 00 00 00 00 00 00 00 00 00 fe fe fe fe fe fe fe
+    00d0: fe fe fe fe fe fe fe fe 01 ff ff ff ff ff ff ff
+    00e0: ff ff ff ff ff ff ff ff 00 01 ff ff ff ff ff ff
+    00f0: ff ff ff ff ff ff ff ff 00 01 ff ff ff ff ff ff
+    0100: ff ff ff ff ff ff ff ff 00 01 ff ff ff ff ff ff
+    0110: ff ff ff ff ff ff ff ff 00 01 ff ff ff ff ff ff
+    0120: ff ff ff ff ff ff ff ff 00 01 ff ff ff ff ff ff
+    0130: ff ff ff ff ff ff ff ff 00 01 ff ff ff ff ff ff
+    0140: ff ff ff ff ff ff ff ff 00 01 ff ff ff ff ff ff
+    0150: ff ff ff ff ff ff ff ff 00 01 ff ff ff ff ff ff
+    0160: ff ff ff ff ff ff ff ff 00 00 00 00 00 00 00 00
+    0170: 10 0e 00 00 00 00 00 00 00 00 00 00 02 00 04 00
+    0180: 00 00 00 00 00 00 00 00 00 00 00 00 00 03 00 00
+    0190: 00 06 00 00 00 04 00 00 00 05 00 00 00 c8 0a 00
+    01a0: 00 18 15 00 00 00 00 00 90 00 00 00 00 00 08 00
+    01b0: 00 00 00 00 80 00 00 00 b0 00 10 00 00 00 00 00
+    01c0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    01d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    01e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    01f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00

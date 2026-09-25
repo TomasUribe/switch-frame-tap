@@ -20,6 +20,8 @@
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_nv.hpp"
 #include <cstdio>
+#include <cstring>
+#include <atomic>
 
 namespace ams::mitm::applet {
 
@@ -99,6 +101,55 @@ namespace ams::mitm::applet {
         alignas(os::ThreadStackAlignment) constinit u8 g_clk_stack[16_KB];
         constinit os::ThreadType g_clk_thread;
         constinit bool g_keep_holding = false;
+        constinit std::atomic<bool> g_watch_stop{false};
+
+        const char *EngineName(u32 pcv_module) {
+            for (const auto &e : SurveyEngines) { if (e.pcv_module == pcv_module) { return e.name; } }
+            return "?";
+        }
+
+        /* Which mm:u candidates drive which engine. 7 is NVJPG in every
+         * source; 5 and 6 are NVENC/NVDEC in some order (M76). */
+        bool MmDrives(size_t i, u32 pcv_module) {
+            const u32 id = MmCandidates[i].id;
+            if (pcv_module == PcvModule_NVJPG) { return id == 7; }
+            if (pcv_module == PcvModule_NVENC || pcv_module == PcvModule_NVDEC) { return id == 5 || id == 6; }
+            return false;
+        }
+
+        /* M77: the clock watch. M76 Run B saw NVJPG (and VIC with it - they
+         * share a bus, per Run A's release) fall to their idle rates somewhere
+         * in a ten-second gap that held a node survey (open+close of every
+         * engine node, NVJPG's included), a VIC channel open and nothing
+         * else. Sampling every 200 ms and logging only on change pins the
+         * drop to one of those, or shows it is a timer. */
+        void WatchClocks() {
+            Service clk = {};
+            if (R_FAILED(smGetService(std::addressof(clk), "clkrst"))) {
+                LogLine("   clk-watch: clkrst unavailable - not watching");
+                return;
+            }
+            static constexpr u32 Mods[3] = { PcvModule_NVJPG, PcvModule_VIC, PcvModule_NVDEC };
+            u32 last[3] = { ~0u, ~0u, ~0u };
+            const u64 t0 = armTicksToNs(armGetSystemTick());
+            constexpr u64 LimitNs = UINT64_C(45) * 1000000000;
+            LogLine("   clk-watch: sampling NVJPG/VIC/NVDEC every 200 ms, logging changes only");
+            while (!g_watch_stop.load() && armTicksToNs(armGetSystemTick()) - t0 < LimitNs) {
+                u32 cur[3];
+                for (u32 k = 0; k < 3; ++k) {
+                    if (R_FAILED(ClkrstRate(std::addressof(clk), Mods[k], std::addressof(cur[k])))) { cur[k] = ~0u - 1; }
+                }
+                if (cur[0] != last[0] || cur[1] != last[1] || cur[2] != last[2]) {
+                    LogLine("   clk-watch  NVJPG=%u.%01u  VIC=%u.%01u  NVDEC=%u.%01u MHz",
+                            cur[0] / 1000000, (cur[0] / 100000) % 10, cur[1] / 1000000, (cur[1] / 100000) % 10,
+                            cur[2] / 1000000, (cur[2] / 100000) % 10);
+                    std::memcpy(last, cur, sizeof(last));
+                }
+                os::SleepThread(TimeSpan::FromMilliSeconds(200));
+            }
+            serviceClose(std::addressof(clk));
+            LogLine("   clk-watch: stopped (%s)", g_watch_stop.load() ? "engine probe finished" : "45 s limit");
+        }
 
         void ClockThread(void *) {
             /* The engine probes fire at system uptime >= wait. Survey ~10 s
@@ -135,10 +186,13 @@ namespace ams::mitm::applet {
                 }
                 os::SleepThread(TimeSpan::FromMilliSeconds(500));
                 ClockSurvey("released");
+                LogLine("---- M76 CLOCK SURVEY done ----");
             } else {
                 LogLine("   clk: holding for the engine probes armed in this run");
+                LogLine("---- M76 CLOCK SURVEY done ----");
+                LogMark("clk:watch");
+                WatchClocks();
             }
-            LogLine("---- M76 CLOCK SURVEY done ----");
             LogMark("clk:done");
         }
 
@@ -209,6 +263,48 @@ namespace ams::mitm::applet {
         if (!any) { ReleaseLocked(); }
         return any;
     }
+
+    u32 ClockEnsure(u32 pcv_module, const char *who) {
+        const char *name = EngineName(pcv_module);
+        if (!ClocksHoldForEngines(who)) {
+            LogLine("   clk-ensure(%s): no mm:u request could be made", who);
+            return 0;
+        }
+        static const char *const Step[3] = { "re-set max", "set 0, then max", "fresh request" };
+        constexpr u32 Attempts = 6;
+        for (u32 attempt = 0; attempt < Attempts; ++attempt) {
+            const u32 step = attempt < 3 ? attempt : 2;
+            ::Result rc_last = 0;
+            u32 touched = 0;
+            {
+                std::scoped_lock lk(g_clk_lock);
+                for (size_t i = 0; i < NumMm; ++i) {
+                    if (!MmDrives(i, pcv_module)) { continue; }
+                    if (step == 2 || !g_req_ok[i]) {
+                        if (g_req_ok[i]) { static_cast<void>(MmFinalize(g_req_id[i])); g_req_ok[i] = false; }
+                        u32 id = 0;
+                        rc_last = MmInitialize(MmCandidates[i].id, std::addressof(id));
+                        if (R_FAILED(rc_last)) { continue; }
+                        g_req_id[i] = id;
+                        g_req_ok[i] = true;
+                    } else if (step == 1) {
+                        static_cast<void>(MmSetAndWait(g_req_id[i], 0, -1));
+                    }
+                    rc_last = MmSetAndWait(g_req_id[i], MaxRequestHz, -1);
+                    ++touched;
+                }
+            }
+            u32 hz = 0;
+            const bool readable = ClockRateOf(pcv_module, std::addressof(hz));
+            LogLine("   clk-ensure(%s) #%u %-15s: %u request(s), SetAndWait rc=0x%x -> clkrst %s=%u Hz%s",
+                    who, attempt + 1, Step[step], touched, rc_last, name, hz, readable ? "" : " (UNREADABLE)");
+            if (readable && hz != 0) { return hz; }
+            os::SleepThread(TimeSpan::FromMilliSeconds(50 * (attempt + 1)));
+        }
+        return 0;
+    }
+
+    void ClockWatchStop() { g_watch_stop = true; }
 
     void StartClockProbe(bool keep_holding) {
         if (!g_clk_armed) { return; }

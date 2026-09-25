@@ -1,7 +1,11 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 71 hardware test cycles. Current build: **M76**. Run A and Run B done; NVJPG clock decay found.
+`0100000000000C20`. 79 hardware test cycles (through M82 Run H). Current build: **M83** (not yet run).
+
+**Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
+proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
+no console.
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -30,10 +34,33 @@ Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
    `CreateIndirectLayer` → `CreateIndirectProducerEndPoint` →
    `CreateIndirectConsumerEndPoint`, three undocumented ABIs guessed correctly
    by analogy with `viCreateManagedLayer`.
+6. **NVJPG decodes from this process** (M77 Run C, file verified in M78 Run D),
+   once its clock is requested through `mm:u` right before the submit.
+7. **NVENC encodes H.264 from this process** (M80 Run F). grc's own IDR job,
+   replayed from our msenc channel with our buffers, completes in 2.1 ms; the
+   stream decodes on the PC to the input, and the reconstructed picture matches
+   it exactly. `error_status` 2 on every frame is routine (M81 Run G: grc's own
+   frames carry it too) and says nothing about the frame.
+8. **NVENC's constant-QP mode works** (M81 Run G, variant c): RCMODE 0 takes
+   the QP from the setup's I-frame QP, touches no rate-control state, and
+   decodes correctly.
+9. **Real game frames through VIC and NVENC at 60 fps** (M82 Run H): 120/120
+   frames read out of the game, converted by the VIC and encoded, 60.5 fps
+   against the game's 60.0, work 12.7 ms avg of the 16.7 ms budget, 0 errors.
+   The encode was of the wrong pixel order (a layout mismatch, found and fixed
+   in M83 - see below), but the engine path and its speed are proven.
+10. **The VIC's colour matrix is understood** (M82 Run H): an exact model
+   reproduces all 528 measured values; `tools/vic_csc.py`.
+11. **Frames come from the game's memory, not from graphics** (M56-M67): the
+   debug-SVC route (`svcDebugActiveProcess` + `ReadDebugProcessMemory`) reads
+   the presented swapchain slot at ~1.5 GB/s, game running. This is the frame
+   source everything above uses; the graphics routes below stay closed.
 
-## What is blocked, and why — BOTH ROUTES CLOSED
+## What is blocked, and why — BOTH GRAPHICS ROUTES CLOSED
 
-**We can process frames. We cannot legally obtain one.**
+**No graphics API hands a sysmodule another process's frame.** The project gets
+frames from the game's memory through the kernel debug SVCs instead (item 11
+above). These are the routes that do not work:
 
 | route | verdict |
 |---|---|
@@ -87,6 +114,1020 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M83: the first H.264 stream - real frames, real YUV, over USB (built, not yet run) ***
+
+### M82 Run H, read: evidence first
+
+Facts in `RESULT-M82-RUNH.md`. All 13 files verify.
+
+- 11/11 colour probes and 120/120 real-frame encodes completed, 0 errors.
+- The loop ran at 60.5 fps against the game's 60.0.
+- Per frame, the work averaged 12.7 ms (max 26.2 ms): read+flush 7.7, VIC 0.7,
+  NVENC 4.3.
+- IDR frames at QP 20 averaged 344 KB, which is 165 Mbps / 20.6 MB/s at 60 fps.
+- The PC check said the decoded pictures did not match the VIC's planes
+  (Y 9.5 dB).
+
+**1. The mismatch is a block-height disagreement between the VIC and NVENC.**
+*Confidence: high (measured).*
+
+- **PSNR was identical at QP 16, 20 and 24** (9.5 / 9.9 / 11.7 dB). A
+  quantisation problem would move with QP; this is spatial.
+- **Reading the VIC's raw bytes every possible way** and comparing each
+  reading with the decode (`tools/nvframe_check.py --layout 2 --colour
+  passthrough`, output in `logs/m82-runH/recheck-m83.txt`):
+
+| VIC bytes read as | QP 16 | QP 20 | QP 24 | last frame |
+|---|---|---|---|---|
+| block-linear h=1 (16-row blocks) | **47.9** | **45.1** | **42.0** | **44.4** |
+| block-linear h=2 (what the VIC wrote) | 9.5 | 9.5 | 9.5 | 7.9 |
+| h=0, h=3, h=4, pitch | <= 9.5 | <= 9.5 | <= 9.5 | <= 8.2 |
+
+  Chroma agrees: U/V are 45.2 dB at h=1, QP 16. At h=1, PSNR falls with QP
+  exactly as quantisation should.
+- **The VIC's own output is smoothest read at h=2**, as configured. So the VIC
+  wrote 32-row blocks and **NVENC read the same bytes as 16-row blocks**.
+- **grc's `block_height` field value 2 means 16 rows to NVENC.** The VIC's
+  `OutBlkHeight` is log2 GOBs, so M82 wrote 2 (32 rows) believing the two
+  fields shared a unit. grc's chroma allocation, 368 rows (360 rounded to 16),
+  was the clue all along.
+- **M83 fix:** the VIC writes `OutBlkHeight` 1. The planes become luma 720
+  rows and chroma 368.
+- Whether NVENC's field counts GOBs or is log2 of something else is not
+  settled. It does not matter: value 2 is 16 rows, as measured.
+
+**2. `[nf:vic0] changed=0/65536 (untouched)` was a diagnostic bug, not an
+engine fault.** *Confidence: high (code reading).* RunOneJob's
+post-job check always inspected `g_vic_dst_buf`, the VIC's own scratch
+output. nvframe's VIC job wrote into the NVENC arena instead, and
+`nvframe-0-y.bin` holds its real output. M83 gives `JobCtx` an
+`out_is_dst_buf` flag. A caller-owned output is now logged as such and not
+inspected.
+
+**3. The VIC colour matrix, solved.** *Confidence: high for the law (exact
+on every measured value); the designed BT.709 matrix is checked through the
+law, and Run I measures it on the card.*
+
+What each probe showed:
+
+| probe | result |
+|---|---|
+| `none`, `out_k8` (K=256, shift 0), `out_k16_s8` (K=65536, shift 8) | identical pass-through: Y = B, U = R, V = G at gain 1 |
+| K >= 4096 at shift 0 (`out_k12`, `k16`, `k19`, `dense`, `slot_k16`) | saturate at 255 |
+| `out_off` (offsets 256/512/768 alone) | 0 |
+| `out_neg` (row 1 = -65536) | **V** = 0: row 1 is the Cr plane |
+| `m64_bt601` | Y 4, U/V 32: M64's constant, reproduced |
+
+`tools/vic_csc.py` implements the law below. `verify` shows it reproduces all
+528 values (11 probes x 16 patches x 3 planes) with zero error. The second-best
+variant (rounding instead of truncation) misses 5.
+
+```
+inputs  in = (B, G, R)       the card's bytes R,G,B,A, declared A8R8G8B8 (as the game)
+        in10 = in8 << 2
+row i   acc = (sum_j c[i][j] * in10[j]) >> matrix_r_shift  +  c[i][3]
+        out10 = clamp(acc >> 8, 0, 1023);  out8 = out10 >> 2
+rows -> planes (Y, Cr, Cb)
+```
+
+So a coefficient has 8 fraction bits (256 = 1.0), `matrix_r_shift` divides
+the products only, and an offset is in 1/256ths of a 10-bit step.
+
+**What M64-M66 got wrong, all at once:**
+
+- **Scale.** Coefficients were chosen for "shift 8 means /256" on top of the
+  8 fraction bits the hardware already has. 66/129/25 at shift 8 are worth
+  66/65536: about 0, hence the constant.
+- **Offsets.** They were in 8-bit units. 16 needs 16 x 4 x 256 = 16384; M64's
+  4096 is exactly the observed 4.
+- **Order.** Rows were Y, Cb, Cr and columns R, G, B. The hardware, for our
+  declared format, is rows Y, Cr, Cb and columns B, G, R.
+- M66's slot matrix obeys the same law: `slot_k16` saturates like `out_k16`.
+
+**The M83 matrix** (`vic_csc.py design` / `gen` -> `vic_csc_bt709.h`) is
+BT.709 limited range at shift 8, for 16 fraction bits. The law was only
+measured at shifts 0 and 8, and 8 it is. Rows (Y, Cr, Cb) x columns (B, G, R,
+offset):
+
+```
+Y   4064  40254  11966   16896      (16 x 1024 + 512 rounding)
+Cr -2639 -26145  28784  131584      (128 x 1024 + 512)
+Cb 28785 -22189  -6596  131584
+```
+
+Through the law, over the whole RGB cube, it lands within 0.50 steps of the
+float BT.709 conversion (rounding only). Chroma rows sum to zero, so grey
+stays neutral.
+
+**4. `error_status` 2, across Runs F-H.** *Confidence: high that it carries no
+per-frame information for us; low on what it actually is.*
+
+- It was set on every job we ran (1 + 5 + 3 + 120 = 129) and on all 3 of
+  grc's own live frames. That held whatever the rate control (18, 0), HRD,
+  two-pass setting, frame size (0.5 to 385 KB), content or QP.
+- What all of those share: the firmware, grc's setup, and the `0x1100` bits
+  of SET_CONTROL_PARAMS (FORCE_OUT_PIC, GPTIMER_ON). Those are the
+  candidates if anyone ever cares.
+- A job counts as good when:
+  - the engine wrote our picture index back;
+  - `ucode_error_status` is 0;
+  - the bit count is non-zero.
+
+**5. The budget, measured.**
+
+- 12.7 ms of work in a 16.7 ms frame.
+- The biggest item is the 7.7 ms slot read+flush. In handheld only 3.9 of
+  the slot's 8.8 MB are picture (the top-left 1280x720: 6 block-rows x 80 of
+  120 GOB columns, contiguous per block-row). M83 reads just that, so ~3.5 ms
+  is expected.
+- IDR-only at QP 20 is 165 Mbps. That is inside the ~290 Mbps link M70
+  measured, but not by much, and real YUV should shrink it. In Run H the
+  chroma planes carried R and G at full energy; real Cb/Cr carry far less.
+
+**6. Also found and fixed while reading Run H.** `tools/nvenc_replay.py`'s
+`parse_setup` read the pic_control bitfield word at 0xC8. That is the start of
+a reference-list array. The word is at 0x1A8 (offsets from NVIDIA's struct,
+compiled):
+
+| | IDR | P |
+|---|---|---|
+| byte 0xC8 (old read) | 0xFE (pic_type 3, by coincidence) | 0x00 |
+| word 0x1A8 (real) | 0x9C: type 3, ref 1 | 0x90: type 0, **ref 1** |
+
+`ref_pic_flag` was therefore misread for P frames. They are reference frames,
+so grc's reference ping-pong is coherent. That matters for P frames (below).
+
+### What M83 builds
+
+All PC-side, all tested before any hardware run: `bash tools/run_pc_tests.sh`.
+
+**Console (`applet-mitm M83`):**
+
+- **The VIC -> NVENC input is fixed.** `OutBlkHeight` 1, planes 720 / 368
+  rows. The arena is mapped into both channels as in M82.
+- **Real YUV.** Every nvframe / nvstream / nvp VIC job runs the BT.709
+  matrix. The csc sweep gains a 12th probe, `bt709`: the production matrix
+  measured on the card.
+- **Handheld reads only the picture.** After the first full read finds
+  handheld content, later frames read 3.9 MB (6 x 655,360 B) instead of
+  8.8 MB.
+- **nvframe, re-run as the check of the fixes:**
+  - frame 0 at QP 16/20/24 plus the last of a 120-frame loop, as in M82;
+  - new: `nvframe-0-src.bin`, the game's own pixels for the picture's top
+    128 rows, as read, so the PC checks the colour conversion on real content.
+- **nvstream, the stream:** game frame -> VIC -> NVENC IDR -> USB bulk.
+  - **Framing.** Each frame is one SFTR packet: the 32-byte header (version
+    2, flags 2 = H.264, kind = frame number) in its own transfer, then SPS +
+    PPS + the IDR slice, posted asynchronously. Frame N's transfer overlaps
+    frame N+1's capture and encode, which is M67's double-buffering.
+  - **SPS/PPS.** They are built from grc's setup with a VUI (BT.709 limited,
+    60 fps, no reordering) and generated into `nvenc_grc_hdrs.h`. Every
+    frame is self-contained, so the receiver can join anywhere.
+  - **idr_pic_id** alternates 0/1, as H.264 requires of back-to-back IDRs.
+    grc's own IDR setups differ exactly there.
+  - **Per-frame checks.** A bad encode is skipped and counted, not sent.
+    Every 600 frames the NVENC clock is read and re-ensured if it fell
+    below 400 MHz, and a progress line is logged.
+  - **Stopping.** The stream stops cleanly if the host stops reading.
+  - **Arm file.** `nvstream` (3600 frames = 60 s by default, `nvstream=N`),
+    `nvqp=N` (default 20), plus `usb`.
+- **nvp, the P-frame probe:** opt-in, and runs last.
+  - It encodes 1 IDR + 29 P from real frames with grc's own P setup
+    (`nvenc_grc_p.h`, generated from Run E's setup_2). The generator checks
+    that it differs from the IDR setup in exactly the 23 bytes grc's P setups
+    do.
+  - Each P job adds grc's P-only methods (IN/OUT_MEPRED, IN_REF_PIC0) in
+    grc's order.
+  - References and MEPRED buffers ping-pong as grc's do.
+  - Per frame, only frame_num / POC change, as in grc's setups 2, 6, 5.
+  - It saves the GOP and the last frame's VIC picture. The PC decodes the
+    GOP and compares the last P frame with the VIC's picture: the drift test.
+- **Safety guards kept everywhere:**
+  - zero-address refusal;
+  - a fresh msenc channel per probe;
+  - a stalled channel left open, with engine work stopped for the boot;
+  - the clock ensured before the first submit;
+  - every SD write verified by read-back and FNV-1a;
+  - the grc IPC interceptor is never armed.
+
+**PC:**
+
+- **`tools/vic_csc.py`**: the law (`law`), `verify`, `design` (BT.709/601),
+  and `gen`. Its selftest reproduces M64 and checks Run H.
+- **`tools/nvframe_check.py`**:
+  - `--layout` / `--colour`, defaulting to M83's h=1 / BT.709;
+  - a diagnosis of which layout NVENC read, when the decode does not match;
+  - the real-content colour check against `nvframe-0-src.bin`.
+- **`tools/nvp_check.py`**: GOP decode and the drift test.
+- **`tools/raw-recv/raw-view`**:
+  - an H.264 mode through libavcodec, with BT.709 display;
+  - `--record` / `--file` for replay and `--h264` for an elementary stream;
+  - `--headless` for tests, and frame threads by default (`--low-latency`
+    for one thread);
+  - a Makefile. The stale prebuilt binary is removed from git.
+- **`tools/sft_stream_test.py`** packs a stream byte for byte the way the
+  console does, from the console's own SPS/PPS array and real NVENC slices.
+  It replays the stream through raw-view and re-decodes what raw-view wrote.
+  **The whole receive path is tested; only the USB wire is not.**
+- **`tools/sft_tool.py`** summarises a recorded stream (packets, frame-number
+  gaps, sizes, a decode check) and cuts a committable sample; a minute of
+  stream is over a gigabyte.
+- **`tools/run_pc_tests.sh`**: every check above in one command.
+
+### Run I - `vic exec dbg usb csc nvframe nvstream nvp wait=60`, handheld, `raw-view` running on the PC
+
+| reading | meaning |
+|---|---|
+| csc `bt709` probe: "REAL BT709 YUV", worst <= 1 step | the matrix works on hardware as designed |
+| nvframe: layout "(as configured)" h=1, PSNR > 30 dB at every QP, "THE VIC WRITES REAL BT709 YUV" | **the input fix and the colour are confirmed**: real frames encode correctly |
+| nvstream: raw-view shows the game live; the log's fps near 60, `%u presents skipped` small | **the first compressed stream: native 720p over USB 2.0.** Next: P frames for bitrate, then docked 1080p |
+| nvstream fps well under 60 | the log's per-stage averages say where the time goes (read, VIC, NVENC, copy, USB) |
+| raw-view shows lost frames or stalls | the log's `nvstream: stopped:` line and the viewer's counters say which side |
+| nvp: "P FRAMES DECODE, NO DRIFT" | **P frames work**: the next build streams IDR + P (GOP 30-60), roughly a quarter of the bitrate |
+| nvp stalls | P needs more than grc's setup and bindings (buffer sizes, the first MEPRED input); engine work stops, and everything before it already counted |
+
+**Risk:**
+
+- The VIC's block-linear output changes only in height. M82 ran it 121 times.
+- The stream holds the debug attach for about 60 s, which M67 did.
+- USB stream transfers are M67's.
+- The new risk is nvp, the first non-IDR job since M71, and it runs last.
+
+## *** M82: real game frames into NVENC, and the VIC colour matrix measured (Run H: 60 fps, wrong block height, matrix solved) ***
+
+### M81 Run G, read
+
+Facts in `RESULT-M81-RUNG.md`. All 15 files verify: each FNV-1a equals the
+console's `sd(...)` line.
+
+**`error_status` 2 is routine. It does not react to anything we can change.**
+
+- **grc's own frames carry it.** The observer found three of grc's live
+  status blocks. All are P frames (`pic_type` 0) of 18-24 KB at avgQP 13,
+  close to grc's 5 Mbps / 30 fps budget of 20.8 KB a frame, and all three
+  report `error_status` 2 with `ucode_error_status` 0. grc's recordings play
+  back.
+- **Every variant carries it**, and each one removed a candidate cause:
+
+| variant | what it removed | result |
+|---|---|---|
+| a | (Run F again) | 2; byte-identical output to Run F (`nvenc-a-bits.bin` FNV `e869e7fa` both runs) |
+| b | "the frame is too small for the budget": 345,793 B at avgQP 21, QP 8..26, **about 17x over** the per-frame budget | 2 |
+| c | rate control: RCMODE 0, constant QP 24 | 2 |
+| d | HRD verification: setup `hrd_type` 0 | 2; bitstream and RC state byte-identical to a |
+| e | the two-pass flag: setup `two_pass_rc` 0 | 2; bitstream and RC state byte-identical to a |
+
+So M81's leading hypothesis, an HRD overflow verdict, is **refuted**: an
+over-budget frame, an HRD-off job and a job with no rate control at all flag
+the same 2. So are the zeroed-RC-state and the two-pass hypotheses. What all
+of them share with grc's frames is the firmware, grc's setup, and the
+`0x1100` bits of SET_CONTROL_PARAMS (FORCE_OUT_PIC, GPTIMER_ON). Isolating
+one of those buys nothing. **From here on a job counts as good when the
+engine wrote our picture index, `ucode_error_status` is 0 and the bit count
+is non-zero. `error_status` is logged and ignored.**
+
+**Also learned:**
+
+- **Constant QP works.** Variant c took avgQP 24, which is grc's I-frame QP
+  from the setup. It wrote nothing to the RC-process buffer; that is why
+  `nvenc-c-rc.bin` is absent (the module saves the buffer only when something
+  in it is non-zero). This is the mode a stream wants: quality set directly,
+  no rate-control state to carry.
+- **The RC-process state is 242 bytes.** After an IDR under RCMODE 18 it
+  holds:
+  - a 45-entry byte array at +0x58: one QP per macroblock row (720 / 16 =
+    45). Flat stripes give all 8; noise gives 8 ramping to 26 down the frame;
+  - a second 45-entry array at +0x88;
+  - a few counters: +0x54 is the average QP, and +0xf0 is 256 in both.
+
+  That is what a P frame would carry over. Constant QP never needs it.
+- **Two setup bytes changed nothing.** d and e ran without complaint and
+  produced grc's exact output, the first setups differing from grc's since
+  M71.
+- **The engine is fast.** The status appeared 28 us (c) to 2.7 ms (b) after
+  the submit returned, with 60-700 us between the last clock read and the submit returning. Our
+  jobs queue behind grc's on the same engine, which explains most of the
+  spread. A flat 720p IDR frame took about 0.1 ms; the noisy one, under 3 ms.
+- **grc runs no VIC job.** No VIC SETCL anywhere in grc's memory; its YUV
+  input is made elsewhere (the compositor side). So grc cannot teach us the
+  RGB->YUV matrix. M82 measures it directly instead.
+- **Nothing was disturbed.**
+  - Continuous `txn` through the log.
+  - grc's video capture saved.
+  - No crash report.
+  - The brief hitch the user noticed at the Capture button press (~120 s)
+    came 50 s after our last engine job (67.6 s). The log shows presents
+    continuing through it. Saving a clip is grc's own work; nothing of ours
+    was running.
+
+### What M82 builds
+
+Two probes, both in one boot. The arm file is `vic exec dbg csc nvframe
+wait=60`. `exec` is back on: it maps the VIC buffers, which both probes need.
+It also runs the fill and self-blit regression jobs that have completed in
+every VIC run since M13.
+
+**1. `csc`: the VIC colour matrix, measured.** M64 (output matrix) and M66
+(slot matrix) both produced a constant: the offset column landed and every
+coefficient term came out as zero. The field layout is the one Ryujinx and
+NVIDIA's header agree on. What is unknown is the arithmetic: what one
+coefficient unit is worth. So instead of a fourth guess, 11 VIC jobs each
+program one matrix:
+
+- **Input**: a 64x64 card of 16 flat patches. The bytes are R,G,B,A like the
+  game's surface, declared exactly as the game path declares it, so the
+  answer applies to game frames unchanged.
+- **Output**: NV12, pitch.
+- **`tools/vic_csc.py`** fits every output plane as `a*R + b*G + c*B + d`
+  over the patch centres.
+
+| probe | measures |
+|---|---|
+| `none` | the known pass-through (Y = B, U = R, V = G) |
+| `out_k8`, `out_k12`, `out_k16`, `out_k19` | one coefficient per row, K = 2^8 to 2^19-1, shift 0. Which K gives gain 1 is the coefficient unit. Row -> plane and input -> channel fall out too |
+| `out_k16_s8` | whether `matrix_r_shift` divides the products |
+| `out_off` | the offset column's unit |
+| `out_neg` | whether a negative coefficient works (two's complement) |
+| `out_dense` | all nine coefficients distinct: is every field where the struct says? |
+| `slot_k16` | the slot matrix under the same law |
+| `m64_bt601` | M64's exact matrix. It must reproduce M64's constant (Y 4, U/V 32), or the harness is not measuring what M64 did |
+
+The selftest makes a file under a made-up law and recovers it. That law has
+16 fraction bits in the coefficients and offsets in 10-bit units, and under
+it M64's matrix produces exactly the constant M64 saw (4, 32, 32). So "the
+coefficients were 2^16 too small" fits every observation so far. The sweep
+settles it.
+
+**2. `nvframe`: NVENC on real game frames.** Inside the debug capture, with
+the game running:
+
+1. Read the presented 1920x1080 slot out of the game (the M56 route).
+2. Look outside the top-left 1280x720: all zero means handheld, where MK8
+   renders 720p into the corner of the 1080p surface (M37). In that case the
+   VIC copies the corner **1:1**, native resolution. Docked, it scales
+   1920x1080 down to 1280x720.
+3. The VIC writes **NV12 block-linear, 32-row blocks** into an arena that is
+   mapped into both the VIC and the NVENC channels. NVENC's surface config
+   has no pitch mode, and grc's input is GPU block-linear with block height
+   2, so this is the one layout it takes. Both planes round up to whole
+   blocks: luma 736 rows, chroma 384. M81's arena had only 368 chroma rows,
+   which this layout would have overrun.
+4. NVENC encodes it as an IDR frame with grc's setup, **RCMODE 0**, the QP
+   patched into the setup.
+
+Colour stays the VIC's pass-through (Y = B, U = R, V = G). The PC undoes it.
+Fixing it is what `csc` is for.
+
+- **Frame 0** is encoded at QP 16, 20 and 24. Its VIC output and all three
+  encodes are saved.
+- **Then 120 frames run back to back at QP 20**: read, flush, VIC, encode,
+  with no SD or logging in the loop. The module logs, per stage, the average
+  and worst time, the bytes per frame, the achieved fps against the game's
+  own present rate, and the NVENC clock after. The last frame is saved.
+  **This is the first measurement of the whole capture -> encode path at
+  speed.**
+- **Housekeeping for this path:**
+  - The NVENC pushbuffer lives in the arena, not in the VIC's. The VIC's
+    completion is judged on syncpoint 12, which the compositor also advances,
+    so reusing the VIC's pushbuffer for NVENC after a fence that fired early
+    could feed NVENC methods to the VIC.
+  - The arena is zeroed and flushed before any engine writes it, so no dirty
+    cache line can later land on engine output.
+  - The older one-shot `dbg` steps are skipped on an nvframe run: the strip
+    dump and the 120-frame read-only loop.
+- **`tools/nvframe_check.py`**:
+  - deswizzles the VIC planes and scores every block height (0-4) and pitch
+    for smoothness, so a wrong layout shows up as a number;
+  - decodes each encode (behind SPS/PPS built from grc's setup) and computes
+    PSNR per plane against the VIC's own planes. High PSNR means NVENC read
+    the picture the VIC wrote, in the same layout;
+  - writes PNGs of both, colours remapped.
+
+  Its selftest swizzles a test picture into the layout, encodes the planes
+  with x264 in NVENC's place, and requires the right layout to win and the
+  PSNR to pass.
+
+### Run H - `vic exec dbg csc nvframe wait=60`, handheld
+
+Handheld, so the frame is native 720p and the VIC copies it 1:1. Docked also
+works, scaled.
+
+| reading | meaning |
+|---|---|
+| a K where the gain is 1, the offsets' unit known, `m64_bt601` = 4/32/32 | **the colour matrix is solved.** M83 programs BT.601 with that law, checks it on the card, and uses it for real frames |
+| every coefficient probe constant, `m64_bt601` = 4/32/32 | the coefficient path is dead at every scale, not mis-scaled. Colour stays pass-through (the PC remaps it) and the matrix is parked |
+| layout check says h=2, and PSNR against the VIC > 30 dB at all three QPs | **real frames encode.** The loop's timings say whether 720p all-intra keeps up with 60 fps; the sizes say the bitrate. M83 sends it over USB: a compressed native-720p stream |
+| the VIC picture is right but the decode is scrambled (low PSNR) | NVENC reads a different block-linear variant; the setup's `input_bl_mode` / block height are the knobs |
+| the VIC picture is scrambled in every layout | the VIC's block-linear output config is off |
+| an NVENC stall | channel left open, engine work stops for the boot; frame 0's files say how far it got |
+
+**Risk:** the VIC's block-linear output is a new configuration. The
+addresses are all checked, but a VIC that hangs takes the compositor with it
+(see "Hard-won constraints"), and that would mean a forced power-off. The debug
+attach stops the game briefly while the swapchain is found (2 ms in the last
+logged run).
+The loop reads 8.8 MB a frame from the game for ~2 s, which M67 did at 60 fps
+for a minute.
+
+## *** M81: what `error_status` 2 reacts to (Run G: nothing - it is routine) ***
+
+### M80 Run F, read
+
+Facts in `RESULT-M80-RUNF.md`. The three files verify: each FNV-1a equals the
+console's `sd(...)` line.
+
+- **NVENC encoded our frame, correctly.** The job was grc's, submitted from
+  our channel. The fence was reached, and the engine wrote our picture index
+  into our status block 2.1 ms after the submit, with NVENC at 979.2 MHz.
+  - The 516-byte slice decodes, behind an SPS/PPS built from grc's setup, to
+    all 23 stripes at their exact values.
+  - The engine's reconstructed luma matches the input at 0.0 deviation.
+  - This is the first NVENC job this project has seen complete. M68-M71's
+    hand-built jobs never did. What differed is known; which difference
+    mattered is not, and no longer needs to be.
+- **Nothing was disturbed.** No stutter, and `txn` climbed without a gap to
+  the end of the log. grc's own video capture saved afterwards. No crash
+  report, and a normal shutdown.
+- **The whole status block, field by field.** All 128 bytes were written by
+  the engine: the block was poisoned with 0xA5, and none of it survived.
+
+| field | value | reading |
+|---|---|---|
+| `error_status` (2 bits) | **2** | the question |
+| `ucode_error_status` (30 bits) | 0 | the firmware's own error enum (BAD_MAGIC / INVALID_INPUT / ...) says none |
+| `total_bit_count` / `last_valid_byte_offset` | 4128 / 516 | agree with each other and with the slice the PC parsed |
+| `type1_bit_count` | 4096 | |
+| `pic_type` / `num_slices` | 3 / 1 | IDR, as set |
+| `avgQP`, `actual_min/max_qp_used` | 8, 8..8 | grc's setup asks I-QP 24 in 0..51: the rate control chose 8 by itself |
+| `intra_mb_count` / `inter_mb_count` | 3600 / 0 | every MB of 1280x720 |
+| `total_intra_cost` | 2176 | a flat picture is almost free |
+| `total_inter_cost` | 235,926,000 | = 3600 x 65535: every MB's inter cost saturated, as it must be without a reference |
+| `hrdFullness`, `complexity`, `cycle_count` | 0, 0, 0 | `cycle_count` needs DumpCycleCount; the other two are discussed below |
+| ME/perf/SSD/SSIM fields, reserved | 0 | |
+
+### What `error_status` 2 is, and is not
+
+**It is not a failed encode.** The bitstream decodes to the input. The
+reconstruction is exact. The ucode's own error field is 0. The value is not
+left over from before: the whole block was poisoned.
+
+**It is not documented.** NVIDIA's header gives the field two bits and the
+comment "report error if any". Nothing names its values. NVJPG's status struct
+has a field of the same name with the same comment, which does not help.
+
+**The rate control is the only part of this job that passes a verdict.**
+Everything else either ran or did not. grc's setup turns picture-level rate
+control on with VCL HRD:
+
+- `hrd_type` 1, `vcl_cpb_size` 5,000,000 bits, `vcl_bitrate` 5,000,000.
+- `framerate` 7680, which is 30 x 256.
+- `R` 46, which is 5 Mbps / 30 / 3600 MBs = 46.3 bits per macroblock per
+  frame.
+- The header's own comment on the RC struct: picture-level RC "will also
+  perform HRD verification".
+
+Against that budget, our frame is tiny:
+
+- The per-frame budget is 166,667 bits. The frame took 4128, 2.5% of it.
+- In leaky-bucket terms, a frame that small lets the coded-picture buffer
+  gain 162 kbit it cannot drain. That is an HRD *overflow*. A CBR encoder
+  pads it with filler data; a VBR encoder ignores it.
+- A two-bit verdict with values 0 / 1 / 2 would fit none / underflow /
+  overflow.
+
+**That is the leading hypothesis, and only a hypothesis.** Two others fit the
+same facts:
+
+- **Our RC state starts zeroed.** The RC-process buffer is state the engine
+  carries from frame to frame. We zero it; grc's may be seeded by the driver.
+  A zeroed state could itself trip the check. `hrdFullness` 0 and
+  `complexity` 0 would fit either reading.
+- **The flag is routine for this configuration.** It could be set on grc's
+  frames too, which encode correctly as well.
+
+A fourth oddity is noted, not ranked: grc's setup has `two_pass_rc` 1, which
+the header calls "first pass of 2 pass rc". No second pass is ever submitted.
+
+**It does not block anything.** A decoder never sees HRD state, and the
+stream path will not keep grc's rate control anyway:
+
+- grc's settings are 5 Mbps / 30 fps for its recordings.
+- The USB link carries ~290 Mbps (see README), so the stream wants high
+  quality at 60 fps. That will be constant QP or a much larger bitrate, set by
+  us.
+- So the flag matters only if it marks something that breaks the *next*
+  frame, a P frame that reads this frame's RC and history state.
+
+Pinning it down costs one run, and M81 makes that the same run as the next
+useful step.
+
+### What M81 builds
+
+**`nvgrc`: one channel, five independent IDR jobs, one change each.** Before
+every job, all of these are reset:
+
+- the status, RC-process, bitstream and history buffers are zeroed;
+- the reference output is zeroed;
+- grc's setup is copied in fresh;
+- the status block is poisoned.
+
+So every job is a first frame. Each gets its own picture index
+(`0x4D383000` + n), and each is judged, as in M80, by the fence *and* its own
+index being written back.
+
+| variant | change from Run F | tests |
+|---|---|---|
+| **a** | none | is the 2 reproducible? |
+| **b** | input: the same stripes plus noise in [-24, 24], mirrored within each 32-row band so every band keeps its exact mean in any layout | a frame that costs bits: does the verdict move with the frame's size? |
+| **c** | SET_CONTROL_PARAMS `0x00001103`: RCMODE 0 | no rate control at all |
+| **d** | setup `rate_control.hrd_type` 1 -> 0 (byte 0x70) | rate control on, HRD verification off |
+| **e** | setup `rate_control.two_pass_rc` 1 -> 0 (byte 0xBA) | the two-pass flag |
+
+d and e are the only variants that change grc's setup, so they run last.
+M68-M71's hand-built setups stalled, and a stall ends engine work for the
+boot. Both offsets come from `offsetof` on NVIDIA's struct and are
+static-asserted against the offsets nvsetup-dump uses. The build also asserts
+that grc's setup holds 1 at both.
+
+**Per variant, on the SD card:**
+
+- `nvenc-X-status.bin` and `nvenc-X-bits.bin`.
+- `nvenc-X-rc.bin`: the RC-process buffer, up to its last non-zero byte. The
+  offset of that byte is logged. It went in zeroed, so every non-zero word is
+  RC state the engine wrote. If `error_status` is an HRD verdict, the fullness
+  it judged should be in there. For the P frames after this, it is the state
+  that has to carry over.
+- Variant a also writes `nvenc-a-recon-y.bin`.
+- The log line now includes QP min..max and `hrdFullness`.
+- A bitstream over 1 MB, the stage buffer's limit, is saved truncated, and
+  the log says so.
+
+**The grc observer (`grcscan`) now looks for three more things, and runs
+first.** It touches no engine. Running it before our jobs means it sees grc
+before anything of ours has shared NVENC with grc.
+
+- **grc's own status blocks.** grc has to read its status blocks to know
+  each frame's size, so they are in its memory. The signature is strict:
+  - intra + inter MBs = 3600;
+  - `pic_type` 0-3 and 1-64 slices;
+  - a non-zero bit count that fits the bitstream buffer;
+  - a `last_valid_byte_offset` that fits too.
+
+  Every match gets a NOTE (up to 32), and the log adds a histogram of
+  `error_status` 0/1/2/3 and a count of non-zero ucode errors. If grc's
+  frames carry 2 as well, the flag is routine for this configuration.
+- **grc's VIC jobs.** A VIC SETCL (class 0x5D) now also counts when it is
+  followed by the THI 0x0B write. Up to 4 windows of 1 KB are dumped, and
+  `nvrec.py` names the VIC 4.0 methods. This is the next step's question.
+  Real frames reach NVENC as NV12, and our VIC's RGB->YUV conversion is still
+  wrong (the packed-4:2:0 stream carries B/R/G, not Y/U/V). If grc converts
+  with the VIC, its config struct shows how.
+- **The SETCL rule is fixed.** M78's rule wanted register 0x10 after SETCL.
+  grc writes THI 0x0B there (Run E), so grc's NVENC SETCLs now count too.
+
+**PC side:**
+
+- `nvenc_replay.py check` reads whichever set is on the card: the M80 names,
+  or `nvenc-a-*` to `nvenc-e-*`. For each variant it:
+  - prints the status with QP range and `hrdFullness`;
+  - lists the NAL units, decodes, and checks the bands;
+  - writes `nvenc-X-decoded.png`;
+  - lists the non-zero words of `nvenc-X-rc.bin`.
+- The check ran on Run F's files (same result as in Run F) and on a
+  synthetic a-e set. That set used x264 encodes of the flat and the noisy
+  input, generated with the console's exact noise sequence, and all five
+  variants decoded to the stripes.
+- `nvrec.py` reproduces Run E's decode exactly: only output paths differ,
+  and the setups are byte-identical.
+
+### Run G - `vic nvgrc grcscan wait=60`
+
+In a race, as before.
+
+| reading | meaning |
+|---|---|
+| a = 2 | reproducible; the rest of the table applies |
+| a = 0 | Run F's 2 was not a property of the job; look at what differed (grc's recording state, timing) |
+| c = 0 and d = 0 | **the HRD check sets it.** b says which way: if b's bigger frame clears it or turns it into another value, it is an overflow / underflow verdict. Harmless for a stream; the stream sets its own RC |
+| c = 0, d = 2 | rate control sets it, but not through `hrd_type`; the RC dump and e narrow it |
+| c = 2 | not rate control; e and grc's histogram are what is left |
+| e = 0, others 2 | the two-pass flag |
+| grc's histogram mostly 2 | routine for grc's configuration, whatever it means |
+| d or e stalls | that setup byte is load-bearing. Engine work stops for the boot, a to c still count, and the observer has already run |
+| the observer finds VIC SETCLs | the next build reads grc's VIC config for the RGB->YUV setup |
+
+**Risk:** five jobs instead of one. a to c change nothing in grc's setup that
+Run F did not already run. d and e each change one byte, which is the first
+time since M71 that a setup differs from grc's. The observer's risk is Run D
+and Run E's (both clean).
+
+## *** M80: grc's IDR job, replayed from our own channel (Run F: encoded correctly, with error_status 2) ***
+
+### M79 Run E, read
+
+Facts in `RESULT-M79-RUNE.md`. `grc-scan.bin` verified here too: its FNV-1a
+equals the console's `sd(...)` line (`796a134f`).
+
+- **The command buffers are a ring inside grc's own data.** All 326
+  `SET_IN_DRV_PIC_SETUP` writes sit in one 32 KB region
+  (`0x62a37cd000+0x8000`, state 0x4). A P job is 0xC8 bytes (50 words); the
+  IDR job is 0xA4 (41 words), which is exactly the three method writes it
+  leaves out. 70 jobs were decoded across the eight dumps (four windows,
+  each dumped twice).
+- **Every job has the same shape**, and there is a SETCL after all. M78's
+  SETCL rule wanted the next word to write register 0x10, but grc's next word
+  writes THI register 0x0B, so the rule was too strict. The method-write search
+  found the jobs anyway:
+
+```
+SETCL 0x21 ; INCR THI 0x0B = 0
+SET_CONTROL_PARAMS   0x12001103   H.264, FORCE_OUT_PIC, GPTIMER_ON, RCMODE 18
+SET_PICTURE_INDEX    n
+SET_APPLICATION_ID   1
+SET_IN_DRV_PIC_SETUP / SET_OUT_ENC_STATUS / SET_IO_RC_PROCESS / SET_OUT_BITSTREAM /
+SET_IOHISTORY / SET_IN_CUR_PIC / SET_IN_CUR_PIC_CHROMA_U / SET_OUT_REF_PIC_LUMA
+[P frames only: SET_IN_MEPRED_DATA / SET_OUT_MEPRED_DATA / SET_IN_REF_PIC0_LUMA]
+EXECUTE 0x100 ; INCR_SYNCPT OP_DONE, syncpoint 14
+```
+
+- **The IDR job binds no ME or reference inputs.** Among the 70 jobs, the
+  one with picture index 660 (= 44 x 15, and grc's GOP is 15) goes from
+  `SET_OUT_REF_PIC_LUMA` straight to `EXECUTE`. Every P job around it binds
+  all three.
+- **Buffers:**
+  - Setup, status and bitstream alternate between two sets (ping-pong).
+  - The reference and ME buffers ping-pong as well.
+  - The input picture rotates.
+  - RC-process and IO-history are one shared buffer each.
+  - From the IOVA spacing: bitstream 0x160000, history 0xC0000, input luma
+    1280x736 then chroma (so it is 32-row aligned, which matches the setup's
+    `block_height` 2).
+- **SET_CONTROL_PARAMS was M71's biggest gap.** M71 sent only the codec bits
+  (`3`). grc also sets FORCE_OUT_PIC, GPTIMER_ON and RCMODE 18, and binds
+  IO_RC_PROCESS, which M71 never did.
+- **The IDR setups** (slots 3, 8, 9) agree with each other except for
+  `idr_pic_id`. Against the P setups, 24 bytes differ: picture type,
+  reference-list entries, frame_num / POC, and the inter-mode enables in the
+  MD control.
+- **The two "implausible" setups** (setup_0, setup_1) are the heap objects
+  seen in Run D. They are ignored.
+- **grc was not disturbed.** The observer stayed attached 382 ms, drained 0
+  debug events, and a video capture afterwards saved fine. It skipped 3
+  regions over 8 MB (86 MB of frame and bitstream storage).
+
+### What M80 builds: `nvgrc`
+
+One IDR frame, submitted from our own msenc channel. It is the job grc
+submits, with our buffers:
+
+- **The setup is grc's**, byte for byte: `setup_8.bin`, IDR, frame_num 0,
+  idr_pic_id 0. `tools/nvenc_replay.py gen` generates `nvenc_grc_idr.h` from
+  it and checks its fields first. The setup holds no addresses; every surface
+  is bound by a method.
+- **The command buffer is grc's IDR job**, word for word: SETCL, the THI 0x0B
+  write, `0x12001103`, the twelve methods in grc's order, EXECUTE, and an
+  OP_DONE increment.
+- **Buffers mirror grc's sizes** in one 5.1 MB cached nvmap arena, flushed
+  before the submit and after completion. The RC-process and history buffers
+  start zeroed, which is what grc's must look like before its first frame.
+- **The input is 32-row luma stripes** (32 + 8k) on neutral chroma. A 32-row
+  band is one contiguous byte range both in pitch-linear and in grc's 32-row
+  block-linear input, so no swizzle is needed, and every stage can be checked
+  band by band.
+- **The clock:** ClockEnsure on NVENC, then a final read immediately before
+  the submit, as for jpgdec.
+- **Completion is judged by the status buffer.** Our channel gets syncpoint 14,
+  the same one grc's jobs increment (as ours shares 12 with the compositor on
+  the VIC), so a grc job can advance the fence. The job carries its own
+  picture index (`0x4D383000`) and counts as done only when the engine has
+  written that index into our poisoned status block.
+- **On completion:** the status fields are logged, the bitstream's first bytes
+  and the reconstructed luma's stripe means are checked on the console, and
+  `nvenc-status.bin`, `nvenc-bits.bin` and `nvenc-recon-y.bin` are written
+  through `WriteEngineOutputToSd`. On a stall the channel is left open and
+  engine work stops for the boot, as for jpgdec.
+- **`tools/nvenc_replay.py check`** prints the status and lists the NAL units.
+  NVENC writes slices; grc writes SPS/PPS itself, so if the stream has none,
+  the tool builds them from grc's setup. It then decodes with PyAV and
+  compares each stripe with the input. Its `selftest` proves the SPS/PPS
+  writer: it rewrites libx264's headers byte for byte from parsed fields, and
+  decodes an x264 encode of the same stripes to the exact band values. The
+  full check path ran on a synthetic output directory.
+- `stage-buffer` users now also check that the heap actually reaches the stage
+  buffer. `armfile_test` gains the case that matters here: `nvgrc` must never
+  arm the `grc` interceptor.
+
+### Run F - `vic nvgrc wait=60`
+
+In a race, as before; grc keeps running its own encodes alongside ours.
+
+| reading | meaning |
+|---|---|
+| status WRITTEN, error 0, bits > 0, stripes match on the console, and `check` decodes to the stripes | **NVENC encodes from this process.** The encoder door is open; M81 feeds it real frames (game -> VIC -> NV12 -> NVENC -> USB) |
+| status written with a non-zero `error_status` / `ucode_error_status` | the engine ran our job and rejected something; the ucode error names what (the NVC5B7 error enum) |
+| status not written in 1 s | treated as a stall: channel left open, no more engine work this boot |
+| submit rejected | nothing reached the engine |
+
+**Risk:** our job shares NVENC with grc's. M68-M71's NVENC stalls never
+stopped the game from presenting; the compositor wedges (M73/M74) were NVJPG
+and happened at channel teardown, which a stall here does not do. A stall could
+still break grc's recording for that boot.
+
+## *** M79: grc's live encoder config is in hand - now its command buffer and an intra frame (Run E: both captured) ***
+
+### M78 Run D, read
+
+Facts in `RESULT-M78-RUND.md`. Verified here as well: the decode file's
+FNV-1a equals the console's `sd(...)` line (`3c391345`), and the check tool
+reports diff 0, so NVJPG's output matches libjpeg's to the byte for this
+image. `grc-scan.bin` matches too (`60525240`).
+
+The observer attached to grc (pid 138), resumed it, scanned 98,356 KB across
+52 regions, and **stopped at the 96 MB cap**. It found five NVENC 5.0 magics
+and **no NVENC SETCL at all**.
+
+- **Three of the five are grc's live per-frame setups.** Each sits at the
+  start of its own 12 KB region (`0x55c7959000`, `...c000`, `...f000`, state
+  0xd). They differ in exactly two fields, `frame_num` and
+  `pic_order_cnt_lsb` (1/2, 2/4, 2/4), so they look like a ring of setups for
+  consecutive frames.
+- The other two are in a 532 KB heap region: the magic followed by
+  pointer-like words. Some other grc object, not a setup.
+- **This is the configuration NVENC accepts on this firmware**, decoded with
+  NVIDIA's header:
+
+| field | grc | M71 (ours) |
+|---|---|---|
+| magic | 0xd0b70006 (NVENC 5.0) | same |
+| size / input | 1280x720, pitch 1280, block_height 2 | 256x128, pitch-linear |
+| ref / output pictures | tiled 16x16, chroma at +0xE10 x 256 B | tiled, separate chroma |
+| profile / level | High (100) / 3.2, CABAC, 8x8 transform | Baseline (66) / 4.2, CAVLC |
+| GOP | 15, P frames, 1 reference, POC type 2 | infinite, every frame IDR |
+| rate control | hrd_type 1, 5 Mbps, VBV 5 Mb, QP 24/28/24, two_pass_rc | hrd_type 2, constant QP 26 |
+| framerate | 7680 = 30 << 8 (8.8 fixed point) | 60 (i.e. 0.23 fps) |
+| rhopbi | 0,0,0 | 256,256,256 |
+| max_slice_size, e4byteStartCode | 3600, 1 | 256 KB, 0 |
+| ME / MD / quant controls | fully populated | ME: one field set; MD: intra modes only; quant: zeroed |
+| hist / bitstream buffers | 706,560 / 1,382,400 B | 64 KB / 256 KB |
+
+  Any of those differences could have kept M68-M71's job from completing.
+  None has to be guessed any more: the replay starts from grc's bytes.
+- **The command buffer is still missing.** No NVENC SETCL turned up in
+  96 MB. The likely reason is the one oss-nvjpg already shows: on Horizon
+  userspace does not send SETCL, and nvservices sets the class. M78's search
+  keyed on SETCL, so it could not have found grc's command buffers, and the
+  cap may have kept it out of the right regions anyway. The command buffer
+  holds what the setup does not: the `SET_CONTROL_PARAMS` value, and which
+  surfaces grc binds (rate-control data, IO history, status, reference
+  pictures).
+- **Every setup caught was a P frame.** The first job to replay should be an
+  intra frame, which references nothing.
+
+### What M79 builds
+
+- **Command buffers found by what they do.** A hit is a method-offset write
+  (INCR, NONINCR or MASK to register 0x10, or the IMM form) whose method is
+  `SET_IN_DRV_PIC_SETUP` (0x710 >> 2). Each gets a 2 KB window starting
+  0x200 before the hit; at most two per region and twelve in all.
+- **No blind spots from the cap.** Every readable region up to 8 MB is
+  scanned in full, with an overall cap of 256 MB. Larger regions (frame and
+  bitstream storage) are skipped, and each is recorded as a note.
+- **The setup ring is watched for up to 3 s** after the scan, with grc
+  running. Each new (slot, frame_num, pic_type) is dumped. Intra frames
+  (pic_type 2 or 3) are always kept, P frames at most three. The first time
+  an intra frame appears, the command-buffer windows are dumped again at that
+  moment. Each pass drains any debug event, so grc is never left halted.
+- `tools/nvrec.py`: observer CMDBUF records carry the hit offset. The words
+  before it are printed raw (the window may start mid-command) and decoding
+  starts at the hit. The class shows as `?` when no SETCL was seen.
+  Round-tripped on the host with a synthetic file; M78's file still decodes.
+
+### Run E - `vic grcscan wait=60`
+
+No engine probe, and no clock requests: this run only reads grc.
+
+| reading | next |
+|---|---|
+| SET_IN_DRV_PIC_SETUP writes decoded, plus an intra setup | **M80 replays grc's intra frame**: its setup bytes and its method list, in our own NVENC job at 1280x720, from a VIC-made NV12 input, over the submit path jpgdec proved, with ClockEnsure on NVENC first |
+| writes decoded, no intra frame | M80 can still start from a P setup rewritten to IDR (pic_type 3, frame_num 0, POC 0). Less faithful |
+| no writes found | the command buffers are in a skipped (> 8 MB) region or use an encoding this search misses; the skipped-region notes say where to look next |
+
+**Risk:** the attach lasts up to ~3 s instead of under 1 s. grc keeps running
+the whole time. In Run D, a video capture right after a sub-second attach
+saved and played back fine.
+
+## *** M78: the dump that could not have worked, and grc's encoder job read out (Run D: both files verified, grc's setups captured) ***
+
+### M77 Run C: this process drove a non-VIC engine for the first time
+
+Facts in `RESULT-M77-RUNC.md` and `logs/m77-runC-applet-mitm.log`. The line
+that matters:
+
+```
+[63.377] jpgdec: submit rc=0x0 nverr=0 fence 1/1 REACHED after 314 us | NVJPG 422400000 Hz read 163 us before
+         submit returned, 422400000 Hz after | status used=292 mcu=0x0 result=0 | 16384/16384 output bytes written
+[63.496] jpgdec: worst 8x8 block-mean deviation 0 (block 0) -> *** NVJPG RAN AND DECODED CORRECTLY ***
+```
+
+- **The first completed non-VIC job since M68.** The config was known-good,
+  the clock was confirmed at the submit, and the output matched libjpeg's
+  decode, block for block. Sampled pixels are within 1 count of the source
+  image, with byte order R, G, B, A.
+- **So our submit path is sound.** Channel, nvmap fd, MAP_CMD_BUFFER pins,
+  SETCL, method writes, OP_DONE syncpoint, and the aruid adopted from the game
+  all work for an engine other than the VIC. What M73/M74 lacked was the clock
+  (M76), plus the right method offsets (also M76).
+- **For NVENC that settles the order of work.** Run A showed its clock was
+  running all along, and our submit path is now proven, so what remains for
+  NVENC is its job configuration. The best source for that is grc's own job.
+- No freeze, no stutter, and `txn` climbed without a gap to 38,357 at 363 s.
+
+What the clock watch showed:
+
+```
+53.976  held+2s    NVJPG=652.8  VIC=652.8  NVDEC=979.2
+59.382  clk-watch  NVDEC 979.2 -> 0.0            <- nothing of ours was running
+60.718  node /dev/nvhost-nvjpg opened and closed (node survey)
+60.807  clk-watch  NVJPG, VIC 652.8 -> 422.4     <- the next sample after it
+62.986  clk-ensure #1 re-set max -> 422.4 MHz    (not 652.8)
+```
+
+- NVJPG's raised rate fell within one sample (89 ms) of the node survey
+  closing an NVJPG channel. With Run B that is two runs consistent with
+  "closing an engine channel resets its clock", now with the timing to back it.
+  It is still an inference, not a documented behaviour.
+- NVDEC fell on its own, 1.3 s before anything of ours touched a device, so
+  something outside this module also moves these clocks. Any long-lived engine
+  user should re-check its clock rather than trust a request.
+- Re-issuing `SetAndWait(max)` did not restore 652.8 MHz. It left NVJPG at the
+  domain's 422.4, which was enough to run. ClockEnsure stops at any non-zero
+  rate by design. For an encoder where throughput matters, the next change is
+  to escalate until the rate reaches the requested maximum. Not needed yet.
+- Unlike Runs A and B, NVJPG (422.4) and NVDEC (460.8) were non-zero *before*
+  any request, matching their domains' base rates. clkrst appears to report 0
+  while a module's clock is disabled and the domain rate while it is enabled.
+  Why they started enabled in this boot is unknown.
+
+### The `.rgba` file was never the engine's output, and it could not have been
+
+The local session traced it: the file held recycled FAT clusters (a line of
+this run's own log, Mario Kart asset names). The cause is in the kernel.
+`jpgdec` passed `fs::WriteFile` the **uncached** engine buffer. Mesosphere's
+IPC buffer setup (`kern_k_page_table_base.cpp`, the `test_attr_mask` for
+Ipc, NonSecureIpc and NonDeviceIpc alike) refuses any buffer with the
+`Uncached` attribute. `CreateFile` had already allocated the clusters, so a
+16 KB file existed and nothing said the write had failed, because its Result
+was discarded.
+
+This project learned exactly this in M41/M42, and the strip-dump code says
+so in a comment. M76 wrote the jpgdec dump without it; that was my bug. The
+M73 JPEG-encode dump had the same flaw and has never run with a working engine.
+
+**Fix:** `WriteSdVerified` / `WriteEngineOutputToSd`. Engine output is copied
+into the cached stage buffer first. Every fs Result is checked and logged. The
+file is read back and compared byte for byte, with one retry. The log line
+carries the FNV-1a of what was written, and `tools/nvjpg_dec_control.py check`
+prints the FNV-1a of the file it was given. Equal hashes mean the file is what
+the console wrote. Both dumps use the new path. The hash was checked against
+standard test vectors in C++ and Python.
+
+### The next step: read grc's NVENC job out, read-only
+
+The M75 observer attaches to grc, resumes it at once, scans its memory for an
+NVENC setup magic or an NVENC SETCL, and detaches. It touches no channel and
+submits nothing. It has never actually run: M75's own run was hijacked by the
+parser bug. M78 makes one run of it count:
+
+- **Every hit is dumped, not just located.** 4 KB from each setup magic and
+  1 KB of command words from each NVENC SETCL, read while still attached, go
+  into `sdmc:/grc-scan.bin` as records in the M72 recorder's format. A note
+  record before each gives the full address and its memory region.
+  `tools/nvrec.py` names every method in the command buffers, and
+  `tools/nvsetup-dump` decodes each setup with NVIDIA's header. Round-tripped
+  on the host with a synthetic record file.
+- **Fewer false positives.** A SETCL now counts only when the next word
+  writes the method-offset register (INCR, NONINCR or MASK to 0x10). M75
+  accepted any word whose opcode was <= 4.
+- The file goes through `WriteSdVerified`, so it is checked the same way.
+
+### Run D - `vic clk jpgdec grcscan wait=60`
+
+jpgdec runs first, as a regression control that should now leave a file
+verifiable on the PC. The grc observer runs after it. `grc` must **not** be
+armed and `mitm.lst` must be absent: the observer uses the debug SVCs, not the
+M72 IPC interceptor.
+
+| reading | meaning |
+|---|---|
+| `sd(sdmc:/nvjpg-dec.rgba): ... fnv1a32=X` and the PC check prints the same X plus MATCH | the decode is verified independently of the console |
+| setup hits whose decode shows a sane H.264 config (a real resolution, profile, rate control) | we have grc's configuration; M79 replays it in our own NVENC job |
+| NVENC SETCL hits only | grc's method sequence (and any method we never send) plus the setup's IOVA; the setup itself then needs locating |
+| attach or resume fails | the `rc` values say why; nothing else was touched |
+| no hits | grc was idle, or its buffers are past the 96 MB cap or unreadable; the scanned-KB and region counts say which |
+
+**Risk:** attaching stops grc until `ContinueDebugEvent`, which is the next
+call. If grc objects, recording breaks for the rest of the boot. The game's
+picture does not depend on grc.
+
+## *** M77: establish NVJPG's clock at the submit, and find out what cleared it (Run C: NVJPG decoded correctly) ***
+
+Picks up from `HANDOFF-M76.md`. No hardware cycle yet.
+
+### What Run B's log shows, beyond the summary
+
+Between the hold (52.4 s) and the jpgdec check (62.9 s) exactly three things
+happened:
+
+```
+52.461  mm id 7 (NVJPG) SetAndWait(max) -> 652.8 MHz
+54.635  clk[held+2s]   VIC=652.8  NVJPG=652.8  NVDEC=979.2   <- still up
+61.008  vb:4b_node_survey - opens and CLOSES every engine node:
+61.152    /dev/nvhost-msenc   61.167 /dev/nvhost-nvdec   61.199 /dev/nvhost-nvjpg
+61.669  /dev/nvhost-vic opened (the VIC worker's own channel)
+62.927  clk[jpgdec-pre] VIC=422.4  NVJPG=0.0    NVDEC=979.2   <- NVJPG gone
+```
+
+- **VIC fell with NVJPG** (652.8 -> 422.4). Run A's release shows the same
+  pairing: dropping the NVJPG request put VIC back to 422.4, while NVENC and
+  NVDEC rose and fell together. By the rates, {NVJPG, VIC} and {NVENC, NVDEC}
+  behave like two shared clock domains. That is an inference from four
+  numbers, not a documented fact.
+- So in Run B the NVJPG request's **effect vanished entirely**, VIC included.
+  This was not NVJPG idling on its own. Something undid the rate mm:u had set.
+- **Prime suspect: the node survey's open and close of `/dev/nvhost-nvjpg`.**
+  The last close of an engine channel is the natural place for nvservices to
+  drop that engine's clock. The evidence against it: NVDEC's node was opened
+  and closed in the same survey and NVDEC stayed at 979.2. So this is a
+  suspect, not a finding.
+- **The order was backwards anyway.** Both working drivers open the engine
+  channel first and request the clock after (oss-nvjpg: `channel.open`, map,
+  then `mmuRequestInitialize`; nvtegra: open at device init, `SetAndWait` at
+  decode init). M76 requested the clock ten seconds before a channel existed.
+
+The bug that turned this into a refusal is the one the handoff names:
+`ClocksHoldForEngines` returned `true` from its idempotency guard, so
+`held=1` meant "a request exists", not "the clock is running".
+
+### The fix
+
+- **`ClockEnsure(module)`** re-applies the mm:u request for that engine and
+  reads the clock back through clkrst. It escalates until the clock is non-zero
+  or six attempts are spent, and logs every attempt:
+  1. `SetAndWait(max)` on the existing request
+  2. `SetAndWait(0)` then `SetAndWait(max)`, which defeats a cached "no change"
+  3. `FinalizeWithId`, fresh `InitializeWithId`, `SetAndWait(max)`
+  `ClocksHoldForEngines` now documents that it only creates requests.
+- **jpgdec order:** open the channel -> syncpoint -> nvmap fd -> map buffers
+  -> prepare record, scan, cmdbuf and submit args -> `ClockEnsure` ->
+  breadcrumb -> **final clkrst read -> submit**, with nothing but a timestamp
+  between the read and the ioctl. The result line carries the NVJPG rate read
+  at the submit, how many microseconds before the submit returned, and the
+  rate afterwards.
+- If the clock cannot be brought up, jpgdec unmaps, closes (nothing was
+  submitted, so teardown is safe) and refuses.
+- **`clk-watch`:** while the survey thread holds clocks for an engine probe,
+  it samples NVJPG, VIC and NVDEC every 200 ms and logs only changes, until
+  jpgdec finishes (or 45 s). That places the drop against the node survey's
+  timestamps.
+
+Which ensure step brings NVJPG back is itself a result:
+
+| step that works | meaning |
+|---|---|
+| 1, re-set max | the rate was overwritten underneath mm:u; a fresh request re-applies it |
+| 2, 0 then max | mm:u caches the rate and skipped a same-value request; pcv had been changed behind it |
+| 3, fresh request | the request itself was dropped server-side |
+| none | this process cannot hold NVJPG's clock with a channel open; stop and rethink |
+
+### Run C - `vic clk jpgdec wait=60`
+
+Same arm file as Run B, in a game. Read, in order:
+
+1. `clk-watch` lines from ~54.7 s: when NVJPG and VIC drop, against
+   `node /dev/nvhost-nvjpg` (~61.2 s) and the `/dev/nvhost-vic` open.
+2. `clk-ensure(jpgdec)` lines: which step brought NVJPG up.
+3. `jpgdec: submit ... NVJPG <Hz> read <us> before submit returned`:
+
+| result | meaning |
+|---|---|
+| REACHED, block means match | this process drives a non-VIC engine and the decode record is right. NVJPG's M73/M74 failures were the clock plus the offsets M76 fixed. Run `tools/nvjpg_dec_control.py check` on `nvjpg-dec.rgba` |
+| REACHED, mismatch | the engine ran; the output needs comparing on the PC |
+| STALLED, NVJPG non-zero at submit | the clock was necessary but not sufficient; something in our submit path is still wrong. Next suspects: the SETCL oss-nvjpg does not send on Horizon, adopting the game's aruid before opening nvmap, the `nvdrv:t` session |
+| refused | the watch and ensure lines say why |
+
+**Risk:** unchanged from Run B. A stall can still wedge the compositor like
+M74 did, even though the channel is left open on a stall.
+
+### NVENC
+
+Run A settled one thing: NVENC ran at 460.8 MHz before anything was
+requested, so the clock does not explain M68-M71. That leaves configuration or
+the submit path, and Run C tells them apart for free. If jpgdec completes, our
+submit path is proven and NVENC is purely a config problem, best answered by
+grc's own job (the M75 observer, which has never actually run). If jpgdec
+stalls with a clock, NVENC would stall for the same reason, so the submit path
+comes first.
 
 ## *** M76: nobody ever asked for the clock - and the NVJPG table was one register off ***
 

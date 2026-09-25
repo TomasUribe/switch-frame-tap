@@ -1,0 +1,120 @@
+== logs/m79-runE-setups/setup_1.bin (4096 B) ==
+  magic                                        0xd0b70006  (5.0=0xd0b70006 6.0=0xc1b70006)
+ input_cfg  : 1x1 pitch=0 pitch_c=0 trans=0  luma@0/0 chroma@0/0  block_height=0 tiled16=0 mem_mode=0 nv21=0 bl_mode=0
+ refpic_cfg : 257x111 pitch=1 pitch_c=0 trans=0  luma@0/0 chroma@0/0  block_height=0 tiled16=0 mem_mode=0 nv21=0 bl_mode=0
+ output_cfg : 1x1 pitch=0 pitch_c=0 trans=0  luma@0/0 chroma@0/0  block_height=0 tiled16=0 mem_mode=0 nv21=0 bl_mode=0
+ half_scaled: 1x1 pitch=0 pitch_c=0 trans=0  luma@0/0 chroma@0/0  block_height=0 tiled16=0 mem_mode=0 nv21=0 bl_mode=0
+ sps:
+  s->sps_data.profile_idc                      0
+  s->sps_data.level_idc                        0
+  s->sps_data.chroma_format_idc                0
+  s->sps_data.pic_order_cnt_type               0
+  s->sps_data.log2_max_frame_num_minus4        0
+  s->sps_data.log2_max_pic_order_cnt_lsb_minus4 0
+  s->sps_data.frame_mbs_only                   0
+ pps:
+  s->pps_data.pic_param_set_id                 0
+  s->pps_data.entropy_coding_mode_flag         0
+  s->pps_data.num_ref_idx_l0_active_minus1     0
+  s->pps_data.pic_init_qp_minus26              0
+  s->pps_data.chroma_qp_index_offset           0
+  s->pps_data.deblocking_filter_control_present_flag 0
+  s->pps_data.transform_8x8_mode_flag          0
+  s->pps_data.constrained_intra_pred_flag      0
+ rate_control:
+  rc->hrd_type                                 0
+  QP[P,B,I]=0,0,0  minQP=0,0,0  maxQP=0,0,0  maxQPD=0 baseQPD=0
+  rhopbi=0,0,0
+  rc->framerate                                0
+  rc->buffersize                               0
+  rc->nal_cpb_size                             0
+  rc->nal_bitrate                              0
+  rc->vcl_cpb_size                             0
+  rc->vcl_bitrate                              0
+  rc->gop_length                               0
+  rc->Np                                       0
+  rc->Bmin                                     0
+  rc->Ravg                                     0
+  rc->R                                        0
+  rc->ab_alpha                                 0
+  rc->ab_beta                                  0
+  rc->aqMode                                   0
+  rc->single_frame_VBV                         0
+  rc->two_pass_rc                              0
+  rc->rc_class                                 0
+ pic_control:
+  pc->pic_struct                               2
+  pc->pic_type                                 3
+  pc->ref_pic_flag                             1
+  pc->slice_mode                               1
+  pc->codec                                    7
+  pc->frame_num                                0
+  pc->pic_order_cnt_lsb                        0
+  pc->idr_pic_id                               0
+  pc->max_slice_size                           0
+  pc->max_byte_count_before_resid_zero         0
+  pc->num_forced_slices_minus1                 0
+  pc->num_me_controls_minus1                   0
+  pc->num_md_controls_minus1                   0
+  pc->num_q_controls_minus1                    0
+  pc->slice_control_offset                     0
+  pc->me_control_offset                        0xfffffffe
+  pc->md_control_offset                        0xfffffffe
+  pc->q_control_offset                         0xfffffffe
+  pc->hist_buf_size                            4294967294
+  pc->bitstream_buf_size                       4294967294
+  pc->bitstream_start_pos                      4294967294
+  pc->e4byteStartCode                          1
+  pc->qpfifo                                   1
+  pc->intraRefreshCount                        255
+  pc->mpec_threshold                           1073741822
+  pc->slice_stat_offset                        0xfffffffe
+  pc->mpec_stat_offset                         0xfffffffe
+  pc->wp_control_offset                        0xfffffffe
+  pc->bit_depth_minus_8                        15
+  pc->enable_source_image_padding              1
+  pc->aq_stat_offset                           0
+  pc->act_stat_offset                          0
+  pc->stats_fifo_offset                        0
+  s->gpTimer_timeout_val                       0
+ slice_control[1] @ 0:
+    (outside the captured 0x1000 bytes)
+ me_control[1] @ 0xfffffffe:
+    (outside the captured 0x1000 bytes)
+ md_control[1] @ 0xfffffffe:
+    (outside the captured 0x1000 bytes)
+ quant_control[1] @ 0xfffffffe:
+    (outside the captured 0x1000 bytes)
+ raw header:
+    0000: 06 00 b7 d0 00 01 6e 00 01 00 00 00 00 00 00 00
+    0010: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0020: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0030: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0040: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0050: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0060: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0070: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0080: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0090: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00c0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0100: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0110: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0120: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0130: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0140: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0150: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0160: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0170: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0180: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0190: fe ff ff ff fe ff ff ff fe ff ff ff fe ff ff ff
+    01a0: fe ff ff ff fe ff ff ff fe ff ff ff fe ff ff ff
+    01b0: fe ff ff ff fe ff ff ff fe ff ff ff fe ff ff ff
+    01c0: fe ff ff ff fe ff ff ff fe ff ff ff 00 00 00 00
+    01d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    01e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    01f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00

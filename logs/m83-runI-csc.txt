@@ -1,0 +1,83 @@
+vic-csc v1: 64x64 card, source fmt 32, output fmt 67, 12 probes
+
+== none (none, shift 0) completed
+   Y = +0.0000*R +0.0000*G +1.0000*B +0.00   (rms 0.00, 16 used, 0 clipped)
+   U = +1.0000*R +0.0000*G +0.0000*B +0.00   (rms 0.00, 16 used, 0 clipped)
+   V = +0.0000*R +1.0000*G +0.0000*B +0.00   (rms 0.00, 16 used, 0 clipped)
+
+== out_k8 (out, shift 0) completed
+   programmed rows: [256 0 0 0]  [0 256 0 0]  [0 0 256 0]
+   Y = +0.0000*R +0.0000*G +1.0000*B +0.00   (rms 0.00, 16 used, 0 clipped)
+   U = +1.0000*R +0.0000*G +0.0000*B +0.00   (rms 0.00, 16 used, 0 clipped)
+   V = +0.0000*R +1.0000*G +0.0000*B +0.00   (rms 0.00, 16 used, 0 clipped)
+
+== out_k12 (out, shift 0) completed
+   programmed rows: [4096 0 0 0]  [0 4096 0 0]  [0 0 4096 0]
+   Y: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   U: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   V: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+
+== out_k16 (out, shift 0) completed
+   programmed rows: [65536 0 0 0]  [0 65536 0 0]  [0 0 65536 0]
+   Y: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   U: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   V: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+
+== out_k19 (out, shift 0) completed
+   programmed rows: [524287 0 0 0]  [0 524287 0 0]  [0 0 524287 0]
+   Y: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   U: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   V: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+
+== out_k16_s8 (out, shift 8) completed
+   programmed rows: [65536 0 0 0]  [0 65536 0 0]  [0 0 65536 0]
+   Y = +0.0000*R +0.0000*G +1.0000*B +0.00   (rms 0.00, 16 used, 0 clipped)
+   U = +1.0000*R +0.0000*G +0.0000*B +0.00   (rms 0.00, 16 used, 0 clipped)
+   V = +0.0000*R +1.0000*G +0.0000*B +0.00   (rms 0.00, 16 used, 0 clipped)
+
+== out_off (out, shift 0) completed
+   programmed rows: [0 0 0 256]  [0 0 0 512]  [0 0 0 768]
+   Y: 0 usable of 16 (16 clipped), range 0..0 - no fit (constant)
+   U: 0 usable of 16 (16 clipped), range 0..0 - no fit (constant)
+   V: 0 usable of 16 (16 clipped), range 0..0 - no fit (constant)
+
+== out_neg (out, shift 0) completed
+   programmed rows: [65536 0 0 0]  [0 -65536 0 768]  [0 0 65536 0]
+   Y: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   U: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   V: 0 usable of 16 (16 clipped), range 0..0 - no fit (constant)
+
+== out_dense (out, shift 0) completed
+   programmed rows: [2048 4096 6144 0]  [8192 10240 12288 0]  [14336 16384 18432 0]
+   Y: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   U: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   V: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+
+== slot_k16 (slot, shift 0) completed
+   programmed rows: [65536 0 0 0]  [0 65536 0 0]  [0 0 65536 0]
+   Y: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   U: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+   V: 0 usable of 16 (16 clipped), range 255..255 - no fit (constant)
+
+== m64_bt601 (out, shift 8) completed
+   programmed rows: [66 129 25 4096]  [-38 -74 112 32768]  [112 -94 -18 32768]
+   Y = +0.0000*R +0.0000*G +0.0000*B +4.00   (rms 0.00, 16 used, 0 clipped)
+   U = -0.0014*R -0.0026*G +0.0048*B +31.45   (rms 0.26, 16 used, 0 clipped)
+   V = +0.0055*R -0.0021*G -0.0005*B +31.28   (rms 0.26, 16 used, 0 clipped)
+
+== bt709 (out, shift 8) completed
+   programmed rows: [4064 40254 11966 16896]  [-2639 -26145 28784 131584]  [28785 -22189 -6596 131584]
+   Y = +0.1863*R +0.6189*G +0.0628*B +15.32   (rms 0.23, 16 used, 0 clipped)
+   U = -0.1021*R -0.3410*G +0.4412*B +128.34   (rms 0.27, 16 used, 0 clipped)
+   V = +0.4401*R -0.4024*G -0.0421*B +128.59   (rms 0.27, 16 used, 0 clipped)
+   against the float bt709 conversion: worst 1.24 steps over the 16 patches  -> NOT within one step; the law predicts 35 of 48 values exactly
+
+== what the probes say ==
+   pass-through (no matrix): Y=Bx1.00, U=Rx1.00, V=Gx1.00
+   out_k8      K=256: Y<-B gain 1.0000 = K x 2^-8.00; U<-R gain 1.0000 = K x 2^-8.00; V<-G gain 1.0000 = K x 2^-8.00
+   out_k12     K=4096: Y: const 255; U: const 255; V: const 255
+   out_k16     K=65536: Y: const 255; U: const 255; V: const 255
+   out_k19     K=524287: Y: const 255; U: const 255; V: const 255
+   out_k16_s8  K=65536: Y<-B gain 1.0000 = K x 2^-16.00; U<-R gain 1.0000 = K x 2^-16.00; V<-G gain 1.0000 = K x 2^-16.00
+   slot_k16    K=65536: Y: const 255; U: const 255; V: const 255
+   offsets alone: Y=0.0 for offset 256 (0.0000/unit); U=0.0 for offset 512 (0.0000/unit); V=0.0 for offset 768 (0.0000/unit)
