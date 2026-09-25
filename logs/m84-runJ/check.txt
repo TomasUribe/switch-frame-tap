@@ -1,0 +1,41 @@
+== settings: VIC block height h=1, colour bt709 ==
+
+== frame 0, as the VIC wrote it ==
+nvframe-0-y.bin: 921600 B; roughness by layout: block-linear h=1 4.4, block-linear h=4 4.8, block-linear h=2 5.3, block-linear h=3 5.4, block-linear h=0 5.8, pitch 13.8  -> smoothest: block-linear h=1  (as configured)
+   Y mean 226.7 range 16..236; U mean 128.0 range 128..128; V mean 128.0 range 128..128
+   -> logs/m84-runJ/nvframe-0-vic.png
+nvframe-0-src.bin: the game's pixels for rows 0-127, converted to bt709 in float, against the VIC's planes:
+   Y: mean error 0.98, 99th percentile 1.31 steps
+   U/V against a 2x2 average: mean 0.00/0.00; against the top-left sample: mean 0.00/0.00 steps
+   -> THE VIC WRITES REAL BT709 YUV
+
+== frame 0 at QP 16 ==
+status: picture_index=0x4d383300 error_status=2 ucode_error_status=0x0 91646 B pic_type=3 slices=1 avgQP=16 intra/inter=3600/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 91658 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1280x720; PSNR against the VIC's planes: Y 49.1 dB, U 99.0 dB, V 99.0 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m84-runJ/nvframe-q16-decoded.png
+
+== frame 0 at QP 20 ==
+status: picture_index=0x4d383301 error_status=2 ucode_error_status=0x0 67246 B pic_type=3 slices=1 avgQP=20 intra/inter=3600/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 67258 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1280x720; PSNR against the VIC's planes: Y 5.1 dB, U 10.0 dB, V 10.0 dB -> *** decoded picture does not match the VIC's ***
+   what NVENC read the VIC's luma bytes as: block-linear h=4 5.5 dB, block-linear h=3 5.3 dB, block-linear h=2 5.2 dB, block-linear h=1 5.1 dB, block-linear h=0 5.1 dB, pitch 5.1 dB
+   -> NVENC read the VIC's bytes as block-linear h=4
+   -> logs/m84-runJ/nvframe-q20-decoded.png
+
+== frame 0 at QP 24 ==
+status: picture_index=0x4d383302 error_status=2 ucode_error_status=0x0 47005 B pic_type=3 slices=1 avgQP=24 intra/inter=3600/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 47017 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1280x720; PSNR against the VIC's planes: Y 2.8 dB, U 7.7 dB, V 7.7 dB -> *** decoded picture does not match the VIC's ***
+   what NVENC read the VIC's luma bytes as: block-linear h=4 3.0 dB, block-linear h=3 2.9 dB, block-linear h=2 2.8 dB, block-linear h=1 2.8 dB, block-linear h=0 2.8 dB, pitch 2.8 dB
+   -> NVENC read the VIC's bytes as block-linear h=4
+   -> logs/m84-runJ/nvframe-q24-decoded.png
+
+== the last frame of the timed loop (QP 20) ==
+nvframe-last-y.bin: 921600 B; roughness by layout: block-linear h=1 4.3, block-linear h=4 4.6, block-linear h=2 5.2, block-linear h=3 5.3, block-linear h=0 5.6, pitch 12.4  -> smoothest: block-linear h=1  (as configured)
+   Y mean 227.3 range 16..236; U mean 128.0 range 128..128; V mean 128.0 range 128..128
+   -> logs/m84-runJ/nvframe-last-vic.png
+status: picture_index=0x4d38337a error_status=2 ucode_error_status=0x0 65283 B pic_type=3 slices=1 avgQP=20 intra/inter=3600/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 65295 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1280x720; PSNR against the VIC's planes: Y 46.4 dB, U 99.0 dB, V 99.0 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m84-runJ/nvframe-last-decoded.png

@@ -1,4 +1,4 @@
-# switch-frame-tap: project handoff (after M83)
+# switch-frame-tap: project handoff (after M84)
 
 This is for whoever continues the project cold, most likely a local session
 with the SD card and the console at hand. It covers:
@@ -13,8 +13,14 @@ with the SD card and the console at hand. It covers:
 `tier4/mitm/STATUS.md` has the full evidence behind each item, newest
 milestone first. This page is the map.
 
-**Current build: M83. It is built and every PC-side check passes; it has not
-been run on hardware yet.** The next hardware run is `HANDOFF-M83-RUNI.md`.
+**Current build: M84, run on hardware (Run J, 2026-09-25): a live, compressed,
+native 1280x720 handheld stream at 59.9 fps over USB, 0 frames lost, through
+loading screens.** Results and analysis: `STATUS.md` (M84 section). Work is
+now local on `master`; the next build is M85 (section 6).
+
+M84's one change: a debug event pump (`applet_mitm_dbgpump.cpp`). While we
+stay attached, every thread start/exit in the game suspends all its threads
+until continued; Run I froze at a loading screen for want of it.
 
 ---
 
@@ -64,17 +70,18 @@ Run I tests all four, in that order.
 | VIC blit, scale and block-linear input are byte-exact | **proven** | M43-M45 (0.00 error on an unscaled crop) |
 | VIC output block height is log2 GOBs (1 = 16 rows, 2 = 32 rows) | **proven** | M82 Run H: the VIC's bytes are smooth only at h=2 when 2 was set |
 | VIC colour-matrix arithmetic (the law in `tools/vic_csc.py`) | **proven on the measured points** | Run H: 528/528 values exact |
-| The M83 BT.709 matrix produces real BT.709 | **inferred** from the law (within 0.5 steps) | Run I's `bt709` probe and nvframe source check measure it |
+| The M83 BT.709 matrix produces real BT.709 | **proven** (luma; chroma via the probe) | Runs I and J: Y error 0.98 steps against a float conversion of the game's pixels; `bt709` probe 200,40,40 -> 80/112/199 |
 | NVENC encodes grc's IDR job from our channel | **proven** | Runs F, G, H (129 jobs, 0 ucode errors) |
 | NVENC reads `block_height` 2 as 16-row blocks | **proven** | Run H: decode = VIC bytes read at h=1, 42-48 dB; every other layout <= 9.5 dB |
-| M83's fix (VIC writes h=1) makes the decode match | **inferred** (same bytes read the same way) | Run I nvframe: PSNR > 30 dB expected |
+| M83's fix (VIC writes h=1) makes the decode match | **proven** | Runs I and J: 43.7-49.1 dB against the VIC's planes |
 | `error_status` 2 is routine and meaningless for us | **proven** (as a pattern) | set on all 129 of our jobs and on grc's own frames; its meaning is unknown |
 | Constant QP (RCMODE 0) works; QP comes from setup byte 0x73 (I) / 0x71 (P) | **proven** for IDR | Run G c, Run H (QP 16/20/24 reported as avgQP) |
 | The whole path fits 60 fps at 720p IDR-only | **proven without USB** | Run H: 12.7 ms average work, 60.5 fps |
 | USB 2.0 carries ~37 MB/s from this module | **proven** | M70 sweep |
-| USB carries the H.264 stream at 60 fps (~20 MB/s at QP 20) | **inferred** | Run I nvstream |
-| P frames from grc's P setup and P job decode without drift | **inferred**: grc's setups and jobs are consistent (Run E) | Run I nvp |
-| The PC can decode IDR-only 720p60 at ~165 Mbps | **measured on a 4-vCPU cloud box**: 32 ms/frame on one thread, 10 ms with frame threads | raw-view defaults to frame threads |
+| The game keeps running while we stay attached | **proven** with the M84 pump | Run J: 59.2-60.0 fps presented in every window, 2 thread events continued (63 us hold) |
+| USB carries the H.264 stream at 60 fps | **proven** | Run J: 3600/3600 frames, 59.9 fps at the PC, 0 lost; 98 Mbps IDR-only at QP 20 |
+| P frames from grc's P setup and P job decode without drift | **disproven as built**: they decode, but drift | Run J nvp: 20 frames IPPP.., P = 74% of IDR size, last frame 19.2 dB |
+| The PC can decode IDR-only 720p60 at ~100 Mbps | **proven** on the user's 20-core PC: 12.3 ms/frame on 1 thread, 6.2 ms on 2 | default frame threads (one per core) add ~250 ms: use `raw-view --threads 2` |
 | SuperSpeed | **not working**: descriptors and BOS accepted, the link trains at High speed | M71; the cable is the untested variable |
 
 ## 3. Repository map (the parts that matter)
@@ -182,12 +189,11 @@ PC dependencies:
 
 ## 5. Open questions
 
-1. **Run I's answers:**
-   - the matrix on hardware;
-   - the layout fix;
-   - the stream's real fps and loss;
-   - whether P frames decode without drift.
-2. **P frames in the stream.** If nvp passes, `nvstream` should send IDR + P
+1. **Why the P chain drifts** (Run J nvp: P frames 74% of the IDR, 19.2 dB
+   at frame 19). Suspects: the reference ping-pong, the MEPRED buffers, or
+   the P setup fields beyond frame_num/POC. The GOP also filled the 3.3 MB
+   accumulator at 20 of 30 frames.
+2. **P frames in the stream.** Once nvp passes, `nvstream` should send IDR + P
    (a GOP of 30-60; grc uses 15). Frame N's `OUT_REF_PIC` becomes N+1's
    `IN_REF_PIC0`, and the MEPRED buffers swap. Per frame only frame_num (u16
    at 0x17C) and POC (0x17E, = 2 x frame_num) change, modulo 256. Two things
@@ -216,25 +222,29 @@ PC dependencies:
    8,847,360 B device-shared region (1920x1080 RGBA, 128-row blocks). That is
    MK8D's; other games may differ. The binder parcels carry each game's real
    geometry (`g_game_surface`).
-7. **Latency** has not been measured end to end. The obvious method: a
+7. **Latency** has not been measured end to end. Run J felt laggy; the
+   known part was raw-view's frame-thread decoder (~250 ms, fixed with
+   `--threads 2`). Console work is ~9.5 ms/frame. Measure with a
    frame-number overlay or a light sensor.
 8. **Audio** has not been touched.
 9. **`error_status` 2.** Its meaning is unknown and not needed.
 
 ## 6. Roadmap to native resolution at 60 fps over USB 2.0
 
-1. **Run I (M83).** Confirm the fix, the colour and the stream. Success
-   means a live, compressed, native-720p handheld stream: the project's goal
-   for handheld mode.
-2. **P frames in the stream.** Roughly a quarter of IDR-only's bitrate, which
+1. **Done (M83 Run I, M84 Run J):** a live, compressed, native-720p60
+   handheld stream over USB 2.0.
+2. **M85 next:** latency (run with `raw-view --threads 2`, measure end to
+   end), the nvp drift, and the nvframe `save()` cache bug (the arena is
+   CACHEABLE; invalidate before copying the bitstream).
+3. **P frames in the stream.** Roughly a quarter of IDR-only's bitrate, which
    frees the link and the PC's decoder. Add a periodic IDR (every 60 frames)
    for recovery.
-3. **Tuning.** QP against the link (`nvqp`), measure latency, and consider
+4. **Tuning.** QP against the link (`nvqp`), measure latency, and consider
    `--low-latency` decoding on a fast PC.
-4. **Docked 1080p60.** The 1080p setup (question 3) and a network transport
+5. **Docked 1080p60.** The 1080p setup (question 3) and a network transport
    (question 4). Raw 1080p60 is 186.6 MB/s, far past USB 2.0 (and USB is not
    available docked anyway), so this path is compressed by necessity.
-5. **Robustness.** Reconnect on the receiver, a game-agnostic swapchain
+6. **Robustness.** Re-attach after the game is relaunched, reconnect on the receiver, a game-agnostic swapchain
    finder, and the VIC completion marker.
 
 ## 7. The SuperSpeed lossless option (later, handheld only)

@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 79 hardware test cycles (through M82 Run H). Current build: **M83** (not yet run).
+`0100000000000C20`. 81 hardware test cycles (through M84 Run J). Current build: **M84** (Run J: a live 720p60 H.264 stream).
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -115,7 +115,99 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M83: the first H.264 stream - real frames, real YUV, over USB (built, not yet run) ***
+## *** M84: keep the attached game running - a debug event pump (Run J: 3600/3600 frames at 59.9 fps through loading screens) ***
+
+### Run J result (logs `logs/m84-runJ*`, recording `~/switch-captures/m84-runJ.sft`, SHA-256 396c306f...)
+
+Same arm file as Run I, handheld, loading screens triggered during the stream.
+
+- **Diagnosis confirmed.** The pump ran with all three helpers; it continued
+  2 thread-start events (both on core 2, longest hold 63 us), and the game
+  presented 59.2 / 59.9 / 59.9 / 60.0 / 60.0 / 59.9 fps in the six 10 s windows.
+  The user saw no freeze on either screen.
+- **The stream:** 3600 of 3600 frames sent in 60.5 s, 59.4 fps on the console,
+  59.9 fps at raw-view, 0 lost, 0 undecodable, 0 encode errors. Per frame:
+  read+flush 4.4 ms, VIC 0.9, NVENC 3.1, copy 0.15, USB 0.8 (async);
+  avg 208 KB (max 314 KB) = 98 Mbps IDR-only at QP 20.
+- **Felt latency was high** (user). Cause on the PC side: raw-view decoded with
+  frame threads = one per core (20 here, capped at 16) = ~250 ms held in the
+  decoder. On this PC, one thread decodes in 12.3 ms/frame, 2 threads 6.2 ms
+  with one frame of delay. raw-view now has `--threads N`; use `--threads 2`.
+- **nvp ran for the first time:** 20 of 30 frames (the GOP filled the
+  accumulator at 3.3 MB), all decode as IPPP..., 0 errors, but **P frames are
+  74% of the IDR and the last frame is 19.2 dB against the VIC's picture**:
+  the P chain drifts, so references or setup are still wrong.
+- **nvframe q20/q24 decoded half green (5.1 / 2.8 dB); q16 and "last" match.**
+  Tool artifact, not an encode fault: `save()` copies the bitstream with
+  `WriteEngineOutputToSd`, which assumes uncached memory, but the arena is
+  CACHEABLE, so q20/q24 were read partly through stale cache lines left by
+  the q16 read. The stream path flushes before its copy and is unaffected.
+  Fix: invalidate before those copies.
+
+### What Run I showed (M83, `RESULT-M83-RUNI.md`, logs `logs/m83-runI*`)
+
+- **The picture path is right.** The VIC writes real BT.709 (Y error 0.98
+  steps mean against a float conversion of the game's own pixels), and the
+  NVENC IDR decodes back to the VIC's planes at 49.1 / 46.4 / 43.7 dB for
+  QP 16 / 20 / 24 (Run H: 9.5 dB). Caveat: the frame was a near-white
+  loading screen, U and V were 128 everywhere, so real-frame chroma is
+  untested; the csc probe (`bt709`: 200,40,40 -> Y 80 U 112 V 199) is the
+  chroma evidence.
+- **The stream froze the game.** nvframe ran at 69.2-74.4 s with the game
+  presenting 59.0 fps. nvstream started at 74.5 s; the binder counter stopped
+  at txn 3719 by 77.3 s and never moved again. The stream then re-sent one
+  frame 1883 times (every payload 65,988-65,989 B, "game presented 0.0 fps")
+  and ended at 127.0 s with "slot read failed" when the user closed the game;
+  nvp then failed its first read the same way. The console stayed responsive
+  and the relaunched game ran (sess=2). **36 fps is not a stream rate**: with
+  no presents, each frame waits Capture's 20 ms for one, plus ~7 ms work.
+
+### Why (mesosphere, read directly - high confidence, to be confirmed by Run J)
+
+`kern_k_debug_base.cpp` `ProcessDebugEvent`: while a debugger is attached,
+a thread start (`kern_k_thread_context.cpp:40`) or a thread exit pushes a
+debug event, and pushing one calls `RequestSuspend(SuspendType_Debug)` on
+**every thread of the process** and sets it debug-broken until the debugger
+calls `ContinueDebugEvent`. The module drained and continued exactly once, at
+attach (`resume_game`), and then held the handle through nvframe, nvstream
+and nvp. A loading screen starts and stops worker threads; a race does not,
+which is why Run H and the M67 stream never hit it. Exceptions do not do
+this: without `ContinueFlag_EnableExceptionEvent` they return NotHandled.
+
+### The change
+
+`applet_mitm_dbgpump.cpp`, modelled on dmnt's cheat engine
+(`dmnt_cheat_api.cpp` DebugEventsThread, `dmnt_cheat_debug_events_manager.cpp`):
+
+- A pump thread (core 3, svc priority 48, one above IPC) blocks on the debug
+  handle, which the kernel signals while events are pending
+  (`KDebugBase::IsSignaled`), drains `GetDebugEvent`, and continues with
+  `ExceptionHandled | ContinueAll`. It never logs; it only counts.
+- Like dmnt, a continue after a `CreateThread` event runs on the new
+  thread's core (dmnt: "prevents a kernel deadlock"), through one helper
+  thread per core 0-2. **NPDM change:** cores 0-3 allowed (was 3 only) and
+  `svcGetDebugThreadParam` added. Every existing thread still starts on
+  core 3; if a helper cannot be created, its continues run on core 3.
+- Started inside `resume_game` right after the attach burst is continued,
+  stopped before `CloseHandle(dbg)`. A handle that is signalled with nothing
+  queued (the game exited) stops the pump rather than spinning.
+- nvstream's 10-second progress line now carries the game's present rate
+  over that window, and every loop logs the pump's counters: events by type,
+  continues per core, Busy retries, failures, longest hold. A read failure
+  after the game exited says so.
+
+### Run J (planned)
+
+Same arm file as Run I (`vic exec dbg usb csc nvframe nvstream nvp wait=60`,
+already in `test/armfile_test.cpp`), handheld, USB to raw-view, **and the
+stream must cross a loading screen** (e.g. start or finish a race while it
+runs). Pass: the progress lines show the game presenting ~60 fps in every
+window, the pump reports thread events continued, and the PC picture moves
+through the load. Then nvp gets its first real run.
+
+---
+
+## *** M83: the first H.264 stream - real frames, real YUV, over USB (Run I: picture correct; the stream froze the game at a loading screen) ***
 
 ### M82 Run H, read: evidence first
 

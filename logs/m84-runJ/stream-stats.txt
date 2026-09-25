@@ -1,0 +1,4 @@
+/home/tomas/switch-captures/m84-runJ.sft: 3600 packets (3600 H.264, 0 other)
+   frame numbers 0..3599: 0 missing in 0 gap(s)
+   payload avg 203 KB, min 0 KB, max 307 KB -> 100 Mbps / 12.5 MB/s at 60 fps
+   decoded 600 frame(s) from the first 600 packets, 0 error(s); 1280x720 colorspace 1 range 1

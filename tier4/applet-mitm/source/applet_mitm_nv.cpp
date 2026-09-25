@@ -40,6 +40,7 @@
 #include "nvenc_grc_hdrs.h"
 #include "vic_csc_bt709.h"
 #include "nvenc_grc_p.h"
+#include "applet_mitm_dbgpump.hpp"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -2380,6 +2381,10 @@ namespace ams::mitm::applet {
                                  nullptr, 0);
                     resumed = R_SUCCEEDED(r_cont);
                     frozen_ns = armTicksToNs(armGetSystemTick()) - t_frozen0;
+                    /* M84: from here on, every later thread start/exit in the
+                     * game raises an event that stops it until continued. Run I
+                     * froze at a loading screen for want of this. */
+                    if (resumed) { DebugPumpStart(dbg); }
                 };
 
                 /* ---- THE VIC, ON REAL GAME PIXELS -------------------------
@@ -2889,6 +2894,8 @@ namespace ams::mitm::applet {
                     }
                 }
 
+                /* the pump must be off the handle before it is closed */
+                DebugPumpStop();
                 ::ams::svc::CloseHandle(dbg);
             }
             /* ---- detached; log everything --------------------------------- */
@@ -2932,6 +2939,7 @@ namespace ams::mitm::applet {
             LogLine("   drained %u debug events; ContinueDebugEvent rc=0x%x -> %s",
                     nev, r_cont.GetValue(),
                     resumed ? "GAME RUNNING WHILE WE STAY ATTACHED" : "still frozen");
+            if (resumed) { DebugPumpLogStats("attached, in total"); }
 
             if (live_ok) {
                 LogLine("   live sample over 120 ms: %s", live_changed
@@ -4532,6 +4540,11 @@ namespace ams::mitm::applet {
             }
         };
 
+        /* M84: a read fails for one expected reason - the game was closed */
+        const char *SlotReadFailure() {
+            return DebugPumpTargetGone() ? "slot read failed: the game exited" : "slot read failed";
+        }
+
         void TryNvencRealFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                                 u32 cmd_handle, u32 vsyncpt, u32 cfg_addr) {
             VicStage("nf:1");
@@ -4563,7 +4576,7 @@ namespace ams::mitm::applet {
                 return;
             }
             u64 read_ns = 0; u32 sig = 0;
-            if (!s.Capture(dbg, slot_base, std::addressof(read_ns), std::addressof(sig))) { LogLine("   nvframe: slot read failed"); VicStage("nf:read_FAILED"); return; }
+            if (!s.Capture(dbg, slot_base, std::addressof(read_ns), std::addressof(sig))) { LogLine("   nvframe: %s", SlotReadFailure()); VicStage("nf:read_FAILED"); return; }
             s.Decide("nvframe");
             if (s.corner) {
                 /* the game's own pixels for the picture's top 128 rows, as read:
@@ -4613,7 +4626,7 @@ namespace ams::mitm::applet {
             for (u32 i = 0; i < nframes; ++i) {
                 const u64 t0 = armTicksToNs(armGetSystemTick());
                 u64 rn = 0; u32 sg = 0;
-                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvframe: slot read failed at frame %u", i); break; }
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvframe: %s at frame %u", SlotReadFailure(), i); break; }
                 const u64 t1 = armTicksToNs(armGetSystemTick());
                 if (!s.Vic("nf:vic")) { LogLine("   nvframe: VIC did not complete at frame %u", i); break; }
                 const u64 t2 = armTicksToNs(armGetSystemTick());
@@ -4664,6 +4677,7 @@ namespace ams::mitm::applet {
             LogLine("   nvframe: IDR size avg %llu B (min %u, max %u) -> %llu Mbps at 60 fps; NVENC %u Hz after",
                     static_cast<unsigned long long>(s_bytes / nd), done ? b_min : 0, b_max,
                     static_cast<unsigned long long>(s_bytes / nd * 8 * 60 / 1000000), after_hz);
+            DebugPumpLogStats("nvframe");
             if (done != 0) {
                 save("last", last);
                 save_picture("last");
@@ -4712,7 +4726,7 @@ namespace ams::mitm::applet {
             s.SetSetupByte(SetupRcQpI, qp);
             {
                 u64 rn = 0; u32 sg = 0;
-                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvstream: slot read failed"); return; }
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvstream: %s", SlotReadFailure()); return; }
                 s.Decide("nvstream");
             }
 
@@ -4729,10 +4743,12 @@ namespace ams::mitm::applet {
             u32 pic = NvfPictureIndex + 0x100;
             const u32 q0 = g_queue_count.load(std::memory_order_relaxed);
             const u64 loop_t0 = armTicksToNs(armGetSystemTick());
+            u32 q_window = q0;
+            u64 t_window = loop_t0;
             for (u32 i = 0; i < nframes; ++i) {
                 u64 rn = 0; u32 sg = 0;
                 const u64 t0 = armTicksToNs(armGetSystemTick());
-                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped))) { why = "slot read failed"; break; }
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped))) { why = SlotReadFailure(); break; }
                 const u64 t1 = armTicksToNs(armGetSystemTick());
                 if (!s.Vic("ns:vic")) { why = "VIC did not complete"; break; }
                 const u64 t2 = armTicksToNs(armGetSystemTick());
@@ -4789,10 +4805,18 @@ namespace ams::mitm::applet {
                         ++clock_fixes;
                         static_cast<void>(s.EnsureClock("nvstream", std::addressof(hz)));
                     }
-                    const u64 el = armTicksToNs(armGetSystemTick()) - loop_t0;
-                    LogLine("   nvstream: %u frames in %llu ms, %u sent, avg %llu B/frame, NVENC %u Hz",
-                            i + 1, static_cast<unsigned long long>(el / 1000000), sent,
-                            static_cast<unsigned long long>(done ? s_bytes / done : 0), hz);
+                    const u64 now = armTicksToNs(armGetSystemTick());
+                    const u32 qn = g_queue_count.load(std::memory_order_relaxed);
+                    /* M84: the game's own present rate over this window - Run I
+                     * streamed a frozen game at 36 fps and only the end-of-run
+                     * line said so */
+                    const u64 gw_x10 = now > t_window ? static_cast<u64>(qn - q_window) * UINT64_C(10000000000) / (now - t_window) : 0;
+                    q_window = qn; t_window = now;
+                    LogLine("   nvstream: %u frames in %llu ms, %u sent, avg %llu B/frame, NVENC %u Hz; game presented %llu.%llu fps this window",
+                            i + 1, static_cast<unsigned long long>((now - loop_t0) / 1000000), sent,
+                            static_cast<unsigned long long>(done ? s_bytes / done : 0), hz,
+                            static_cast<unsigned long long>(gw_x10 / 10), static_cast<unsigned long long>(gw_x10 % 10));
+                    DebugPumpLogStats("nvstream");
                 }
                 /* hand the core back: every thread in this process shares core 3
                  * with the IPC thread that answers the game (M60b) */
@@ -4821,6 +4845,7 @@ namespace ams::mitm::applet {
             LogLine("   nvstream: avg %llu B/frame (max %llu) -> %llu Mbps at the achieved rate; clock re-ensured %u time(s)",
                     static_cast<unsigned long long>(s_bytes / nd), static_cast<unsigned long long>(m_bytes),
                     static_cast<unsigned long long>(wall ? s_bytes * 8 * 1000 / wall : 0), clock_fixes);
+            DebugPumpLogStats("nvstream");
             VicStage(stalled ? "ns:STALLED_left_open" : (sent == nframes ? "ns:DONE" : "ns:stopped"));
         }
 
@@ -4882,7 +4907,7 @@ namespace ams::mitm::applet {
             if (!s.EnsureClock("nvp", std::addressof(hz))) { LogLine("   nvp: NOT submitting - NVENC clock not established"); VicStage("np:no_clock"); return; }
             {
                 u64 rn = 0; u32 sg = 0;
-                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvp: slot read failed"); return; }
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvp: %s", SlotReadFailure()); return; }
                 s.Decide("nvp");
             }
 
@@ -4898,7 +4923,7 @@ namespace ams::mitm::applet {
             g_vic_quiet = true;
             for (u32 i = 0; i < n; ++i) {
                 u64 rn = 0; u32 sg = 0;
-                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvp: slot read failed at frame %u", i); break; }
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvp: %s at frame %u", SlotReadFailure(), i); break; }
                 if (!s.Vic("np:vic")) { LogLine("   nvp: VIC did not complete at frame %u", i); break; }
                 NvfJob j;                          /* frame 0: the IDR job */
                 j.ref_out = refs[i & 1];

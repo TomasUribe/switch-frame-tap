@@ -40,7 +40,7 @@
             "value": {
                 "highest_thread_priority": 63,
                 "lowest_thread_priority": 24,
-                "lowest_cpu_id": 3,
+                "lowest_cpu_id": 0,
                 "highest_cpu_id": 3
             }
         },
@@ -110,6 +110,7 @@
                 "svcContinueDebugEvent": "0x64",
                 "svcQueryDebugProcessMemory": "0x69",
                 "svcReadDebugProcessMemory": "0x6a",
+                "svcGetDebugThreadParam": "0x6d",
                 "svcGetSystemInfo": "0x6f",
                 "svcCallSecureMonitor": "0x7F"
             }

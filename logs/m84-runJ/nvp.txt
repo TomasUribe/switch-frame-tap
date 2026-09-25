@@ -1,0 +1,25 @@
+nvp: 20 frames, 3315902 B of slices (index says 3315902 B)
+   frame  0:  221430 B  NAL types [5]
+   frame  1:  164538 B  NAL types [1]
+   frame  2:  163862 B  NAL types [1]
+   frame  3:  163218 B  NAL types [1]
+   frame  4:  163269 B  NAL types [1]
+   frame  5:  162370 B  NAL types [1]
+   frame  6:  162730 B  NAL types [1]
+   frame  7:  163078 B  NAL types [1]
+   frame  8:  165539 B  NAL types [1]
+   frame  9:  163906 B  NAL types [1]
+   frame 10:  162770 B  NAL types [1]
+   frame 11:  159515 B  NAL types [1]
+   frame 12:  161158 B  NAL types [1]
+   frame 13:  159849 B  NAL types [1]
+   frame 14:  161663 B  NAL types [1]
+   frame 15:  162776 B  NAL types [1]
+   frame 16:  165116 B  NAL types [1]
+   frame 17:  161121 B  NAL types [1]
+   frame 18:  163068 B  NAL types [1]
+   frame 19:  164926 B  NAL types [1]
+decoded 20 of 20 frames; picture types IPPPPPPPPPPPPPPPPPPP
+last frame against the VIC's picture: Y 19.2 dB, U 28.9 dB, V 29.3 dB -> *** the last frame does not match: references or setup wrong ***
+   -> logs/m84-runJ/nvp-last-decoded.png
+IDR 221430 B, P frames avg 162867 B (74% of the IDR)

@@ -20,6 +20,7 @@
  *   ./raw-view --file s.sft --headless --frames 10   # decode only (tests)
  *   ./raw-view --swap          # flip R and B for a raw stream if colours look wrong
  *   ./raw-view --low-latency   # one decode thread, frames out immediately
+ *   ./raw-view --threads 2     # N frame threads: N-1 frames of decoder delay
  *
  * Decoding: an IDR-only 720p60 stream at QP 20 is ~150-170 Mbps of CABAC,
  * which one core may not keep up with (a 4-vCPU cloud box: 32 ms/frame on one
@@ -90,7 +91,7 @@ static int read_exact(uint8_t *dst, size_t n, int ms)
 #ifdef SFT_H264
 typedef struct { AVCodecContext *c; AVPacket *pkt; AVFrame *frm; } h264_t;
 
-static int h264_open(h264_t *d, int low_latency)
+static int h264_open(h264_t *d, int low_latency, int threads)
 {
     const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_H264);
     if (!codec) return -1;
@@ -103,7 +104,9 @@ static int h264_open(h264_t *d, int low_latency)
         d->c->flags |= AV_CODEC_FLAG_LOW_DELAY;
         d->c->thread_count = 1;
     } else {
-        d->c->thread_count = 0;              /* one per core */
+        /* frame threading holds back about one frame per extra thread: on a
+         * 20-core PC the default (one per core, capped at 16) is ~250 ms */
+        d->c->thread_count = threads;        /* 0 = one per core */
         d->c->thread_type = FF_THREAD_FRAME;
     }
     return avcodec_open2(d->c, codec, NULL);
@@ -131,7 +134,7 @@ static void h264_close(h264_t *d)
 
 int main(int argc, char **argv)
 {
-    int swap_rb = 0, scale = 1, headless = 0, low_latency = 0;
+    int swap_rb = 0, scale = 1, headless = 0, low_latency = 0, threads = 0;
     long max_frames = 0;
     const char *file = NULL, *record = NULL, *h264_out = NULL;
     for (int i = 1; i < argc; i++) {
@@ -143,6 +146,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) max_frames = atol(argv[++i]);
         else if (!strcmp(argv[i], "--headless")) headless = 1;
         else if (!strcmp(argv[i], "--low-latency")) low_latency = 1;
+        else if (!strcmp(argv[i], "--threads") && i + 1 < argc) threads = atoi(argv[++i]);
         else { fprintf(stderr, "unknown option %s (see the comment at the top of raw-view.c)\n", argv[i]); return 2; }
     }
     if (scale < 1) scale = 1;
@@ -174,7 +178,7 @@ int main(int argc, char **argv)
 
 #ifdef SFT_H264
     h264_t dec = {0};
-    int dec_ok = (h264_open(&dec, low_latency) == 0);
+    int dec_ok = (h264_open(&dec, low_latency, threads) == 0);
     if (!dec_ok) fprintf(stderr, "libavcodec H.264 decoder unavailable - H.264 packets will be skipped\n");
 #endif
 
