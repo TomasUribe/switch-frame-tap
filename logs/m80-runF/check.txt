@@ -1,0 +1,8 @@
+status: picture_index=1295527936 error_status=2 ucode_error_status=0x0 total_bit_count=4128 (516 B) pic_type=3 num_slices=1 avgQP=8 cycle_count=0 bitstream_start_pos=0 last_valid_byte_offset=516 intra_mbs=3600 inter_mbs=0
+nvenc-bits.bin: 65536 B, first bytes 00 00 00 01 65 b8 04 04 bf dc fe 0b b9 fc a3 14
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 65532 B  first_mb=0 slice_type=2 pps_id=0
+no SPS/PPS in the engine's output (expected: grc writes those itself) - prepending ones built from grc's setup
+decoded 1280x720; stripe means (want/got): 32/32 40/40 48/48 56/56 64/64 72/72 80/80 88/88 96/96 104/104 112/112 120/120 128/128 136/136 144/144 152/152 160/160 168/168 176/176 184/184 192/192 200/200 208/208
+DECODE MATCHES THE INPUT STRIPES
+  -> logs/m80-runF/nvenc-decoded.png
+nvenc-recon-y.bin: 921600 B, reconstructed-luma stripe check worst deviation 0.0  (matches)
