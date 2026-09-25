@@ -79,6 +79,9 @@ namespace ams::mitm::applet {
     extern bool g_grcscan_armed;
     extern bool g_jpgdec_armed;   /* M76: NVJPG decode positive control */
     extern bool g_nvgrc_armed;    /* M80: grc's IDR job replayed from our channel */
+    extern bool g_csc_armed;      /* M82: VIC colour-matrix probe sweep */
+    extern bool g_nvframe_armed;  /* M82: real game frames -> VIC NV12 -> NVENC */
+    extern u32  g_nvframe_n;
     extern u32  g_matrix_mode;
     extern bool g_stream_armed;
     extern u32  g_stream_w, g_stream_h, g_stream_frames;

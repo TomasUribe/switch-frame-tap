@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 77 hardware test cycles (through M80 Run F). Current build: **M81** (not yet run).
+`0100000000000C20`. 78 hardware test cycles (through M81 Run G). Current build: **M82** (not yet run).
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -35,7 +35,11 @@ Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 7. **NVENC encodes H.264 from this process** (M80 Run F). grc's own IDR job,
    replayed from our msenc channel with our buffers, completes in 2.1 ms; the
    stream decodes on the PC to the input, and the reconstructed picture matches
-   it exactly. The engine flags `error_status` 2 on that frame - see M81.
+   it exactly. `error_status` 2 on every frame is routine (M81 Run G: grc's own
+   frames carry it too) and says nothing about the frame.
+8. **NVENC's constant-QP mode works** (M81 Run G, variant c): RCMODE 0 takes
+   the QP from the setup's I-frame QP, touches no rate-control state, and
+   decodes correctly.
 
 ## What is blocked, and why — BOTH ROUTES CLOSED
 
@@ -94,7 +98,183 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M81: what `error_status` 2 reacts to (built, not yet run) ***
+## *** M82: real game frames into NVENC, and the VIC colour matrix measured (built, not yet run) ***
+
+### M81 Run G, read
+
+Facts in `RESULT-M81-RUNG.md`. All 15 files verify: each FNV-1a equals the
+console's `sd(...)` line.
+
+**`error_status` 2 is routine. It does not react to anything we can change.**
+
+- **grc's own frames carry it.** The observer found three of grc's live
+  status blocks. All are P frames (`pic_type` 0) of 18-24 KB at avgQP 13,
+  close to grc's 5 Mbps / 30 fps budget of 20.8 KB a frame, and all three
+  report `error_status` 2 with `ucode_error_status` 0. grc's recordings play
+  back.
+- **Every variant carries it**, and each one removed a candidate cause:
+
+| variant | what it removed | result |
+|---|---|---|
+| a | (Run F again) | 2; byte-identical output to Run F (`nvenc-a-bits.bin` FNV `e869e7fa` both runs) |
+| b | "the frame is too small for the budget": 345,793 B at avgQP 21, QP 8..26, **about 17x over** the per-frame budget | 2 |
+| c | rate control: RCMODE 0, constant QP 24 | 2 |
+| d | HRD verification: setup `hrd_type` 0 | 2; bitstream and RC state byte-identical to a |
+| e | the two-pass flag: setup `two_pass_rc` 0 | 2; bitstream and RC state byte-identical to a |
+
+So M81's leading hypothesis, an HRD overflow verdict, is **refuted**: an
+over-budget frame, an HRD-off job and a job with no rate control at all flag
+the same 2. So are the zeroed-RC-state and the two-pass hypotheses. What all
+of them share with grc's frames is the firmware, grc's setup, and the
+`0x1100` bits of SET_CONTROL_PARAMS (FORCE_OUT_PIC, GPTIMER_ON). Isolating
+one of those buys nothing. **From here on a job counts as good when the
+engine wrote our picture index, `ucode_error_status` is 0 and the bit count
+is non-zero. `error_status` is logged and ignored.**
+
+**Also learned:**
+
+- **Constant QP works.** Variant c took avgQP 24, which is grc's I-frame QP
+  from the setup. It wrote nothing to the RC-process buffer; that is why
+  `nvenc-c-rc.bin` is absent (the module saves the buffer only when something
+  in it is non-zero). This is the mode a stream wants: quality set directly,
+  no rate-control state to carry.
+- **The RC-process state is 242 bytes.** After an IDR under RCMODE 18 it
+  holds:
+  - a 45-entry byte array at +0x58: one QP per macroblock row (720 / 16 =
+    45). Flat stripes give all 8; noise gives 8 ramping to 26 down the frame;
+  - a second 45-entry array at +0x88;
+  - a few counters: +0x54 is the average QP, and +0xf0 is 256 in both.
+
+  That is what a P frame would carry over. Constant QP never needs it.
+- **Two setup bytes changed nothing.** d and e ran without complaint and
+  produced grc's exact output, the first setups differing from grc's since
+  M71.
+- **The engine is fast.** The status appeared 28 us (c) to 2.7 ms (b) after
+  the submit returned, with 60-700 us between the last clock read and the submit returning. Our
+  jobs queue behind grc's on the same engine, which explains most of the
+  spread. A flat 720p IDR frame took about 0.1 ms; the noisy one, under 3 ms.
+- **grc runs no VIC job.** No VIC SETCL anywhere in grc's memory; its YUV
+  input is made elsewhere (the compositor side). So grc cannot teach us the
+  RGB->YUV matrix. M82 measures it directly instead.
+- **Nothing was disturbed.**
+  - Continuous `txn` through the log.
+  - grc's video capture saved.
+  - No crash report.
+  - The brief hitch the user noticed at the Capture button press (~120 s)
+    came 50 s after our last engine job (67.6 s). The log shows presents
+    continuing through it. Saving a clip is grc's own work; nothing of ours
+    was running.
+
+### What M82 builds
+
+Two probes, both in one boot. The arm file is `vic exec dbg csc nvframe
+wait=60`. `exec` is back on: it maps the VIC buffers, which both probes need.
+It also runs the fill and self-blit regression jobs that have completed in
+every VIC run since M13.
+
+**1. `csc`: the VIC colour matrix, measured.** M64 (output matrix) and M66
+(slot matrix) both produced a constant: the offset column landed and every
+coefficient term came out as zero. The field layout is the one Ryujinx and
+NVIDIA's header agree on. What is unknown is the arithmetic: what one
+coefficient unit is worth. So instead of a fourth guess, 11 VIC jobs each
+program one matrix:
+
+- **Input**: a 64x64 card of 16 flat patches. The bytes are R,G,B,A like the
+  game's surface, declared exactly as the game path declares it, so the
+  answer applies to game frames unchanged.
+- **Output**: NV12, pitch.
+- **`tools/vic_csc.py`** fits every output plane as `a*R + b*G + c*B + d`
+  over the patch centres.
+
+| probe | measures |
+|---|---|
+| `none` | the known pass-through (Y = B, U = R, V = G) |
+| `out_k8`, `out_k12`, `out_k16`, `out_k19` | one coefficient per row, K = 2^8 to 2^19-1, shift 0. Which K gives gain 1 is the coefficient unit. Row -> plane and input -> channel fall out too |
+| `out_k16_s8` | whether `matrix_r_shift` divides the products |
+| `out_off` | the offset column's unit |
+| `out_neg` | whether a negative coefficient works (two's complement) |
+| `out_dense` | all nine coefficients distinct: is every field where the struct says? |
+| `slot_k16` | the slot matrix under the same law |
+| `m64_bt601` | M64's exact matrix. It must reproduce M64's constant (Y 4, U/V 32), or the harness is not measuring what M64 did |
+
+The selftest makes a file under a made-up law and recovers it. That law has
+16 fraction bits in the coefficients and offsets in 10-bit units, and under
+it M64's matrix produces exactly the constant M64 saw (4, 32, 32). So "the
+coefficients were 2^16 too small" fits every observation so far. The sweep
+settles it.
+
+**2. `nvframe`: NVENC on real game frames.** Inside the debug capture, with
+the game running:
+
+1. Read the presented 1920x1080 slot out of the game (the M56 route).
+2. Look outside the top-left 1280x720: all zero means handheld, where MK8
+   renders 720p into the corner of the 1080p surface (M37). In that case the
+   VIC copies the corner **1:1**, native resolution. Docked, it scales
+   1920x1080 down to 1280x720.
+3. The VIC writes **NV12 block-linear, 32-row blocks** into an arena that is
+   mapped into both the VIC and the NVENC channels. NVENC's surface config
+   has no pitch mode, and grc's input is GPU block-linear with block height
+   2, so this is the one layout it takes. Both planes round up to whole
+   blocks: luma 736 rows, chroma 384. M81's arena had only 368 chroma rows,
+   which this layout would have overrun.
+4. NVENC encodes it as an IDR frame with grc's setup, **RCMODE 0**, the QP
+   patched into the setup.
+
+Colour stays the VIC's pass-through (Y = B, U = R, V = G). The PC undoes it.
+Fixing it is what `csc` is for.
+
+- **Frame 0** is encoded at QP 16, 20 and 24. Its VIC output and all three
+  encodes are saved.
+- **Then 120 frames run back to back at QP 20**: read, flush, VIC, encode,
+  with no SD or logging in the loop. The module logs, per stage, the average
+  and worst time, the bytes per frame, the achieved fps against the game's
+  own present rate, and the NVENC clock after. The last frame is saved.
+  **This is the first measurement of the whole capture -> encode path at
+  speed.**
+- **Housekeeping for this path:**
+  - The NVENC pushbuffer lives in the arena, not in the VIC's. The VIC's
+    completion is judged on syncpoint 12, which the compositor also advances,
+    so reusing the VIC's pushbuffer for NVENC after a fence that fired early
+    could feed NVENC methods to the VIC.
+  - The arena is zeroed and flushed before any engine writes it, so no dirty
+    cache line can later land on engine output.
+  - The older one-shot `dbg` steps are skipped on an nvframe run: the strip
+    dump and the 120-frame read-only loop.
+- **`tools/nvframe_check.py`**:
+  - deswizzles the VIC planes and scores every block height (0-4) and pitch
+    for smoothness, so a wrong layout shows up as a number;
+  - decodes each encode (behind SPS/PPS built from grc's setup) and computes
+    PSNR per plane against the VIC's own planes. High PSNR means NVENC read
+    the picture the VIC wrote, in the same layout;
+  - writes PNGs of both, colours remapped.
+
+  Its selftest swizzles a test picture into the layout, encodes the planes
+  with x264 in NVENC's place, and requires the right layout to win and the
+  PSNR to pass.
+
+### Run H - `vic exec dbg csc nvframe wait=60`, handheld
+
+Handheld, so the frame is native 720p and the VIC copies it 1:1. Docked also
+works, scaled.
+
+| reading | meaning |
+|---|---|
+| a K where the gain is 1, the offsets' unit known, `m64_bt601` = 4/32/32 | **the colour matrix is solved.** M83 programs BT.601 with that law, checks it on the card, and uses it for real frames |
+| every coefficient probe constant, `m64_bt601` = 4/32/32 | the coefficient path is dead at every scale, not mis-scaled. Colour stays pass-through (the PC remaps it) and the matrix is parked |
+| layout check says h=2, and PSNR against the VIC > 30 dB at all three QPs | **real frames encode.** The loop's timings say whether 720p all-intra keeps up with 60 fps; the sizes say the bitrate. M83 sends it over USB: a compressed native-720p stream |
+| the VIC picture is right but the decode is scrambled (low PSNR) | NVENC reads a different block-linear variant; the setup's `input_bl_mode` / block height are the knobs |
+| the VIC picture is scrambled in every layout | the VIC's block-linear output config is off |
+| an NVENC stall | channel left open, engine work stops for the boot; frame 0's files say how far it got |
+
+**Risk:** the VIC's block-linear output is a new configuration. The
+addresses are all checked, but a VIC that hangs takes the compositor with it
+(see "Hard-won constraints"), and that would mean a forced power-off. The debug
+attach stops the game briefly while the swapchain is found (2 ms in the last
+logged run).
+The loop reads 8.8 MB a frame from the game for ~2 s, which M67 did at 60 fps
+for a minute.
+
+## *** M81: what `error_status` 2 reacts to (Run G: nothing - it is routine) ***
 
 ### M80 Run F, read
 
