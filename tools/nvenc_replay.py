@@ -18,7 +18,10 @@ every surface is bound by a method - so grc's bytes are used verbatim.
              nvenc-bits.bin, nvenc-recon-y.bin, as copied off the card into
              DIR), print the status, list the NAL units, add SPS/PPS built
              from grc's setup if the stream has none, decode with PyAV and
-             compare the picture with the input stripes
+             compare the picture with the input stripes. M81 writes one set
+             per variant (nvenc-a-* to nvenc-e-*, plus each
+             variant's RC-process buffer as nvenc-X-rc.bin); check reads
+             whichever set is there
 
 The input the console encodes is horizontal stripes, 32 rows each, luma
 32 + 8*k for stripe k, chroma 128. A 32-row stripe is one contiguous byte
@@ -438,17 +441,22 @@ def selftest():
     print("selftest OK")
 
 
-def check(d):
-    d = Path(d)
-    st_path, bits_path, recon_path = d / "nvenc-status.bin", d / "nvenc-bits.bin", d / "nvenc-recon-y.bin"
+STATUS_FMT = "<IIIIHHHHIiIIHH"
+
+
+def check_one(d, prefix, label):
+    """One encode: <prefix>status.bin, <prefix>bits.bin, <prefix>recon-y.bin."""
+    st_path, bits_path, recon_path = d / f"{prefix}status.bin", d / f"{prefix}bits.bin", d / f"{prefix}recon-y.bin"
     s = parse_setup(SETUP.read_bytes())
+    print(f"== {label} ==")
     if st_path.exists():
         st = st_path.read_bytes()
         (pic_index, err_word, total_bits, type1_bits, pic_type, num_slices, ave_act, avg_qp,
-         cycles, hrd, bs_start, last_valid, intra_mbs, inter_mbs) = struct.unpack_from("<IIIIHHHHIiIIHH", st, 0)
-        print(f"status: picture_index={pic_index} error_status={err_word & 3} ucode_error_status={err_word >> 2:#x}"
+         cycles, hrd, bs_start, last_valid, intra_mbs, inter_mbs) = struct.unpack_from(STATUS_FMT, st, 0)
+        min_qp, max_qp = struct.unpack_from("<HH", st, 0x44)
+        print(f"status: picture_index={pic_index:#x} error_status={err_word & 3} ucode_error_status={err_word >> 2:#x}"
               f" total_bit_count={total_bits} ({total_bits // 8} B) pic_type={pic_type} num_slices={num_slices}"
-              f" avgQP={avg_qp} cycle_count={cycles} bitstream_start_pos={bs_start} last_valid_byte_offset={last_valid}"
+              f" avgQP={avg_qp} QP {min_qp}..{max_qp} hrdFullness={hrd} last_valid_byte_offset={last_valid}"
               f" intra_mbs={intra_mbs} inter_mbs={inter_mbs}")
     if not bits_path.exists():
         print(f"{bits_path.name}: missing")
@@ -475,7 +483,7 @@ def check(d):
         print("DECODE MATCHES THE INPUT STRIPES" if worst < 8 else f"decoded picture differs (worst band {worst:.1f})")
         try:
             from PIL import Image
-            png = d / "nvenc-decoded.png"
+            png = d / f"{prefix}decoded.png"
             Image.fromarray(luma).save(png)
             print(f"  -> {png}")
         except ImportError:
@@ -491,6 +499,34 @@ def check(d):
             worst = max(worst, abs(m - stripe_luma(t // 2)))
         print(f"{recon_path.name}: {len(rec)} B, reconstructed-luma stripe check worst deviation {worst:.1f}"
               + ("  (matches)" if worst < 8 else ""))
+    rc_path = d / f"{prefix}rc.bin"
+    if rc_path.exists():
+        # the RC-process buffer went in zeroed: every non-zero word is state
+        # the engine's rate control wrote
+        rc = rc_path.read_bytes()
+        nz = [(i, w) for i, (w,) in enumerate(struct.iter_unpack("<I", rc[:len(rc) // 4 * 4])) if w]
+        print(f"{rc_path.name}: {len(rc)} B, {len(nz)} non-zero words" + (":" if nz else ""))
+        for i, w in nz[:48]:
+            print(f"  +{i * 4:#06x} {w:#010x} {w if w < 0x80000000 else w - 0x100000000}")
+        if len(nz) > 48:
+            print(f"  ... {len(nz) - 48} more")
+
+
+VARIANTS = {"a": "a: grc's job, flat stripes (Run F)", "b": "b: grc's job, stripes + balanced noise",
+            "c": "c: RCMODE 0 (constant QP), flat stripes",
+            "d": "d: grc's job, setup rc hrd_type 0 (no HRD), flat stripes",
+            "e": "e: grc's job, setup two_pass_rc 0, flat stripes"}
+
+
+def check(d):
+    d = Path(d)
+    tags = [t for t in VARIANTS if (d / f"nvenc-{t}-bits.bin").exists() or (d / f"nvenc-{t}-status.bin").exists()]
+    if not tags:                                    # M80 / Run F naming
+        check_one(d, "nvenc-", "single encode (M80)")
+        return
+    for t in tags:
+        check_one(d, f"nvenc-{t}-", VARIANTS[t])
+        print()
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 76 hardware test cycles (through M79 Run E). Current build: **M80** (not yet run).
+`0100000000000C20`. 77 hardware test cycles (through M80 Run F). Current build: **M81** (not yet run).
 
 Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
 
@@ -30,6 +30,12 @@ Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
    `CreateIndirectLayer` → `CreateIndirectProducerEndPoint` →
    `CreateIndirectConsumerEndPoint`, three undocumented ABIs guessed correctly
    by analogy with `viCreateManagedLayer`.
+6. **NVJPG decodes from this process** (M77 Run C, file verified in M78 Run D),
+   once its clock is requested through `mm:u` right before the submit.
+7. **NVENC encodes H.264 from this process** (M80 Run F). grc's own IDR job,
+   replayed from our msenc channel with our buffers, completes in 2.1 ms; the
+   stream decodes on the PC to the input, and the reconstructed picture matches
+   it exactly. The engine flags `error_status` 2 on that frame - see M81.
 
 ## What is blocked, and why — BOTH ROUTES CLOSED
 
@@ -88,7 +94,199 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M80: grc's IDR job, replayed from our own channel (built, not yet run) ***
+## *** M81: what `error_status` 2 reacts to (built, not yet run) ***
+
+### M80 Run F, read
+
+Facts in `RESULT-M80-RUNF.md`. The three files verify: each FNV-1a equals the
+console's `sd(...)` line.
+
+- **NVENC encoded our frame, correctly.** The job was grc's, submitted from
+  our channel. The fence was reached, and the engine wrote our picture index
+  into our status block 2.1 ms after the submit, with NVENC at 979.2 MHz.
+  - The 516-byte slice decodes, behind an SPS/PPS built from grc's setup, to
+    all 23 stripes at their exact values.
+  - The engine's reconstructed luma matches the input at 0.0 deviation.
+  - This is the first NVENC job this project has seen complete. M68-M71's
+    hand-built jobs never did. What differed is known; which difference
+    mattered is not, and no longer needs to be.
+- **Nothing was disturbed.** No stutter, and `txn` climbed without a gap to
+  the end of the log. grc's own video capture saved afterwards. No crash
+  report, and a normal shutdown.
+- **The whole status block, field by field.** All 128 bytes were written by
+  the engine: the block was poisoned with 0xA5, and none of it survived.
+
+| field | value | reading |
+|---|---|---|
+| `error_status` (2 bits) | **2** | the question |
+| `ucode_error_status` (30 bits) | 0 | the firmware's own error enum (BAD_MAGIC / INVALID_INPUT / ...) says none |
+| `total_bit_count` / `last_valid_byte_offset` | 4128 / 516 | agree with each other and with the slice the PC parsed |
+| `type1_bit_count` | 4096 | |
+| `pic_type` / `num_slices` | 3 / 1 | IDR, as set |
+| `avgQP`, `actual_min/max_qp_used` | 8, 8..8 | grc's setup asks I-QP 24 in 0..51: the rate control chose 8 by itself |
+| `intra_mb_count` / `inter_mb_count` | 3600 / 0 | every MB of 1280x720 |
+| `total_intra_cost` | 2176 | a flat picture is almost free |
+| `total_inter_cost` | 235,926,000 | = 3600 x 65535: every MB's inter cost saturated, as it must be without a reference |
+| `hrdFullness`, `complexity`, `cycle_count` | 0, 0, 0 | `cycle_count` needs DumpCycleCount; the other two are discussed below |
+| ME/perf/SSD/SSIM fields, reserved | 0 | |
+
+### What `error_status` 2 is, and is not
+
+**It is not a failed encode.** The bitstream decodes to the input. The
+reconstruction is exact. The ucode's own error field is 0. The value is not
+left over from before: the whole block was poisoned.
+
+**It is not documented.** NVIDIA's header gives the field two bits and the
+comment "report error if any". Nothing names its values. NVJPG's status struct
+has a field of the same name with the same comment, which does not help.
+
+**The rate control is the only part of this job that passes a verdict.**
+Everything else either ran or did not. grc's setup turns picture-level rate
+control on with VCL HRD:
+
+- `hrd_type` 1, `vcl_cpb_size` 5,000,000 bits, `vcl_bitrate` 5,000,000.
+- `framerate` 7680, which is 30 x 256.
+- `R` 46, which is 5 Mbps / 30 / 3600 MBs = 46.3 bits per macroblock per
+  frame.
+- The header's own comment on the RC struct: picture-level RC "will also
+  perform HRD verification".
+
+Against that budget, our frame is tiny:
+
+- The per-frame budget is 166,667 bits. The frame took 4128, 2.5% of it.
+- In leaky-bucket terms, a frame that small lets the coded-picture buffer
+  gain 162 kbit it cannot drain. That is an HRD *overflow*. A CBR encoder
+  pads it with filler data; a VBR encoder ignores it.
+- A two-bit verdict with values 0 / 1 / 2 would fit none / underflow /
+  overflow.
+
+**That is the leading hypothesis, and only a hypothesis.** Two others fit the
+same facts:
+
+- **Our RC state starts zeroed.** The RC-process buffer is state the engine
+  carries from frame to frame. We zero it; grc's may be seeded by the driver.
+  A zeroed state could itself trip the check. `hrdFullness` 0 and
+  `complexity` 0 would fit either reading.
+- **The flag is routine for this configuration.** It could be set on grc's
+  frames too, which encode correctly as well.
+
+A fourth oddity is noted, not ranked: grc's setup has `two_pass_rc` 1, which
+the header calls "first pass of 2 pass rc". No second pass is ever submitted.
+
+**It does not block anything.** A decoder never sees HRD state, and the
+stream path will not keep grc's rate control anyway:
+
+- grc's settings are 5 Mbps / 30 fps for its recordings.
+- The USB link carries ~290 Mbps (see README), so the stream wants high
+  quality at 60 fps. That will be constant QP or a much larger bitrate, set by
+  us.
+- So the flag matters only if it marks something that breaks the *next*
+  frame, a P frame that reads this frame's RC and history state.
+
+Pinning it down costs one run, and M81 makes that the same run as the next
+useful step.
+
+### What M81 builds
+
+**`nvgrc`: one channel, five independent IDR jobs, one change each.** Before
+every job, all of these are reset:
+
+- the status, RC-process, bitstream and history buffers are zeroed;
+- the reference output is zeroed;
+- grc's setup is copied in fresh;
+- the status block is poisoned.
+
+So every job is a first frame. Each gets its own picture index
+(`0x4D383000` + n), and each is judged, as in M80, by the fence *and* its own
+index being written back.
+
+| variant | change from Run F | tests |
+|---|---|---|
+| **a** | none | is the 2 reproducible? |
+| **b** | input: the same stripes plus noise in [-24, 24], mirrored within each 32-row band so every band keeps its exact mean in any layout | a frame that costs bits: does the verdict move with the frame's size? |
+| **c** | SET_CONTROL_PARAMS `0x00001103`: RCMODE 0 | no rate control at all |
+| **d** | setup `rate_control.hrd_type` 1 -> 0 (byte 0x70) | rate control on, HRD verification off |
+| **e** | setup `rate_control.two_pass_rc` 1 -> 0 (byte 0xBA) | the two-pass flag |
+
+d and e are the only variants that change grc's setup, so they run last.
+M68-M71's hand-built setups stalled, and a stall ends engine work for the
+boot. Both offsets come from `offsetof` on NVIDIA's struct and are
+static-asserted against the offsets nvsetup-dump uses. The build also asserts
+that grc's setup holds 1 at both.
+
+**Per variant, on the SD card:**
+
+- `nvenc-X-status.bin` and `nvenc-X-bits.bin`.
+- `nvenc-X-rc.bin`: the RC-process buffer, up to its last non-zero byte. The
+  offset of that byte is logged. It went in zeroed, so every non-zero word is
+  RC state the engine wrote. If `error_status` is an HRD verdict, the fullness
+  it judged should be in there. For the P frames after this, it is the state
+  that has to carry over.
+- Variant a also writes `nvenc-a-recon-y.bin`.
+- The log line now includes QP min..max and `hrdFullness`.
+- A bitstream over 1 MB, the stage buffer's limit, is saved truncated, and
+  the log says so.
+
+**The grc observer (`grcscan`) now looks for three more things, and runs
+first.** It touches no engine. Running it before our jobs means it sees grc
+before anything of ours has shared NVENC with grc.
+
+- **grc's own status blocks.** grc has to read its status blocks to know
+  each frame's size, so they are in its memory. The signature is strict:
+  - intra + inter MBs = 3600;
+  - `pic_type` 0-3 and 1-64 slices;
+  - a non-zero bit count that fits the bitstream buffer;
+  - a `last_valid_byte_offset` that fits too.
+
+  Every match gets a NOTE (up to 32), and the log adds a histogram of
+  `error_status` 0/1/2/3 and a count of non-zero ucode errors. If grc's
+  frames carry 2 as well, the flag is routine for this configuration.
+- **grc's VIC jobs.** A VIC SETCL (class 0x5D) now also counts when it is
+  followed by the THI 0x0B write. Up to 4 windows of 1 KB are dumped, and
+  `nvrec.py` names the VIC 4.0 methods. This is the next step's question.
+  Real frames reach NVENC as NV12, and our VIC's RGB->YUV conversion is still
+  wrong (the packed-4:2:0 stream carries B/R/G, not Y/U/V). If grc converts
+  with the VIC, its config struct shows how.
+- **The SETCL rule is fixed.** M78's rule wanted register 0x10 after SETCL.
+  grc writes THI 0x0B there (Run E), so grc's NVENC SETCLs now count too.
+
+**PC side:**
+
+- `nvenc_replay.py check` reads whichever set is on the card: the M80 names,
+  or `nvenc-a-*` to `nvenc-e-*`. For each variant it:
+  - prints the status with QP range and `hrdFullness`;
+  - lists the NAL units, decodes, and checks the bands;
+  - writes `nvenc-X-decoded.png`;
+  - lists the non-zero words of `nvenc-X-rc.bin`.
+- The check ran on Run F's files (same result as in Run F) and on a
+  synthetic a-e set. That set used x264 encodes of the flat and the noisy
+  input, generated with the console's exact noise sequence, and all five
+  variants decoded to the stripes.
+- `nvrec.py` reproduces Run E's decode exactly: only output paths differ,
+  and the setups are byte-identical.
+
+### Run G - `vic nvgrc grcscan wait=60`
+
+In a race, as before.
+
+| reading | meaning |
+|---|---|
+| a = 2 | reproducible; the rest of the table applies |
+| a = 0 | Run F's 2 was not a property of the job; look at what differed (grc's recording state, timing) |
+| c = 0 and d = 0 | **the HRD check sets it.** b says which way: if b's bigger frame clears it or turns it into another value, it is an overflow / underflow verdict. Harmless for a stream; the stream sets its own RC |
+| c = 0, d = 2 | rate control sets it, but not through `hrd_type`; the RC dump and e narrow it |
+| c = 2 | not rate control; e and grc's histogram are what is left |
+| e = 0, others 2 | the two-pass flag |
+| grc's histogram mostly 2 | routine for grc's configuration, whatever it means |
+| d or e stalls | that setup byte is load-bearing. Engine work stops for the boot, a to c still count, and the observer has already run |
+| the observer finds VIC SETCLs | the next build reads grc's VIC config for the RGB->YUV setup |
+
+**Risk:** five jobs instead of one. a to c change nothing in grc's setup that
+Run F did not already run. d and e each change one byte, which is the first
+time since M71 that a setup differs from grc's. The observer's risk is Run D
+and Run E's (both clean).
+
+## *** M80: grc's IDR job, replayed from our own channel (Run F: encoded correctly, with error_status 2) ***
 
 ### M79 Run E, read
 

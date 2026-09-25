@@ -34,6 +34,12 @@ int main() {
     ExpectContains("vic nvgrc wait=60", "grc", false);
     ExpectContains("vic nvgrc wait=60", "nvgrc", true);
     ExpectContains("vic nvgrc wait=60", "nvenc", false);
+    /* M81: Run G's exact arm file */
+    ExpectContains("vic nvgrc grcscan wait=60\n", "grc", false);
+    ExpectContains("vic nvgrc grcscan wait=60\n", "nvgrc", true);
+    ExpectContains("vic nvgrc grcscan wait=60\n", "grcscan", true);
+    ExpectContains("vic nvgrc grcscan wait=60\n", "jpgdec", false);
+    ExpectNumber("vic nvgrc grcscan wait=60\n", "wait", 120, 60);
     ExpectContains("jpg jpgdec", "jpg", true);
     ExpectContains("clk\n", "clk", true);
     ExpectContains("vic\r\nclk\r\n", "clk", true);

@@ -20,16 +20,17 @@ developed on and for the author's own console.
 > finished is finished properly and verified on hardware; what is not is marked
 > as such throughout. See [Roadmap](#roadmap).
 >
-> **Latest (M79 Run E, on hardware; M80 built):** the complete NVENC job
-> that grc (the system recorder) submits on this firmware has been read out of
-> grc without touching the engine: its IDR and P-frame setups, and its command
-> buffer, down to the control word `0x12001103` and the twelve methods of an
-> IDR frame. M80 submits that exact job from this module's own channel, on a
-> test pattern, and checks the H.264 it gets back on the PC. See
-> [STATUS.md](tier4/mitm/STATUS.md).
+> **Latest (M80 Run F, on hardware; M81 built):** **NVENC encodes from this
+> module.** grc's own IDR job, submitted from our channel with our buffers,
+> completed in 2.1 ms. The H.264 it produced decodes on the PC to the test
+> pattern band for band, and the engine's reconstructed picture matches at
+> zero deviation. The engine also set an undocumented `error_status` of 2 on
+> that correct frame. M81 runs five variants of the job in one boot to pin
+> down what that flag reacts to (rate control, input cost), and reads grc's
+> own status blocks for comparison. See [STATUS.md](tier4/mitm/STATUS.md).
 
 **Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
-71 hardware test cycles.
+77 hardware test cycles.
 
 ![Mario Kart 8 Deluxe captured at native 1920x1080 from the game's own swapchain](docs/frame-1080p.png)
 
@@ -426,11 +427,12 @@ version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
 | **End-to-end stream** | **done, on hardware** — **768x432 at 59.6 fps**, 3600 frames, 0 stale; user-confirmed playable |
 | VIC scale + packed 4:2:0 in the stream path | **done, on hardware** — 2.1 ms/frame, 1.5 B/px, no codec |
 | Native resolution at 60 fps | **blocked on bandwidth, now measured.** The link saturates at ~37 MB/s, capping 60 fps at ~800x450. Raw 1080p60 needs 186.6 MB/s |
-| NVENC H.264 encode | **channel proven, engine silent.** host1x retires a full 39-word job with every surface populated; the engine never completes it. **Not the clock** (M76 Run A: 460.8 MHz before any request), so config or submit path |
+| NVENC H.264 encode | **done, on hardware (M80 Run F).** One 1280x720 IDR frame in 2.1 ms; decodes on the PC to the input, reconstruction exact. M68-M71's hand-built jobs never completed; grc's job, replayed verbatim, does. An undocumented `error_status` 2 on the correct frame is under test in M81 |
 | Engine clocks via `mm:u` (M76) | **done, on hardware.** NVJPG 0 -> 652.8 MHz on request; NVENC already clocked. NVJPG's rate does not persist on its own (M76 Run B) |
 | NVJPG decode positive control (M76/M77) | **done, on hardware (M77 Run C).** 64x64 decode in 314 us, output matches. First completed non-VIC engine job; the submit path is proven |
 | grc's NVENC job, read out of grc (M75 observer, M78/M79 dumps) | **done, on hardware (M79 Run E).** IDR and P setups plus the command buffer, decoded with NVIDIA's headers |
-| NVENC job replayed from our own channel (M80) | **built, not yet run.** grc's IDR job verbatim, our buffers, stripe input; PC decode check ready |
+| NVENC job replayed from our own channel (M80) | **done, on hardware (M80 Run F).** All three output files verified byte for byte against the console's own hashes |
+| What `error_status` 2 means (M81) | **built, not yet run.** Same job five ways (as Run F; input that costs bits; constant-QP rate control; HRD verification off; two-pass flag off), plus grc's own status blocks read out of grc |
 | **Compressed stream over USB 2.0** — the main goal | **in progress.** The link carries ~290 Mbps; H.264 1080p60 is visually lossless at 100–150 Mbps even all-intra, so bitrate has 2–3x headroom and the tuning target is quality and latency, not size. Waiting on NVENC |
 | grc recorder (M72) — capture how the system drives NVENC | **built, not yet run on hardware** |
 | USB 3.0 SuperSpeed — **handheld only** | descriptors **and BOS** accepted, link still negotiates High. Device side now matches haze exactly; the cable is the one untested variable. Docked, the dock owns the USB-C port, so this can never carry a docked stream |

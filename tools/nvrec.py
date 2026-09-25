@@ -51,6 +51,18 @@ if os.path.exists(HDR):
                     found[v] = m.group(1)
     NVENC_METHODS.update(found)
 
+# VIC 4.0 (class 0x5D) methods, as tier4/applet-mitm/source/vic40_config.hpp
+# and libdrm's vic40.h name them - M81 dumps grc's VIC jobs, if it has any
+VIC_METHODS = {
+    0x200: "SET_APPLICATION_ID", 0x300: "EXECUTE",
+    0x400: "SET_SURFACE0_SLOT0_LUMA_OFFSET", 0x404: "SET_SURFACE0_SLOT0_CHROMA_U_OFFSET",
+    0x408: "SET_SURFACE0_SLOT0_CHROMA_V_OFFSET",
+    0x700: "SET_PICTURE_INDEX", 0x704: "SET_CONTROL_PARAMS", 0x708: "SET_CONFIG_STRUCT_OFFSET",
+    0x70C: "SET_FILTER_STRUCT_OFFSET", 0x710: "SET_PALETTE_OFFSET", 0x714: "SET_HIST_OFFSET",
+    0x720: "SET_OUTPUT_SURFACE_LUMA_OFFSET", 0x724: "SET_OUTPUT_SURFACE_CHROMA_U_OFFSET",
+    0x728: "SET_OUTPUT_SURFACE_CHROMA_V_OFFSET",
+}
+
 KIND = {1: "OPEN", 2: "IOCTL>", 3: "IOCTL<", 4: "IOCTL2>", 5: "IOCTL3>",
         6: "CLOSE", 7: "CMDBUF", 8: "SETUP", 9: "NOTE"}
 CLASS = {0x01: "HOST1X", 0x21: "NVENC", 0x5D: "VIC", 0xC0: "NVJPG", 0xF0: "NVDEC"}
@@ -71,7 +83,8 @@ def decode_cmdbuf(words, out):
         elif r == 0x11:
             m = method << 2
             cname = "?" if cls is None else CLASS.get(cls, hex(cls))   # no SETCL seen: class set by nvservices
-            out(f"      {cname:6} {m:#06x} {NVENC_METHODS.get(m, '?'):32} = {v:#010x}"
+            names = VIC_METHODS if cls == 0x5D else NVENC_METHODS
+            out(f"      {cname:6} {m:#06x} {names.get(m, '?'):32} = {v:#010x}"
                 + (f"   (iova {v << 8:#x})" if 0x400 <= m < 0x800 and m not in (0x700, 0x704) else ""))
         elif r == 0x00:
             out(f"      INCR_SYNCPT cond={(v >> 8) & 0xFF} syncpt={v & 0xFF}")
