@@ -1,0 +1,1398 @@
+[   62.808] NOTE   SET_IN_DRV_PIC_SETUP write @ 0x62a37cd030 (+0x30 in the dump) in region 0x62a37cd000+0x8000 state 0x4
+[   62.808] CMDBUF grc va 0x62a37cd000 words=512  hit at +0x30 (word 12)
+      -0x0030: 00000840 100b0001 00000000 10100002 000001c0 12001103 10100002 000001c1
+      -0x0010: 0000028c 10100002 00000080 00000001
+    decoded from the hit:
+      ?      0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      ?      0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      ?      0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      ?      0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      ?      0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      ?      0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      ?      0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      ?      0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      ?      0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      ?      0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      ?      0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      ?      0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000028d
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000028e
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000028f
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000290
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000291
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000292
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000293
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000294
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000295
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000296
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+[   62.808] NOTE   SET_IN_DRV_PIC_SETUP write @ 0x62a37cd8a4 (+0x200 in the dump) in region 0x62a37cd000+0x8000 state 0x4
+[   62.808] CMDBUF grc va 0x62a37cd6a4 words=512  hit at +0x200 (word 128)
+      -0x0200: 000001c8 00e28600 10100002 000001cd 00e25200 10100002 000001d0 00e26060
+      -0x01e0: 10100002 000001cc 00e29200 10100002 000000c0 00000100 20000001 0000010e
+      -0x01c0: 00000840 100b0001 00000000 10100002 000001c0 12001103 10100002 000001c1
+      -0x01a0: 00000295 10100002 00000080 00000001 10100002 000001c4 00e2c200 10100002
+      -0x0180: 000001c6 00e2c400 10100002 000001c9 00e26e00 10100002 000001c7 00e2c600
+      -0x0160: 10100002 000001c8 00e28600 10100002 000001cd 00e2ac00 10100002 000001d0
+      -0x0140: 00e2ba60 10100002 000001cc 00e2dc00 10100002 000001ce 00e2f200 10100002
+      -0x0120: 000001cf 00e2f400 10100002 00000100 00e29200 10100002 000000c0 00000100
+      -0x0100: 20000001 0000010e 00000840 100b0001 00000000 10100002 000001c0 12001103
+      -0x00e0: 10100002 000001c1 00000296 10100002 00000080 00000001 10100002 000001c4
+      -0x00c0: 00e26a00 10100002 000001c6 00e26c00 10100002 000001c9 00e26e00 10100002
+      -0x00a0: 000001c7 00e27000 10100002 000001c8 00e28600 10100002 000001cd 00e2f800
+      -0x0080: 10100002 000001d0 00e30660 10100002 000001cc 00e29200 10100002 000001ce
+      -0x0060: 00e2f400 10100002 000001cf 00e2f200 10100002 00000100 00e2dc00 10100002
+      -0x0040: 000000c0 00000100 20000001 0000010e 00000840 100b0001 00000000 10100002
+      -0x0020: 000001c0 12001103 10100002 000001c1 00000297 10100002 00000080 00000001
+    decoded from the hit:
+      ?      0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      ?      0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      ?      0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      ?      0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      ?      0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      ?      0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      ?      0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      ?      0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      ?      0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      ?      0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      ?      0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      ?      0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000298
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000299
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000029a
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000029b
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000029c
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000029d
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000029e
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+[   62.808] NOTE   SET_IN_DRV_PIC_SETUP write @ 0x62a37d6030 (+0x30 in the dump) in region 0x62a37d6000+0x8000 state 0x4
+[   62.808] CMDBUF grc va 0x62a37d6000 words=512  hit at +0x30 (word 12)
+      -0x0030: 00000840 100b0001 00000000 10100002 000001c0 12001103 10100002 000001c1
+      -0x0010: 0000032f 10100002 00000080 00000001
+    decoded from the hit:
+      ?      0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      ?      0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      ?      0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      ?      0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      ?      0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      ?      0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      ?      0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      ?      0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      ?      0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      ?      0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      ?      0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      ?      0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000330
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000331
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000332
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000333
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000334
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000335
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000336
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000337
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000338
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000339
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+[   62.808] NOTE   SET_IN_DRV_PIC_SETUP write @ 0x62a37d6800 (+0x200 in the dump) in region 0x62a37d6000+0x8000 state 0x4
+[   62.808] CMDBUF grc va 0x62a37d6600 words=512  hit at +0x200 (word 128)
+      -0x0200: 000001cc 00e29200 10100002 000001ce 00e2f400 10100002 000001cf 00e2f200
+      -0x01e0: 10100002 00000100 00e2dc00 10100002 000000c0 00000100 20000001 0000010e
+      -0x01c0: 00000840 100b0001 00000000 10100002 000001c0 12001103 10100002 000001c1
+      -0x01a0: 00000337 10100002 00000080 00000001 10100002 000001c4 00e2c200 10100002
+      -0x0180: 000001c6 00e2c400 10100002 000001c9 00e26e00 10100002 000001c7 00e2c600
+      -0x0160: 10100002 000001c8 00e28600 10100002 000001cd 00e2ac00 10100002 000001d0
+      -0x0140: 00e2ba60 10100002 000001cc 00e2dc00 10100002 000001ce 00e2f200 10100002
+      -0x0120: 000001cf 00e2f400 10100002 00000100 00e29200 10100002 000000c0 00000100
+      -0x0100: 20000001 0000010e 00000840 100b0001 00000000 10100002 000001c0 12001103
+      -0x00e0: 10100002 000001c1 00000338 10100002 00000080 00000001 10100002 000001c4
+      -0x00c0: 00e26a00 10100002 000001c6 00e26c00 10100002 000001c9 00e26e00 10100002
+      -0x00a0: 000001c7 00e27000 10100002 000001c8 00e28600 10100002 000001cd 00e2f800
+      -0x0080: 10100002 000001d0 00e30660 10100002 000001cc 00e29200 10100002 000001ce
+      -0x0060: 00e2f400 10100002 000001cf 00e2f200 10100002 00000100 00e2dc00 10100002
+      -0x0040: 000000c0 00000100 20000001 0000010e 00000840 100b0001 00000000 10100002
+      -0x0020: 000001c0 12001103 10100002 000001c1 00000339 10100002 00000080 00000001
+    decoded from the hit:
+      ?      0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      ?      0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      ?      0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      ?      0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      ?      0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      ?      0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      ?      0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      ?      0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      ?      0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033a
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033b
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033c
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033d
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033e
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033f
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000340
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+[   62.838] NOTE   skipped region 0x6f18000000+0xcb4000 state 0xd perm 0x3 (over 8 MB)
+[   62.894] NOTE   setup magic @ 0x6f190f81cc in region 0x6f190ce000+0x85000 state 0xd perm 0x3
+[   62.894] SETUP  grc va 0x6f190f81cc 4096 B  magic=0xd0b70006
+          -> logs/m79-runE-setups/setup_0.bin
+[   62.898] NOTE   setup magic @ 0x6f19136570 in region 0x6f190ce000+0x85000 state 0xd perm 0x3
+[   62.898] SETUP  grc va 0x6f19136570 4096 B  magic=0xd0b70006
+          -> logs/m79-runE-setups/setup_1.bin
+[   62.899] NOTE   setup magic @ 0x6f19159000 in region 0x6f19159000+0x3000 state 0xd perm 0x3
+[   62.899] SETUP  grc va 0x6f19159000 4096 B  magic=0xd0b70006
+          -> logs/m79-runE-setups/setup_2.bin
+[   62.899] NOTE   setup magic @ 0x6f1915c000 in region 0x6f1915c000+0x3000 state 0xd perm 0x3
+[   62.899] SETUP  grc va 0x6f1915c000 4096 B  magic=0xd0b70006
+          -> logs/m79-runE-setups/setup_3.bin
+[   62.899] NOTE   setup magic @ 0x6f1915f000 in region 0x6f1915f000+0x3000 state 0xd perm 0x3
+[   62.899] SETUP  grc va 0x6f1915f000 4096 B  magic=0xd0b70006
+          -> logs/m79-runE-setups/setup_4.bin
+[   62.910] NOTE   skipped region 0x6f192d0000+0x1f49000 state 0xd perm 0x3 (over 8 MB)
+[   62.968] NOTE   skipped region 0x6f1b765000+0x289b000 state 0xd perm 0x3 (over 8 MB)
+[   62.968] NOTE   watch +0 ms: slot 0 @ 0x6f19159000 frame_num 3 pic_type 0
+[   62.968] SETUP  grc va 0x6f19159000 4096 B  magic=0xd0b70006
+          -> logs/m79-runE-setups/setup_5.bin
+[   62.968] NOTE   watch +0 ms: slot 1 @ 0x6f1915c000 frame_num 2 pic_type 0
+[   62.968] SETUP  grc va 0x6f1915c000 4096 B  magic=0xd0b70006
+          -> logs/m79-runE-setups/setup_6.bin
+[   62.968] NOTE   watch +0 ms: slot 2 @ 0x6f1915f000 frame_num 3 pic_type 0
+[   62.968] SETUP  grc va 0x6f1915f000 4096 B  magic=0xd0b70006
+          -> logs/m79-runE-setups/setup_7.bin
+[   63.350] NOTE   watch +382 ms: slot 0 @ 0x6f19159000 frame_num 0 pic_type 3 (INTRA)
+[   63.350] SETUP  grc va 0x6f19159000 4096 B  magic=0xd0b70006
+          -> logs/m79-runE-setups/setup_8.bin
+[   63.350] NOTE   intra frame seen: command-buffer windows dumped again now
+[   63.350] CMDBUF grc va 0x62a37cd000 words=512  hit at +0x30 (word 12)
+      -0x0030: 00000840 100b0001 00000000 10100002 000001c0 12001103 10100002 000001c1
+      -0x0010: 0000028c 10100002 00000080 00000001
+    decoded from the hit:
+      ?      0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      ?      0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      ?      0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      ?      0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      ?      0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      ?      0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      ?      0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      ?      0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      ?      0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      ?      0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      ?      0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      ?      0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000028d
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000028e
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000028f
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000290
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000291
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000292
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000293
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000294
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000295
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000296
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+[   63.350] CMDBUF grc va 0x62a37cd6a4 words=512  hit at +0x200 (word 128)
+      -0x0200: 000001c8 00e28600 10100002 000001cd 00e25200 10100002 000001d0 00e26060
+      -0x01e0: 10100002 000001cc 00e29200 10100002 000000c0 00000100 20000001 0000010e
+      -0x01c0: 00000840 100b0001 00000000 10100002 000001c0 12001103 10100002 000001c1
+      -0x01a0: 00000295 10100002 00000080 00000001 10100002 000001c4 00e2c200 10100002
+      -0x0180: 000001c6 00e2c400 10100002 000001c9 00e26e00 10100002 000001c7 00e2c600
+      -0x0160: 10100002 000001c8 00e28600 10100002 000001cd 00e2ac00 10100002 000001d0
+      -0x0140: 00e2ba60 10100002 000001cc 00e2dc00 10100002 000001ce 00e2f200 10100002
+      -0x0120: 000001cf 00e2f400 10100002 00000100 00e29200 10100002 000000c0 00000100
+      -0x0100: 20000001 0000010e 00000840 100b0001 00000000 10100002 000001c0 12001103
+      -0x00e0: 10100002 000001c1 00000296 10100002 00000080 00000001 10100002 000001c4
+      -0x00c0: 00e26a00 10100002 000001c6 00e26c00 10100002 000001c9 00e26e00 10100002
+      -0x00a0: 000001c7 00e27000 10100002 000001c8 00e28600 10100002 000001cd 00e2f800
+      -0x0080: 10100002 000001d0 00e30660 10100002 000001cc 00e29200 10100002 000001ce
+      -0x0060: 00e2f400 10100002 000001cf 00e2f200 10100002 00000100 00e2dc00 10100002
+      -0x0040: 000000c0 00000100 20000001 0000010e 00000840 100b0001 00000000 10100002
+      -0x0020: 000001c0 12001103 10100002 000001c1 00000297 10100002 00000080 00000001
+    decoded from the hit:
+      ?      0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      ?      0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      ?      0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      ?      0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      ?      0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      ?      0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      ?      0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      ?      0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      ?      0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      ?      0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      ?      0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      ?      0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000298
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000299
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000029a
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000029b
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000029c
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000029d
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000029e
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+[   63.350] CMDBUF grc va 0x62a37d6000 words=512  hit at +0x30 (word 12)
+      -0x0030: 00000840 100b0001 00000000 10100002 000001c0 12001103 10100002 000001c1
+      -0x0010: 0000032f 10100002 00000080 00000001
+    decoded from the hit:
+      ?      0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      ?      0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      ?      0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      ?      0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      ?      0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      ?      0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      ?      0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      ?      0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      ?      0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      ?      0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      ?      0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      ?      0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000330
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000331
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000332
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000333
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000334
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000335
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000336
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000337
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000338
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000339
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+[   63.350] CMDBUF grc va 0x62a37d6600 words=512  hit at +0x200 (word 128)
+      -0x0200: 000001cc 00e29200 10100002 000001ce 00e2f400 10100002 000001cf 00e2f200
+      -0x01e0: 10100002 00000100 00e2dc00 10100002 000000c0 00000100 20000001 0000010e
+      -0x01c0: 00000840 100b0001 00000000 10100002 000001c0 12001103 10100002 000001c1
+      -0x01a0: 00000337 10100002 00000080 00000001 10100002 000001c4 00e2c200 10100002
+      -0x0180: 000001c6 00e2c400 10100002 000001c9 00e26e00 10100002 000001c7 00e2c600
+      -0x0160: 10100002 000001c8 00e28600 10100002 000001cd 00e2ac00 10100002 000001d0
+      -0x0140: 00e2ba60 10100002 000001cc 00e2dc00 10100002 000001ce 00e2f200 10100002
+      -0x0120: 000001cf 00e2f400 10100002 00000100 00e29200 10100002 000000c0 00000100
+      -0x0100: 20000001 0000010e 00000840 100b0001 00000000 10100002 000001c0 12001103
+      -0x00e0: 10100002 000001c1 00000338 10100002 00000080 00000001 10100002 000001c4
+      -0x00c0: 00e26a00 10100002 000001c6 00e26c00 10100002 000001c9 00e26e00 10100002
+      -0x00a0: 000001c7 00e27000 10100002 000001c8 00e28600 10100002 000001cd 00e2f800
+      -0x0080: 10100002 000001d0 00e30660 10100002 000001cc 00e29200 10100002 000001ce
+      -0x0060: 00e2f400 10100002 000001cf 00e2f200 10100002 00000100 00e2dc00 10100002
+      -0x0040: 000000c0 00000100 20000001 0000010e 00000840 100b0001 00000000 10100002
+      -0x0020: 000001c0 12001103 10100002 000001c1 00000339 10100002 00000080 00000001
+    decoded from the hit:
+      ?      0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      ?      0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      ?      0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      ?      0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      ?      0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      ?      0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      ?      0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      ?      0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      ?      0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033a
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033b
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033c
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033d
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033e
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2f800   (iova 0xe2f80000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e30660   (iova 0xe3066000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x0000033f
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e2c200   (iova 0xe2c20000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e2c400   (iova 0xe2c40000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e2c600   (iova 0xe2c60000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e25200   (iova 0xe2520000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e26060   (iova 0xe2606000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+      NVENC  0x0700 SET_CONTROL_PARAMS               = 0x12001103
+      NVENC  0x0704 SET_PICTURE_INDEX                = 0x00000340
+      NVENC  0x0200 SET_APPLICATION_ID               = 0x00000001
+      NVENC  0x0710 SET_IN_DRV_PIC_SETUP             = 0x00e26a00   (iova 0xe26a0000)
+      NVENC  0x0718 SET_OUT_ENC_STATUS               = 0x00e26c00   (iova 0xe26c0000)
+      NVENC  0x0724 SET_IO_RC_PROCESS                = 0x00e26e00   (iova 0xe26e0000)
+      NVENC  0x071c SET_OUT_BITSTREAM                = 0x00e27000   (iova 0xe2700000)
+      NVENC  0x0720 SET_IOHISTORY                    = 0x00e28600   (iova 0xe2860000)
+      NVENC  0x0734 SET_IN_CUR_PIC                   = 0x00e2ac00   (iova 0xe2ac0000)
+      NVENC  0x0740 SET_IN_CUR_PIC_CHROMA_U          = 0x00e2ba60   (iova 0xe2ba6000)
+      NVENC  0x0730 SET_OUT_REF_PIC_LUMA             = 0x00e29200   (iova 0xe2920000)
+      NVENC  0x0738 SET_IN_MEPRED_DATA               = 0x00e2f200   (iova 0xe2f20000)
+      NVENC  0x073c SET_OUT_MEPRED_DATA              = 0x00e2f400   (iova 0xe2f40000)
+      NVENC  0x0400 SET_IN_REF_PIC0_LUMA             = 0x00e2dc00   (iova 0xe2dc0000)
+      NVENC  0x0300 EXECUTE                          = 0x00000100
+      INCR_SYNCPT cond=1 syncpt=14
+    SETCL class=0x21 (NVENC) offset=0x0 mask=0x0
+      host1x reg 0x00b = 0x00000000
+[   63.351] NOTE   watch +382 ms: slot 2 @ 0x6f1915f000 frame_num 0 pic_type 3 (INTRA)
+[   63.351] SETUP  grc va 0x6f1915f000 4096 B  magic=0xd0b70006
+          -> logs/m79-runE-setups/setup_9.bin
+
+59844 of 59844 bytes decoded, 10 setup blob(s)
