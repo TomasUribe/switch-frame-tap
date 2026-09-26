@@ -15,6 +15,10 @@ summarises a recording and cuts a small sample of it:
       M85 drift test: decodes the whole recording and compares its last frame
       with the console's VIC picture of it (DIR/nvstream-last-y.bin, -uv.bin);
       its neighbours are compared too, so an off-by-one reads as one
+  python3 tools/sft_tool.py artifacts FILE [N]
+      M88: counts frames that look like an OLDER frame (k-2/k-3) than the one
+      before them, and frames whose bottom half is older than their top (a
+      tear) - what reading a slot before the GPU finished it produces
   python3 tools/sft_tool.py selftest
 """
 import struct
@@ -164,6 +168,47 @@ def last(path, d, out=print):
     return verdict
 
 
+def artifacts_in(frames, out=print):
+    """frames: luma arrays in order. Returns (regressions, tears)."""
+    import numpy as np
+    back = torn = 0
+    ex = []
+    for k in range(3, len(frames)):
+        y, p1, p2, p3 = frames[k], frames[k - 1], frames[k - 2], frames[k - 3]
+        d1 = np.abs(y - p1).mean()
+        if d1 < 2:
+            continue                    # static, or the same frame re-sent
+        old = min(np.abs(y - p2).mean(), np.abs(y - p3).mean())
+        h = y.shape[0] // 2
+        t1 = np.abs(y[:h] - p1[:h]).mean()
+        b1 = np.abs(y[h:] - p1[h:]).mean()
+        b_old = min(np.abs(y[h:] - p2[h:]).mean(), np.abs(y[h:] - p3[h:]).mean())
+        if old < 0.6 * d1:
+            back += 1
+            ex.append(k)
+        if b_old < 0.5 * b1 and t1 < b1:
+            torn += 1
+    out(f"   {len(frames)} frames: {back} look like an older frame than the one before them, "
+        f"{torn} have a bottom half older than the top; first: {ex[:10]}")
+    return back, torn
+
+
+def artifacts(path, n=3000, out=print):
+    import av
+    import numpy as np
+    ctx = av.CodecContext.create("h264", "r")
+    frames = []
+    for p in packets(path):
+        if not p["flags"] & 2:
+            continue
+        for f in ctx.decode(av.Packet(p["payload"])):
+            frames.append(f.to_ndarray(format="gray")[::4, ::4].astype(np.float32))
+        if len(frames) >= n:
+            break
+    out(f"{path}:")
+    return artifacts_in(frames, out)
+
+
 def selftest():
     import tempfile
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -198,6 +243,19 @@ def selftest():
             (Path(td) / "nvstream-last-y.bin").write_bytes((j / "nvframe-0-y.bin").read_bytes()[::-1])
             assert not last(g, td, out=lambda *_: None)
             print("drift test: Run J frame matches at 46.4 dB, a wrong picture fails")
+    # M88: the artifact detector on synthetic motion - a clean pan, then the
+    # same pan with a stale frame and a torn frame spliced in
+    import numpy as np
+    xs = np.arange(400, dtype=np.float32)
+    base = np.tile(128 + 100 * np.sin(xs / 25.0), (180, 1)) + np.arange(180, dtype=np.float32)[:, None] * 0.2
+    pan = [base[:, 3 * k:3 * k + 320].copy() for k in range(20)]
+    assert artifacts_in(pan, out=lambda *_: None) == (0, 0)
+    bad = [f.copy() for f in pan]
+    bad[10] = pan[7].copy()                             # an old frame
+    bad[15][90:] = pan[12][90:]                         # bottom half from 3 back
+    back, torn = artifacts_in(bad, out=lambda *_: None)
+    assert back >= 1 and torn >= 1, (back, torn)
+    print("artifact detector: a clean pan is clean; a stale and a torn frame are caught")
     print("selftest OK")
 
 
@@ -207,6 +265,8 @@ if __name__ == "__main__":
         selftest()
     elif len(a) >= 2 and a[0] == "stats":
         stats(a[1], int(a[a.index("--decode") + 1]) if "--decode" in a else 0)
+    elif len(a) >= 2 and a[0] == "artifacts":
+        artifacts(a[1], int(a[2]) if len(a) > 2 else 3000)
     elif len(a) == 3 and a[0] == "last":
         sys.exit(0 if last(a[1], a[2]) else 1)
     elif len(a) == 4 and a[0] == "head":

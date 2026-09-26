@@ -53,8 +53,15 @@ AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IBinderMitm, AMS_VI_BINDER_MITM_
 AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IViDisplaySvcMitm, AMS_VI_DISPLAYSVC_MITM_INTERFACE_INFO, 0x2AB1E142)
 
 /* ---- vi:u root wrapper --------------------------------------------- */
+/* M87: command 1, GetDisplayServiceWithProxyNameExchange, is how some games
+ * (BOTW in Run M) open the display service; left undeclared it auto-forwards
+ * and the game's binder never passes through us. Its arguments differ between
+ * sources (switchbrew: a u32; SwIPC's vi:s/vi:m variants: 8-byte ProxyName +
+ * u32), so it is declared with NO typed input: the handler copies the game's
+ * raw request and forwards those bytes unchanged. */
 #define AMS_VI_ROOT_MITM_INTERFACE_INFO(C, H) \
-    AMS_SF_METHOD_INFO(C, H, 0, Result, GetDisplayService, (sf::Out<sf::SharedPointer<ams::mitm::applet::IViDisplaySvcMitm>> out, u32 mode), (out, mode))
+    AMS_SF_METHOD_INFO(C, H, 0, Result, GetDisplayService, (sf::Out<sf::SharedPointer<ams::mitm::applet::IViDisplaySvcMitm>> out, u32 mode), (out, mode)) \
+    AMS_SF_METHOD_INFO(C, H, 1, Result, GetDisplayServiceWithProxyNameExchange, (sf::Out<sf::SharedPointer<ams::mitm::applet::IViDisplaySvcMitm>> out), (out))
 
 AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IViRootMitm, AMS_VI_ROOT_MITM_INTERFACE_INFO, 0x2AB1E143)
 
@@ -88,6 +95,9 @@ namespace ams::mitm::applet {
             }
         public:
             Result GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode);
+            Result GetDisplayServiceWithProxyNameExchange(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out);
+        private:
+            void Wrap(::Service disp_svc, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out);
     };
     static_assert(IsIViRootMitm<ViRootMitm>);
 

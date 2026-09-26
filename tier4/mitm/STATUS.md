@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 82 hardware test cycles (through M85 Run K). Current build: **M85** (Run K: a playable 720p60 IDR+P stream, ~31 ms measured latency).
+`0100000000000C20`. 86 hardware test cycles (through M88 Run O). Current build: **M89** (slot + fence as one snapshot; not yet run). Last run: M88 Run O - fence waits removed the scan lines; repeats nearly gone. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -114,6 +114,221 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M89: take the slot and its fence together (built, not yet run) ***
+
+### Run O (M88, logs `logs/m88-runO*`): the fence was the right fix
+
+User: "way better, the scan lines are gone and the repeated frames seem
+almost gone"; "already way better than sysdvr since we get 60fps". No crash
+report.
+
+- **Fences:** MK8 7634 waited, avg **5.7 ms**, max 41 ms, 2 timeouts; BOTW
+  2465 waited, avg **11.4 ms**, 2 timeouts; 0 presents without a readable
+  fence. The GPU really was still drawing when the game queued the slot.
+- **BOTW at 29.5 fps sent** (game 29.0) - no more re-sends at ~45 fps.
+- **Console latency** rose to 23 ms avg (MK8) / 39 ms (BOTW) by exactly the
+  fence wait: the price of a finished frame.
+- `sft_tool artifacts`, first 3000 MK8 frames: **torn 22 -> 3, "older frame"
+  29 -> 17**. The remaining hits have one shape: frame k matches k-2 almost
+  exactly (0.5) and differs from k-1 (8.4) - A, B, A, B.
+
+### Why the A, B, A, B frames remained (inferred)
+
+M88 read the fence, waited on it (avg 5.7 ms), and only then read
+`g_queue_slot`. A present during the wait swapped in the NEXT slot, whose
+GPU work was not done - with three slots, still holding the picture from
+three presents back.
+
+### The change
+
+The binder hook publishes slot, fence, tick and count under a seqlock
+(`g_queue_seq`, odd while writing); `Capture` takes one consistent snapshot
+of slot + fence first, then waits on that fence and reads that slot.
+
+Run P: same arm file, MK8 then BOTW; `sft_tool artifacts` should drop the
+"older frame" count toward zero.
+
+---
+
+## *** M88: read a slot only after the GPU has finished it (Run O: scan lines gone) ***
+
+### Run N (M87, logs `logs/m87-runN*`): BOTW streams
+
+User: "everything streamed fine", prefers the new scaling, "BOTW ran smoothly
+with the correct colors". Two artifacts on both games: "slight horizontal
+scan lines", and "the stream shows a few old frames so it looks like it is
+repeating for a split second". No crash report.
+
+- **MK8** (live[1]): 6074 frames at 58.3 fps; 3 slots of 1920x1080, handheld
+  corner, as before - the geometry path reproduced MK8's constants exactly.
+- **BOTW** (01007ef00011e000, live[2]): opened its display service with
+  **command 1: 12 argument bytes, all zero, no pid** (so a u32 plus slack;
+  switchbrew was right). Forwarded unchanged, wrapped, and its binder came
+  through. Its swapchain: **2 slots** of 1920x1080 A8B8G8R8 (17,694,720 B),
+  handheld content in the 1280x720 corner, same format as MK8 (colours right).
+  30 fps game: 2665 frames sent in 59 s (45 fps - the 20 ms wait re-sent
+  frames), 0 stalls over 50 ms.
+
+### The artifacts, measured
+
+`sft_tool.py artifacts` on Run N's first 3000 MK8 frames: **29 frames look
+more like a frame 2-3 presents old than like the one before them** (frame
+379: 3.1 from k-1, 0.3 from k-3), and **22 have a bottom half older than
+their top**. Both are what reading a slot before the GPU finished drawing it
+produces: the hook fires when the game *queues* the slot, and queueBuffer
+carries an acquire fence that the compositor waits on and we did not. Mid-
+draw gives a seam; before the draw starts gives the slot's previous contents
+whole - an old frame.
+
+### The changes
+
+- The binder hook parses queueBuffer's fence (the flattened BqBufferInput
+  after the slot: fence at +48, count then up to four syncpoint id/value
+  pairs) and publishes it with the slot, count increment last (release).
+- `Capture` waits for every syncpoint in the fence (nvhost-ctrl
+  SYNCPT_READ, 250 us polls, at most 30 ms) before reading; the summary
+  logs waits, average/max wait, timeouts, and presents without a fence.
+- It waits up to 50 ms (was 20) for a new present, so a 30 fps game is no
+  longer re-sent at ~45 fps.
+
+Run O: same arm file; MK8 then BOTW. Pass: `sft_tool artifacts` far below
+29/22 per 3000 frames, fence waits reported, no timeouts to speak of.
+
+---
+
+## *** M87: games other than MK8 - vi:u command 1, per-game geometry (Run N: BOTW streams) ***
+
+### Run M (M86b, logs `logs/m86b-runM*`): the relaunch fix works
+
+User: "worked almost flawlessly! Every test ran fine"; "very micro stutters";
+"ever so slightly pixelated in the borders". No crash report.
+
+- **4 live sessions** in one viewer window, 13,090 frames, 0 lost, 0
+  undecodable: MK8 (pid 142) -> closed -> MK8 (144) -> closed -> BOTW ->
+  MK8 (148) -> MK8 (152). Every relaunch attached by itself ("game held"
+  0.5-12.8 ms at attach). **The M86b diagnosis holds**: without the game's
+  aruid and FROM_ID handle, closing and relaunching works.
+- **BOTW (01007ef00011e000) never streamed.** It connected to our vi:u mitm
+  (OnNeedsToAccept) and then called nothing we implement: it opens its display
+  service with **command 1, GetDisplayServiceWithProxyNameExchange**, which
+  auto-forwarded, so its binder never passed through us (txn stayed at
+  20374, no queueBuffer) and live mode waited for a game that was
+  "presenting".
+- **Stutters:** 14 frames over 50 ms of work in ~6 min, in bursts (e.g.
+  26-29 s, 51 s): reads of 45-215 ms, NVENC up to 92 ms, VIC up to 40 ms,
+  USB never. System-wide contention (loading, and NVENC shared with grc's
+  own recording), not one stage of ours.
+- **Pixelated edges:** the decoded frames are clean at 1280x720 (checked).
+  raw-view scaled with SDL's default nearest-neighbour; it now uses linear
+  scaling and letterboxes 16:9.
+- Console latency averages include time the game was not presenting (Home
+  menu): the frame's age keeps growing while the last frame is re-sent.
+
+### The changes
+
+- **vi:u command 1** is now declared, with no typed input: the handler copies
+  the game's raw request off TLS before any IPC of its own, logs the argument
+  bytes, forwards them unchanged to the real vi:u command 1, and wraps the
+  returned IApplicationDisplayService exactly like command 0. Sources
+  disagree on its arguments (switchbrew: a u32; SwIPC's vi:s/vi:m variants:
+  8-byte ProxyName + u32), so nothing depends on which is right, and the log
+  will say.
+- **Per-game geometry.** setPreallocatedBuffer is parsed for every
+  registration (it stopped after the 8th of the boot) with the slot the
+  parcel names (it was a running count: a relaunched MK8 registered "slots
+  6 and 7"); a new nvmap object resets the set. Live mode snapshots it per
+  session: the swapchain region is found by the game's real total size, each
+  capture reads the recorded slot offset and buffer size, and the VIC gets
+  the real width, height, stride and block height (it scales to 1280x720).
+  MK8's layout keeps the 1280x720 corner fast path. Formats other than
+  MK8's A8B8G8R8 are read the same way and flagged "colours unverified".
+
+---
+
+## *** M86b: live mode must not hold the game's graphics resources (Run M: relaunch works) ***
+
+### Run L (M86, logs `logs/m86-runL*`): live mode works; relaunching the game hung the console
+
+- **Streaming:** one session, 6850 frames in 120 s at 57.0 fps, 0 encode
+  errors, 115 IDR + 6735 P, 43 Mbps; console 14.4 ms avg, PC 20-21 ms. User:
+  "ran absolutely fine, some very minor stutters".
+- **Viewer closed and reopened: the picture came back** - but not as a new
+  session. The new raw-view opened 3 s later, inside the 5 s USB timeout, and
+  took the pending transfer: the console saw a 3.0 s stall (`worst work
+  3045106 us`, in the header send, which no stage covers) and the viewer
+  joined mid-GOP.
+- **Stalls** (8 over 50 ms) cluster around 29-32 s, a loading phase: reads of
+  130-169 ms, VIC 21 ms, NVENC 33 ms - the whole system is busy, not one
+  stage. Pump: 33 events (16 thread starts, 16 exits, 1 process exit).
+- **MK8 closed: the session ended cleanly** ("the game went away; detached"
+  at 162 s). **MK8 relaunched: black screen, forced power-off.** Our process
+  lived on (heartbeat to 230 s, "waiting for a game (no application)"), but
+  the new game never reached vi:u - it hung before its first frame. No
+  crash report.
+
+### Why (inferred from the code and Run I; the next run tests it)
+
+In live mode `RunVicBlit` never returns, so what the one-shot path releases
+at `vb:released` was held past the game's exit. Two things in it belong to
+the game, not to us:
+
+1. `FROM_ID` on the game's swapchain nvmap id: a reference on an object whose
+   memory is the game's own transfer memory to nvservices (plus pin attempts
+   in our VIC channel);
+2. `SetAruidWithoutCheck(game aruid)` before opening anything (M21): every
+   channel and buffer of our nvdrv session counts as the game's.
+
+Run I closed and relaunched the game while attached and it worked - there
+`vb:released` ran at 128 s, before the relaunch at 135 s. The kernel's
+exit path with a debugger attached (OnExitProcess / OnTerminateProcess)
+only pushes an event, so the debug attach itself is not the suspect.
+
+### The changes
+
+- Live mode skips FROM_ID, the game-handle pins, the aruid discovery and
+  adoption (our own nvdrv identity; the VIC worked on our own buffers from
+  M16, before M21 adopted the aruid), and the vi:m indirect-layer probe.
+- A USB wait over 500 ms forces the next frame to be an IDR, so a reader
+  that just joined decodes at once; counted in the summary.
+
+Run M: same arm file as Run L. The relaunch is the point of the run, so it
+comes early.
+
+---
+
+## *** M86: live mode - stream whenever a viewer and a game are there (Run L: works; game relaunch hung) ***
+
+Until now every run was a probe: at `wait=` seconds attach once, stream a
+fixed count, detach. Arm token `live` (implies `nvstream`) makes it a service
+for the rest of the boot (`RunLive`, entered from `TryDebugCapture`):
+
+1. wait for a **viewer**: `UsbViewerPresent` posts one empty SFTR header
+   (length 0, which raw-view skips) with a 300 ms timeout - a cable with no
+   program reading stays Configured, so `UsbReady` cannot tell;
+2. wait for a **game**: pm:dmnt has an application and `g_queue_count` moves;
+3. attach, find the exact-size swapchain (`FindSwapchainBySize`), drain the
+   attach burst, continue, start the pump;
+4. stream (`TryNvencStream(..., live=true)`: no frame limit, progress every
+   3600 frames) until it returns a `StreamEnd`: viewer gone, game gone,
+   engine stall, failed;
+5. pump off, detach, back to 1. An NVENC stall parks the loop (M74); a game
+   whose swapchain is not found is skipped until another pid appears.
+
+USB hygiene: a transfer that times out is now **cancelled** and the
+cancellation waited for (as SysDVR's UsbComms.c does), so a newly opened
+viewer never starts in the middle of a stale frame. raw-view prints a line
+when frame numbers restart (a new console session).
+
+Run K's 320 ms stall: the stream now keeps each stage's maximum and the
+breakdown of up to 8 frames with > 50 ms of work (read, VIC, NVENC, wait for
+the previous USB transfer, copy), logged with the progress lines.
+
+Run L (planned): `vic exec dbg usb nvgop=60 live wait=20` (in
+`test/armfile_test.cpp`); the viewer runs in a relaunch loop. Close and
+reopen the viewer, close and relaunch the game, and play for a few minutes.
+
+---
 
 ## *** M85: P frames in the stream, latency measured on both ends (Run K: playable, no drift, ~31 ms) ***
 

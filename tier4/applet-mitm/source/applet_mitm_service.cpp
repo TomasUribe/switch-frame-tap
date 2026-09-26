@@ -43,6 +43,40 @@ namespace ams::mitm::applet {
             return slot;
         }
 
+        /* M88: queueBuffer's input after the slot is a flattened
+         * BqBufferInput (libnx buffer_producer.h): int32 length, int32 fd
+         * count, then { s64 timestamp; s32 isAutoTimestamp; rect crop;
+         * s32 scalingMode; u32 transform, stickyTransform, unk, swapInterval;
+         * NvMultiFence fence } - the fence at +48: u32 count, then up to four
+         * { u32 syncpt id; u32 value }. */
+        bool ParseQueueBufferFence(const u8 *p, size_t sz, u32 *n, u64 out[4]) {
+            if (p == nullptr || sz < 24) { return false; }
+            u32 data_off = 0, len = 0;
+            std::memcpy(std::addressof(data_off), p + 4, sizeof(data_off));
+            if (static_cast<size_t>(data_off) + 8 > sz) { return false; }
+            std::memcpy(std::addressof(len), p + data_off + 4, sizeof(len));
+            if (len == 0 || len > 128) { return false; }
+            size_t off = static_cast<size_t>(data_off) + 8 + (static_cast<size_t>(len) + 1) * 2;
+            off = (off + 3) & ~static_cast<size_t>(3);
+            off += 4;                                   /* the slot */
+            if (off + 8 + 84 > sz) { return false; }
+            u32 flen = 0;
+            std::memcpy(std::addressof(flen), p + off, sizeof(flen));
+            if (flen < 84 || flen > 0x100) { return false; }
+            const u8 *in = p + off + 8;
+            u32 cnt = 0;
+            std::memcpy(std::addressof(cnt), in + 48, sizeof(cnt));
+            if (cnt > 4) { return false; }
+            for (u32 k = 0; k < 4; ++k) {
+                u32 id = 0, v = 0;
+                std::memcpy(std::addressof(id), in + 52 + 8 * k, 4);
+                std::memcpy(std::addressof(v), in + 56 + 8 * k, 4);
+                out[k] = (static_cast<u64>(id) << 32) | v;
+            }
+            *n = cnt;
+            return true;
+        }
+
         const char *TxnName(u32 code) {
             switch (code) {
                 case 1:  return "requestBuffer";
@@ -86,13 +120,17 @@ namespace ams::mitm::applet {
          * its INPUT parcel - the full description of one frame's memory.
          * Games register one per swapchain slot at startup (MK8: 3 = triple
          * buffered). This is the descriptor we need to import and read pixels. */
-        if (code == 14 && per <= 8) {
+        /* M87: every registration, not just the first 8 of the boot (a third
+         * game launch registered nothing before), with the slot the parcel
+         * names - the int32 after the interface token, as in queueBuffer */
+        if (code == 14) {
             LogMark("binder:parse_preallocated");
             if (const auto *gb = FindGraphicBuffer(parcel_in.GetPointer(), parcel_in.GetSize()); gb != nullptr) {
+                const s32 pslot = ParseQueueBufferSlot(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize());
                 char tag[48];
-                std::snprintf(tag, sizeof(tag), "setPreallocatedBuffer#%u", per);
+                std::snprintf(tag, sizeof(tag), "setPreallocatedBuffer#%u slot %d", per, pslot);
                 LogGraphicBuffer(tag, gb);
-                CaptureGameSurface(gb, per);
+                CaptureGameSurface(gb, pslot);
             } else {
                 LogLine("    (no NvGraphicBuffer magic found in %zu-byte parcel)", parcel_in.GetSize());
             }
@@ -107,9 +145,24 @@ namespace ams::mitm::applet {
          * has been presented and which slot holds it. */
         if (code == 7) {
             const s32 qs = ParseQueueBufferSlot(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize());
+            u32 fn = 0;
+            u64 fv[4] = {};
+            const bool have_fence = ParseQueueBufferFence(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize(), std::addressof(fn), fv);
+            /* M89: seqlock - odd while slot, fence, tick and count change
+             * together, so the capture never pairs one present's slot with
+             * another's fence */
+            g_queue_seq.fetch_add(1, std::memory_order_relaxed);
+            std::atomic_thread_fence(std::memory_order_release);
             if (qs >= 0 && qs < 8) { g_queue_slot.store(qs, std::memory_order_relaxed); }
+            if (have_fence) {
+                for (u32 k = 0; k < 4; ++k) { g_queue_fence[k].store(fv[k], std::memory_order_relaxed); }
+                g_queue_fence_n.store(fn, std::memory_order_relaxed);
+            } else {
+                g_queue_fence_n.store(0, std::memory_order_relaxed);
+            }
             g_queue_tick.store(armGetSystemTick(), std::memory_order_relaxed);
             g_queue_count.fetch_add(1, std::memory_order_relaxed);
+            g_queue_seq.fetch_add(1, std::memory_order_release);
         }
 
         /* Fire on elapsed time, not transaction count. "total > 300" landed at
@@ -230,6 +283,12 @@ namespace ams::mitm::applet {
             R_RETURN(rc);
         }
 
+        this->Wrap(disp_svc, out);
+        LogMark("GetDisplayService:done");
+        R_SUCCEED();
+    }
+
+    void ViRootMitm::Wrap(::Service disp_svc, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out) {
         auto shared_srv = std::make_shared<::Service>(disp_svc);
         const sf::cmif::DomainObjectId target_object_id{ serviceGetObjectId(std::addressof(disp_svc)) };
 
@@ -238,8 +297,65 @@ namespace ams::mitm::applet {
          * session. */
         ::ams::sf::impl::g_tier4_pending_mitm_forward = shared_srv;
         out.SetValue(sf::CreateSharedObjectEmplaced<IViDisplaySvcMitm, ViDisplaySvcMitm>(std::shared_ptr<::Service>(shared_srv), m_client_info), target_object_id);
+    }
 
-        LogMark("GetDisplayService:done");
+    Result ViRootMitm::GetDisplayServiceWithProxyNameExchange(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out) {
+        /* FIRST, before any IPC of ours (logging included) reuses the TLS
+         * message buffer: copy the game's request as it arrived. */
+        alignas(0x10) u8 msg[0x100];
+        std::memcpy(msg, armGetTls(), sizeof(msg));
+
+        g_stats.getdisp.fetch_add(1);
+        LogMark("GetDisplayServiceWithProxyNameExchange:enter");
+
+        const HipcParsedRequest req = hipcParseRequest(msg);
+        const uintptr_t words = reinterpret_cast<uintptr_t>(req.data.data_words);
+        const uintptr_t raw   = (words + 0xF) & ~static_cast<uintptr_t>(0xF);
+        const size_t total    = static_cast<size_t>(req.meta.num_data_words) * 4;
+        const CmifInHeader *hdr = reinterpret_cast<const CmifInHeader *>(raw);
+        /* the client sized its data words as header + 0x10 alignment slack +
+         * arguments (libnx cmifMakeRequest); what follows the header, less the
+         * slack actually used, is the arguments with their zero padding */
+        size_t args = 0;
+        const bool sane = total >= sizeof(CmifInHeader) + (raw - words) && raw + sizeof(CmifInHeader) <= reinterpret_cast<uintptr_t>(msg) + sizeof(msg)
+                       && hdr->magic == CMIF_IN_HEADER_MAGIC && hdr->command_id == 1;
+        if (sane) {
+            args = total - (raw - words) - sizeof(CmifInHeader);
+            if (args > 0x40) { args = 0x40; }
+        }
+        const u8 *a = reinterpret_cast<const u8 *>(raw + sizeof(CmifInHeader));
+        LogLine("   program=%016llx cmd 1 (ProxyNameExchange): %zu argument byte(s)%s; data words %u, pid %s",
+                static_cast<unsigned long long>(m_client_info.program_id.value), args, sane ? "" : " (UNPARSED)",
+                req.meta.num_data_words, req.meta.send_pid ? "sent" : "none");
+        if (sane && args != 0) {
+            char hex[3 * 0x40 + 1] = {};
+            for (size_t i = 0; i < args; ++i) { std::snprintf(hex + 3 * i, 4, "%02x ", a[i]); }
+            LogLine("   args: %s", hex);
+        }
+        if (!sane) {
+            /* could not read the request: let the real service answer it as
+             * before (unwrapped), rather than guess its arguments */
+            LogLine("   not wrapping: forwarding untouched is no longer possible here - using GetDisplayService(0) instead");
+        }
+
+        ::Service disp_svc = {};
+        ::Result rc = 0;
+        if (sane) {
+            SfDispatchParams disp = {};
+            disp.out_num_objects = 1;
+            disp.out_objects     = std::addressof(disp_svc);
+            rc = serviceDispatchImpl(m_forward_service.get(), 1, a, static_cast<u32>(args), nullptr, 0, disp);
+        } else {
+            const u32 policy = 0;
+            rc = serviceDispatchIn(m_forward_service.get(), 0, policy,
+                                   .out_num_objects = 1, .out_objects = std::addressof(disp_svc));
+        }
+        if (R_FAILED(rc)) {
+            LogLine("   fwd FAILED rc=0x%x", rc);
+            R_RETURN(::ams::Result(rc));
+        }
+        this->Wrap(disp_svc, out);
+        LogMark("GetDisplayServiceWithProxyNameExchange:done");
         R_SUCCEED();
     }
 

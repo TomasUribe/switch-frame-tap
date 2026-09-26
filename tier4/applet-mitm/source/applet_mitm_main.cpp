@@ -625,7 +625,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm M85: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm M89: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -651,6 +651,9 @@ namespace ams {
         mitm::applet::g_nvstream_n    = ArmFileNumber("nvstream", 3600);
         mitm::applet::g_nvstream_qp   = ArmFileNumber("nvqp", 20);
         mitm::applet::g_nvstream_gop  = ArmFileNumber("nvgop", 0);
+        mitm::applet::g_live_armed    = ArmFileContains("live");
+        /* live is a mode of the H.264 stream: everything nvstream sets up, it needs */
+        if (mitm::applet::g_live_armed) { mitm::applet::g_nvstream_armed = true; }
         mitm::applet::g_nvp_armed     = ArmFileContains("nvp");
         mitm::applet::g_nvp_n         = ArmFileNumber("nvp", 30);
         mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);
@@ -664,7 +667,7 @@ namespace ams {
         mitm::applet::g_stream_frames = ArmFileNumber("sframes", 600);
         mitm::applet::g_probe_delay_s = ArmFileNumber("wait", 120);
         mitm::applet::LogLine("ARMED FLAGS: vic=%d exec=%d dbg=%d dump=%d usb=%d bench=%d nvenc=%d "
-                              "jpg=%d sweep=%d mtx=%d stream=%d grc=%d grcscan=%d clk=%d jpgdec=%d nvgrc=%d csc=%d nvframe=%d(%u) nvstream=%d(%u, qp %u, gop %u) nvp=%d(%u) wait=%u",
+                              "jpg=%d sweep=%d mtx=%d stream=%d grc=%d grcscan=%d clk=%d jpgdec=%d nvgrc=%d csc=%d nvframe=%d(%u) nvstream=%d(%u, qp %u, gop %u) nvp=%d(%u) live=%d wait=%u",
                               mitm::applet::g_vic_armed, mitm::applet::g_vic_execute,
                               mitm::applet::g_dbg_armed, mitm::applet::g_dump_armed,
                               g_usb_armed, mitm::applet::g_bench_armed,
@@ -677,6 +680,7 @@ namespace ams {
                               mitm::applet::g_nvstream_armed, mitm::applet::g_nvstream_n, mitm::applet::g_nvstream_qp,
                               mitm::applet::g_nvstream_gop,
                               mitm::applet::g_nvp_armed, mitm::applet::g_nvp_n,
+                              mitm::applet::g_live_armed,
                               mitm::applet::g_probe_delay_s);
         if ((mitm::applet::g_jpgdec_armed || mitm::applet::g_nvgrc_armed ||
              mitm::applet::g_csc_armed || mitm::applet::g_nvframe_armed || mitm::applet::g_nvstream_armed ||
@@ -770,6 +774,27 @@ namespace ams::mitm::applet {
         return sp == UsbDeviceSpeed_Super;
     }
 
+    void UsbCancelIn();
+
+    bool UsbViewerPresent(u32 timeout_ms) {
+        if (!UsbReady()) { return false; }
+        alignas(0x1000) static u8 hello[0x1000];
+        const u32 h[8] = { 0x52544653u, 2u, 0, 0, 0, 0, 0, 0 };   /* "SFTR", v2, all else 0: length 0 */
+        std::memcpy(hello, h, sizeof(h));
+        u32 urb = 0;
+        if (R_FAILED(usbDsEndpoint_PostBufferAsync(::ams::g_usb_ep_in, hello, sizeof(h), std::addressof(urb)))) { return false; }
+        if (R_FAILED(eventWait(std::addressof(::ams::g_usb_ep_in->CompletionEvent), static_cast<u64>(timeout_ms) * 1000000))) {
+            UsbCancelIn();
+            return false;
+        }
+        eventClear(std::addressof(::ams::g_usb_ep_in->CompletionEvent));
+        UsbDsReportData report = {};
+        u32 transferred = 0;
+        if (R_FAILED(usbDsEndpoint_GetReportData(::ams::g_usb_ep_in, std::addressof(report)))) { return false; }
+        if (R_FAILED(usbDsParseReportData(std::addressof(report), urb, nullptr, std::addressof(transferred)))) { return false; }
+        return transferred == sizeof(h);
+    }
+
     bool UsbReady() {
         if (::ams::g_usb_ep_in == nullptr) { return false; }
         UsbState st = UsbState_Detached;
@@ -793,13 +818,25 @@ namespace ams::mitm::applet {
         return true;
     }
 
+    /* M86: a transfer the host never takes stays posted. Left there, its
+     * bytes go to whichever program reads the endpoint next - a new viewer
+     * would start mid-frame. Cancel it and let the cancellation complete
+     * (SysDVR's UsbComms.c does the same). */
+    void UsbCancelIn() {
+        if (::ams::g_usb_ep_in == nullptr) { return; }
+        static_cast<void>(usbDsEndpoint_Cancel(::ams::g_usb_ep_in));
+        static_cast<void>(eventWait(std::addressof(::ams::g_usb_ep_in->CompletionEvent), UINT64_C(1000000000)));
+        eventClear(std::addressof(::ams::g_usb_ep_in->CompletionEvent));
+    }
+
     bool UsbWaitAsync(u32 urb, size_t *out_sent) {
         if (out_sent != nullptr) { *out_sent = 0; }
         if (::ams::g_usb_ep_in == nullptr) { return false; }
 
         ::Result rc = eventWait(std::addressof(::ams::g_usb_ep_in->CompletionEvent), ::ams::UsbTimeoutNs);
         if (R_FAILED(rc)) {
-            LogLine("   usb: async completion timed out rc=0x%x (host not draining?)", rc);
+            LogLine("   usb: async completion timed out rc=0x%x (host not draining?) - cancelled", rc);
+            UsbCancelIn();
             return false;
         }
         eventClear(std::addressof(::ams::g_usb_ep_in->CompletionEvent));
@@ -837,7 +874,8 @@ namespace ams::mitm::applet {
 
             rc = eventWait(std::addressof(::ams::g_usb_ep_in->CompletionEvent), ::ams::UsbTimeoutNs);
             if (R_FAILED(rc)) {
-                LogLine("   usb: completion wait timed out at +%zu rc=0x%x (host not reading?)", done, rc);
+                LogLine("   usb: completion wait timed out at +%zu rc=0x%x (host not reading?) - cancelled", done, rc);
+                UsbCancelIn();
                 return false;
             }
             eventClear(std::addressof(::ams::g_usb_ep_in->CompletionEvent));

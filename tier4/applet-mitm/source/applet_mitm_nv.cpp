@@ -73,6 +73,7 @@ namespace ams::mitm::applet {
     constinit u32  g_nvstream_n    = 3600;
     constinit u32  g_nvstream_qp   = 20;
     constinit u32  g_nvstream_gop  = 0;
+    constinit bool g_live_armed    = false;
     constinit bool g_nvp_armed     = false;
     constinit u32  g_nvp_n         = 30;
     constinit u32  g_matrix_mode   = 0;
@@ -849,8 +850,11 @@ namespace ams::mitm::applet {
         void TryCscSweep(u32 vfd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 dst_addr, u32 self_addr);
         void TryNvencRealFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                                 u32 cmd_handle, u32 vsyncpt, u32 cfg_addr);
-        void TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
-                            u32 cmd_handle, u32 vsyncpt, u32 cfg_addr);
+        /* M86: why a stream ended - live mode decides what to wait for next */
+        enum class StreamEnd { Done, GameGone, ViewerGone, EngineStall, Failed };
+        StreamEnd TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
+                                 u32 cmd_handle, u32 vsyncpt, u32 cfg_addr, bool live = false,
+                                 const GameSurface *geo = nullptr);
         void TryNvencPFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                              u32 cmd_handle, u32 vsyncpt, u32 cfg_addr);
         bool WriteSdVerified(const char *path, const u8 *src, size_t len, u8 *verify, u32 *out_fnv);
@@ -1254,16 +1258,30 @@ namespace ams::mitm::applet {
     constinit std::atomic<u32> g_queue_count{0};
     constinit std::atomic<s32> g_queue_slot{-1};
     constinit std::atomic<u64> g_queue_tick{0};
+    constinit std::atomic<u32> g_queue_fence_n{0};
+    constinit std::atomic<u64> g_queue_fence[4] = {};
+    constinit std::atomic<u32> g_queue_seq{0};
 
-    void CaptureGameSurface(const NvGraphicBufferRaw *gb, u32 which) {
+    void CaptureGameSurface(const NvGraphicBufferRaw *gb, s32 slot_arg) {
         if (gb == nullptr || gb->num_planes == 0) { return; }
         const NvSurfaceRaw *p0 = std::addressof(gb->planes[0]);
 
-        const u32 slot = (which >= 1) ? (which - 1) : 0;      /* setPreallocatedBuffer#1 -> slot 0 */
+        /* M87: a new buffer object is a new game (or a new swapchain): forget
+         * the old slots. Before M87 the slot was a running count of these
+         * calls, so a relaunched game's buffers landed at slots 6 and 7. */
+        if (static_cast<u32>(gb->nvmap_id) != g_game_surface.nvmap_id) {
+            for (auto &o : g_game_surface.slot_offset) { o = 0; }
+            g_game_surface.num_slots = 0;
+            ++g_game_surface.generation;
+        }
+        const u32 slot = (slot_arg >= 0 && slot_arg < 8) ? static_cast<u32>(slot_arg) : g_game_surface.num_slots;
         if (slot < 8) {
             g_game_surface.slot_offset[slot] = p0->offset;
             if (slot + 1 > g_game_surface.num_slots) { g_game_surface.num_slots = slot + 1; }
         }
+        g_game_surface.buf_size     = gb->total_size;
+        g_game_surface.color_format = p0->color_format;
+        g_game_surface.layout       = p0->layout;
         g_game_surface.nvmap_id     = static_cast<u32>(gb->nvmap_id);
         g_game_surface.width        = p0->width;
         g_game_surface.height       = p0->height;
@@ -1345,8 +1363,17 @@ namespace ams::mitm::applet {
          * /dev/nvmap. libnx sets the aruid during Initialize, before opening
          * any device node, so an fd evidently captures the client identity at
          * open time. Discover on a scratch fd, close it, adopt, and only then
-         * open the fd we actually use. */
-        {
+         * open the fd we actually use.
+         *
+         * M86b: NOT in live mode. Adopting the game's aruid makes every
+         * channel and buffer this session opens count as the GAME's with
+         * nvservices; Run L's relaunch hung after the game exited while they
+         * were all still open. Live mode touches only our own buffers, which
+         * never needed the aruid (the VIC worked on them from M16, before
+         * M21 adopted it). */
+        if (g_live_armed) {
+            LogLine("   live mode: our own nvdrv identity (no game aruid, no FROM_ID)");
+        } else {
             VicStage("vb:4a_discover_aruid");
             u32 tfd = 0, terr = 0;
             if (R_SUCCEEDED(NvOpen("/dev/nvmap", std::addressof(tfd), std::addressof(terr))) && terr == 0) {
@@ -1385,6 +1412,7 @@ namespace ams::mitm::applet {
         }
 
         u32 src_handle;
+        src_handle = 0;   /* M86b: stays 0 in live mode (no FROM_ID); assigned, not initialised - gotos above jump past */
         /* --- what did the full mask actually open? -------------------------
          * Reading another process's swapchain is structurally out (nvservices
          * maps client memory through the process handle we gave it at
@@ -1410,7 +1438,14 @@ namespace ams::mitm::applet {
         }
 
         VicStage("vb:5_FROM_ID");
-        {
+        /* M86b: NOT in live mode. FROM_ID takes a reference on the game's
+         * swapchain nvmap object, whose memory is the game's own (its
+         * transfer memory to nvservices). Run L held it past the game's exit
+         * - the one-shot path releases it at vb:released, live never gets
+         * there - and the relaunched game hung on a black screen, needing a
+         * forced power-off. Live mode reads frames with the debug SVCs and
+         * never needs this handle. */
+        if (!g_live_armed) {
             struct { u32 id; u32 handle; } a = { g_game_surface.nvmap_id, 0 };
             rc = NvIoctl(nvmap_fd, NvmapIocFromId, std::addressof(a), sizeof(a), std::addressof(nverr));
             LogLine("   FROM_ID(%u) under aruid %llu rc=0x%x nverr=%u -> handle=%u",
@@ -1464,11 +1499,14 @@ namespace ams::mitm::applet {
             VicStage("vb:8b_map_dst");
             if (!MapCmdBuffer(vfd, dst_handle, std::addressof(dst_addr), "dst")) { VicStage("vb:8b_FAILED"); goto close_vic; }
             /* The game's imported handle pins with nverr=0 but phys=0. Try every
-             * variant before giving up; none of these submit anything. */
+             * variant before giving up; none of these submit anything.
+             * M86b: never in live mode - there is no imported handle. */
             VicStage("vb:8c_map_src");
-            MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)", 0);
-            if (src_addr == 0) { MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)", 1); }
-            if (src_addr == 0) { MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)", 0, NvHostIocChannelMapCmdBufEx); }
+            if (src_handle != 0) {
+                MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)", 0);
+                if (src_addr == 0) { MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)", 1); }
+                if (src_addr == 0) { MapCmdBuffer(vfd, src_handle, std::addressof(src_addr), "src(game)", 0, NvHostIocChannelMapCmdBufEx); }
+            }
             VicStage("vb:8d_map_self");
             MapCmdBuffer(vfd, self_handle, std::addressof(self_addr), "src(ours)", 0);
             LogLine("   pinned: cfg=0x%x dst=0x%x self=0x%x game_src=0x%x (+slot off 0x%x)",
@@ -1531,7 +1569,9 @@ namespace ams::mitm::applet {
             TryCscSweep(vfd, cmd_handle, syncpt, cfg_addr, dst_addr, self_addr);
         }
 
-        TryIndirectCapture();
+        /* M86b: the vi:m indirect-layer probe is a closed route (M47) and
+         * touches the display service; live mode skips it */
+        if (!g_live_armed) { TryIndirectCapture(); }
         TryDebugCapture(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, dst_addr);
         /* M75: gated. This has completed cleanly in every run (its cmdbuf is an
          * IMMEDIATE increment with no engine op), but the point of an observer
@@ -2256,8 +2296,142 @@ namespace ams::mitm::applet {
                     static_cast<unsigned long long>(worst / 1000));
         }
 
+        /* ---- M86: live mode ---------------------------------------------------
+         *
+         * The runs so far were one-shot probes: at wait=N seconds attach once,
+         * stream a fixed number of frames, detach. "live" turns that into a
+         * service that runs for the rest of the boot:
+         *
+         *   wait for a viewer (UsbViewerPresent: someone is reading the
+         *   endpoint) and a game (pm:dmnt has an application, and it is
+         *   presenting) -> attach -> find the swapchain -> drain + continue ->
+         *   pump -> stream until the viewer or the game goes -> pump off,
+         *   detach -> wait again.
+         *
+         * Closing the viewer, closing the game, or starting another game each
+         * end one session and the next one starts on its own. Only an NVENC
+         * stall ends it for good (the channel is left open, M74), and so does
+         * a swapchain that is never found for the same game (no retry storm:
+         * the next game gets a fresh try). The swapchain finder here is the
+         * exact-size one - three 1920x1080 A8B8G8R8 slots, what MK8 uses; a
+         * game with another layout is reported and skipped. */
+        bool FindSwapchainBySize(::ams::svc::Handle dbg, u64 want, u64 *out) {
+            u64 addr = 0;
+            for (u32 steps = 0; steps < 4000; ++steps) {
+                ::ams::svc::MemoryInfo mi = {};
+                ::ams::svc::PageInfo   pi = {};
+                if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr)) || mi.size == 0) { return false; }
+                const u32  attr = static_cast<u32>(mi.attribute);
+                const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
+                if (dev && mi.size == want) { *out = mi.base_address; return true; }
+                const u64 next = mi.base_address + mi.size;
+                if (next <= addr) { return false; }
+                addr = next;
+            }
+            return false;
+        }
+
+        [[noreturn]] void RunLive(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr) {
+            LogLine("   ==== LIVE MODE (M86): streaming whenever a viewer is reading and a game is running ====");
+            u64 skip_pid = 0;          /* a game whose swapchain was not found: wait for another */
+            bool said_wait_viewer = false, said_wait_game = false;
+            u32 sessions = 0;
+            for (;;) {
+                if (g_engine_wedged) {
+                    VicStage("live:engine_wedged");
+                    LogLine("   live: the engine is wedged - no more streaming this boot");
+                    for (;;) { os::SleepThread(TimeSpan::FromSeconds(3600)); }
+                }
+                if (!UsbViewerPresent(300)) {
+                    if (!said_wait_viewer) { LogLine("   live: waiting for a viewer (raw-view) to read the stream"); VicStage("live:no_viewer"); said_wait_viewer = true; }
+                    os::SleepThread(TimeSpan::FromMilliSeconds(700));
+                    continue;
+                }
+                said_wait_viewer = false;
+
+                ::ams::os::ProcessId pid{};
+                const u32 q_before = g_queue_count.load(std::memory_order_relaxed);
+                const bool have_app = g_pmdmnt_rc == 0 && R_SUCCEEDED(::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid)));
+                if (have_app && pid.value != skip_pid) {
+                    /* presenting? a suspended or loading-from-boot game is not */
+                    os::SleepThread(TimeSpan::FromMilliSeconds(200));
+                }
+                const bool presenting = g_queue_count.load(std::memory_order_relaxed) != q_before;
+                if (!have_app || pid.value == skip_pid || !presenting) {
+                    if (!said_wait_game) {
+                        LogLine("   live: viewer present; waiting for a game (%s)",
+                                !have_app ? "no application" : (pid.value == skip_pid ? "this game's swapchain was not found" : "not presenting"));
+                        VicStage("live:no_game");
+                        said_wait_game = true;
+                    }
+                    os::SleepThread(TimeSpan::FromMilliSeconds(800));
+                    continue;
+                }
+                said_wait_game = false;
+
+                ++sessions;
+                ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+                const Result ra = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value);
+                if (R_FAILED(ra)) {
+                    LogLine("   live[%u]: DebugActiveProcess(pid=%llu) rc=0x%x - retrying in 5 s", sessions,
+                            static_cast<unsigned long long>(pid.value), ra.GetValue());
+                    os::SleepThread(TimeSpan::FromSeconds(5));
+                    continue;
+                }
+                /* M87: this game's geometry, as its setPreallocatedBuffer
+                 * parcels described it; a consistent copy (the binder thread
+                 * writes it) */
+                GameSurface geo;
+                for (u32 tries = 0; tries < 10; ++tries) {
+                    const u32 gen = g_game_surface.generation;
+                    geo = g_game_surface;
+                    if (gen == g_game_surface.generation) { break; }
+                }
+                u64 want = FbSwapSize;
+                if (geo.num_slots != 0 && geo.buf_size != 0) {
+                    u32 top = 0;
+                    for (u32 k = 0; k < geo.num_slots && k < 8; ++k) { if (geo.slot_offset[k] > top) { top = geo.slot_offset[k]; } }
+                    want = static_cast<u64>(top) + geo.buf_size;
+                }
+                u64 slot_base = 0;
+                const u64 f0 = armTicksToNs(armGetSystemTick());
+                const bool found = FindSwapchainBySize(dbg, want, std::addressof(slot_base));
+                /* the attach stopped the game: drain the attach burst, continue */
+                ::ams::svc::DebugEventInfo ev;
+                u32 nev = 0;
+                while (nev < 256 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg))) { ++nev; }
+                const Result rc = ::ams::svc::ContinueDebugEvent(dbg,
+                                      ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll, nullptr, 0);
+                const u64 frozen_us = (armTicksToNs(armGetSystemTick()) - f0) / 1000;
+                LogLine("   live[%u]: attached to pid %llu; %ux%u, %u slot(s); swapchain (%llu B) %s%010llx; game held %llu us; %u attach events, continue rc=0x%x",
+                        sessions, static_cast<unsigned long long>(pid.value), geo.width, geo.height, geo.num_slots,
+                        static_cast<unsigned long long>(want), found ? "at 0x" : "NOT FOUND ",
+                        static_cast<unsigned long long>(slot_base), static_cast<unsigned long long>(frozen_us), nev, rc.GetValue());
+                if (R_FAILED(rc)) {
+                    ::ams::svc::CloseHandle(dbg);
+                    os::SleepThread(TimeSpan::FromSeconds(2));
+                    continue;
+                }
+                if (!found) {
+                    ::ams::svc::CloseHandle(dbg);
+                    skip_pid = pid.value;
+                    continue;
+                }
+                DebugPumpStart(dbg);
+                const StreamEnd end = TryNvencStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true,
+                                                     (geo.num_slots != 0 && geo.buf_size != 0) ? std::addressof(geo) : nullptr);
+                DebugPumpStop();
+                ::ams::svc::CloseHandle(dbg);
+                static const char *const names[] = { "done", "the game went away", "the viewer went away", "NVENC stalled", "failed" };
+                LogLine("   live[%u]: session ended - %s; detached", sessions, names[static_cast<int>(end)]);
+                if (end == StreamEnd::Failed) { os::SleepThread(TimeSpan::FromSeconds(5)); }
+                else { os::SleepThread(TimeSpan::FromSeconds(1)); }
+            }
+        }
+
         void TryDebugCapture(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 dst_addr) {
             if (!g_dbg_armed) { return; }
+            if (g_live_armed) { RunLive(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr); }
 
             VicStage("dbg:1_find_pid");
             if (g_pmdmnt_rc != 0) {
@@ -4409,8 +4583,44 @@ namespace ams::mitm::applet {
             bool corner = false;       /* handheld: read and convert the 1280x720 corner 1:1 */
             u32 seen = 0;              /* g_queue_count at the last capture */
             u64 present_tick = 0;      /* M85: g_queue_tick of the present the last capture took */
+            /* M88: waits on the present's acquire fence before reading */
+            u32 fence_waits = 0, fence_timeouts = 0, fence_unknown = 0;
+            u64 fence_wait_sum = 0, fence_wait_max = 0;
             size_t arena_base = NvfArenaBase;
             u32 arena_size = NvfArenaSize;
+            /* M87: the game's swapchain geometry. The defaults are MK8's, which
+             * every run before M87 hard-coded: three 1920x1080 A8B8G8R8 slots
+             * in one nvmap object, 128-row blocks. */
+            u32 slot_off[8] = { 0, 0x870000, 0x10E0000 };
+            u32 nslots = 3;
+            u32 buf_bytes = static_cast<u32>(FbSlotSize);
+            bool mk8_layout = true;
+
+            bool SetGeometry(const GameSurface &g, const char *who) {
+                if (g.num_slots == 0 || g.buf_size == 0 || g.width == 0 || g.height == 0) {
+                    LogLine("   %s: no buffer geometry recorded for this game", who); return false;
+                }
+                if (g.layout != 3) {
+                    LogLine("   %s: swapchain layout %u is not block-linear - not supported", who, g.layout); return false;
+                }
+                if (g.buf_size > FbSlotSize || g.width > 1920 || g.height > 1088) {
+                    LogLine("   %s: buffer %ux%u, %u B - larger than one 1080p slot, not supported", who, g.width, g.height, g.buf_size); return false;
+                }
+                for (u32 k = 0; k < 8; ++k) { slot_off[k] = g.slot_offset[k]; }
+                nslots = g.num_slots;
+                buf_bytes = g.buf_size;
+                /* MK8's A8B8G8R8 surface reads correctly as the VIC's
+                 * A8R8G8B8 (M36/M83: R,G,B,A in memory); the same is assumed
+                 * for any other format and said in the log */
+                const bool known_fmt = g.color_format == 0x100532120ull;
+                src = SrcDesc{ g.width, g.height, g.stride_px, vic::BLK_KIND_GENERIC_16Bx2, g.block_h_log2,
+                               vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
+                mk8_layout = g.width == 1920 && g.height == 1080 && g.stride_px == 1920 && g.block_h_log2 == 4;
+                LogLine("   %s: game swapchain %ux%u stride %u px, block height 2^%u, %u slot(s) of %u B, format %#llx%s",
+                        who, g.width, g.height, g.stride_px, g.block_h_log2, nslots, buf_bytes,
+                        static_cast<unsigned long long>(g.color_format), known_fmt ? "" : " (not MK8's - colours unverified)");
+                return true;
+            }
 
             ~NvfSession() {
                 if (efd_open && !keep_open) {
@@ -4472,17 +4682,69 @@ namespace ams::mitm::applet {
                 return true;
             }
 
-            /* wait (briefly) for a new present, then read the slot it presented */
+            /* M88: the game's queueBuffer carries an acquire fence: the GPU may
+             * still be drawing the slot when the game queues it (the
+             * compositor waits on the fence; we did not). Reading early gave
+             * Run N's two artifacts - a horizontal seam where the new frame
+             * met the slot's previous contents, and whole "old frames" (the
+             * slot as it was 2-3 presents ago). Wait for every syncpoint in
+             * the fence, polling nvhost-ctrl, at most 30 ms. */
+            void WaitPresentFence(u32 n, const u64 fence[4]) {
+                if (n == 0 || n > 4) { ++fence_unknown; return; }
+                const u32 cfd = CtrlFd();
+                if (cfd == 0) { ++fence_unknown; return; }
+                const u64 t0 = armTicksToNs(armGetSystemTick());
+                bool timed_out = false;
+                for (u32 k = 0; k < n; ++k) {
+                    const u64 f = fence[k];
+                    const u32 id = static_cast<u32>(f >> 32), want = static_cast<u32>(f);
+                    if (id == 0xFFFFFFFFu || id >= 192) { continue; }   /* an unused entry */
+                    for (;;) {
+                        struct { u32 id; u32 value; } r = { id, 0 };
+                        u32 e = 0;
+                        if (R_FAILED(NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e))) || e != 0) { break; }
+                        if (static_cast<s32>(r.value - want) >= 0) { break; }
+                        if (armTicksToNs(armGetSystemTick()) - t0 > UINT64_C(30000000)) { timed_out = true; break; }
+                        os::SleepThread(TimeSpan::FromMicroSeconds(250));
+                    }
+                }
+                const u64 w = armTicksToNs(armGetSystemTick()) - t0;
+                ++fence_waits;
+                fence_wait_sum += w;
+                if (w > fence_wait_max) { fence_wait_max = w; }
+                if (timed_out) { ++fence_timeouts; }
+            }
+
+            /* wait for a new present (M88: up to 50 ms, so a 30 fps game is not
+             * re-sent at ~45 fps), then its fence, then read the slot */
             bool Capture(::ams::svc::Handle dbg, u64 slot_base, u64 *read_ns, u32 *sig, u32 *dropped = nullptr) {
-                for (u32 spins = 0; g_queue_count.load(std::memory_order_relaxed) == seen && spins < 20; ++spins) {
+                for (u32 spins = 0; g_queue_count.load(std::memory_order_acquire) == seen && spins < 50; ++spins) {
                     os::SleepThread(TimeSpan::FromMilliSeconds(1));
                 }
-                const u32 now = g_queue_count.load(std::memory_order_relaxed);
-                present_tick = g_queue_tick.load(std::memory_order_relaxed);
+                /* M89: slot and fence as ONE snapshot, taken before the wait.
+                 * M88 waited on the fence and only then read the slot; a
+                 * present landing during the wait (avg 5.7 ms in MK8) swapped
+                 * in a newer slot the GPU had not finished - still holding
+                 * the picture from three presents back. Run O: 17 frames in
+                 * 3000 matching the frame two before them (A, B, A, B). */
+                u32 now = 0, fn = 0;
+                u64 fence[4] = {};
+                s32 slot = -1;
+                for (u32 tries = 0; tries < 8; ++tries) {
+                    const u32 s1 = g_queue_seq.load(std::memory_order_acquire);
+                    if (s1 & 1) { continue; }
+                    now  = g_queue_count.load(std::memory_order_acquire);
+                    slot = g_queue_slot.load(std::memory_order_relaxed);
+                    fn   = g_queue_fence_n.load(std::memory_order_relaxed);
+                    for (u32 k = 0; k < 4; ++k) { fence[k] = g_queue_fence[k].load(std::memory_order_relaxed); }
+                    present_tick = g_queue_tick.load(std::memory_order_relaxed);
+                    std::atomic_thread_fence(std::memory_order_acquire);
+                    if (g_queue_seq.load(std::memory_order_relaxed) == s1) { break; }
+                }
+                if (now != seen) { this->WaitPresentFence(fn, fence); }
                 if (dropped != nullptr && now - seen > 1) { *dropped += now - seen - 1; }
                 seen = now;
-                const s32 slot = g_queue_slot.load(std::memory_order_relaxed);
-                const u64 base = slot_base + ((slot >= 0 && slot < 3) ? FbSlotOff[slot] : 0);
+                const u64 base = slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0);
                 const u64 t0 = armTicksToNs(armGetSystemTick());
                 if (corner) {
                     for (u32 br = 0; br < CornerBlockRows; ++br) {
@@ -4493,10 +4755,10 @@ namespace ams::mitm::applet {
                         armDCacheFlush(dst, CornerBlockRowBytes);
                     }
                 } else {
-                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, base, FbSlotSize))) {
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, base, buf_bytes))) {
                         return false;
                     }
-                    armDCacheFlush(g_ind_buf, FbSlotSize);
+                    armDCacheFlush(g_ind_buf, buf_bytes);
                 }
                 u32 h = 0;
                 for (u32 k = 0; k < 8192; k += 8) { h = h * 31u + g_ind_buf[k]; }
@@ -4507,6 +4769,11 @@ namespace ams::mitm::applet {
 
             /* after the first full capture: handheld content -> corner mode */
             void Decide(const char *who) {
+                if (!mk8_layout) {
+                    corner = false;
+                    LogLine("   %s: the VIC converts the whole %ux%u picture to 1280x720", who, src.w, src.h);
+                    return;
+                }
                 u32 samples = 0;
                 corner = SlotContentIs720(g_ind_buf, std::addressof(samples));
                 if (corner) { src.rect_w = NvfW; src.rect_h = NvfH; }
@@ -4740,10 +5007,13 @@ namespace ams::mitm::applet {
          * become a reference. At the end the last frame's VIC planes are saved
          * with its frame number: the PC decodes the recording and compares, a
          * drift test at the end of a long P chain. */
-        void TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
-                            u32 cmd_handle, u32 vsyncpt, u32 cfg_addr) {
+        StreamEnd TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
+                                 u32 cmd_handle, u32 vsyncpt, u32 cfg_addr, bool live,
+                                 const GameSurface *geo) {
             VicStage("ns:1");
-            const u32 nframes = g_nvstream_n > 36000 ? 36000 : g_nvstream_n;
+            /* M86: live mode streams until the viewer or the game goes away */
+            const u32 nframes = live ? ~0u : (g_nvstream_n > 36000 ? 36000 : g_nvstream_n);
+            const u32 progress_every = live ? 3600 : 600;
             const u8 qp = static_cast<u8>(g_nvstream_qp < 10 ? 10 : (g_nvstream_qp > 40 ? 40 : g_nvstream_qp));
             u32 gop = g_nvstream_gop > 250 ? 250 : g_nvstream_gop;   /* frame_num and POC lsb wrap at 256 */
             if (gop == 1) { gop = 0; }
@@ -4752,19 +5022,23 @@ namespace ams::mitm::applet {
                         gop, (NvfArenaBase + NvpArenaSize) / 1024, g_ind_size / 1024);
                 gop = 0;
             }
-            if (gop != 0) {
+            if (live) {
+                LogLine("   ---- LIVE H.264 STREAM (M86): until the viewer or the game goes, %s%u, QP %u ----",
+                        gop != 0 ? "an IDR every " : "IDR-only", gop, qp);
+            } else if (gop != 0) {
                 LogLine("   ---- H.264 STREAM OVER USB (M85): %u frames, an IDR every %u then P frames, QP %u, BT.709 ----", nframes, gop, qp);
             } else {
                 LogLine("   ---- H.264 STREAM OVER USB (M83): %u frames, IDR-only, QP %u, BT.709 ----", nframes, qp);
             }
-            if (g_stream_stage[0] == nullptr || g_stream_stage[1] == nullptr) { LogLine("   nvstream: no stage buffers"); return; }
+            if (g_stream_stage[0] == nullptr || g_stream_stage[1] == nullptr) { LogLine("   nvstream: no stage buffers"); return StreamEnd::Failed; }
             /* the receiver should already be running; give a late one 5 s */
             for (u32 t = 0; t < 50 && !UsbReady(); ++t) { os::SleepThread(TimeSpan::FromMilliSeconds(100)); }
-            if (!UsbReady()) { LogLine("   nvstream: USB not Configured (no host, or \"usb\" absent from the arm file) - not streaming"); VicStage("ns:no_usb"); return; }
+            if (!UsbReady()) { LogLine("   nvstream: USB not Configured (no host, or \"usb\" absent from the arm file) - not streaming"); VicStage("ns:no_usb"); return StreamEnd::ViewerGone; }
             ON_SCOPE_EXIT { ClockWatchStop(); };
             NvfSession s;
+            if (geo != nullptr && !s.SetGeometry(*geo, "nvstream")) { VicStage("ns:geometry"); return StreamEnd::Failed; }
             if (gop != 0) { s.arena_size = NvpArenaSize; }   /* same base: past both stream stages */
-            if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvstream")) { VicStage("ns:open_FAILED"); return; }
+            if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvstream")) { VicStage("ns:open_FAILED"); return g_engine_wedged ? StreamEnd::EngineStall : StreamEnd::Failed; }
             if (gop != 0) {
                 std::memcpy(s.x.a + NvpOffSetupP, nvenc_grc_p::Setup, sizeof(nvenc_grc_p::Setup));
                 s.x.a[NvpOffSetupP + SetupRcQpP] = qp;
@@ -4775,12 +5049,12 @@ namespace ams::mitm::applet {
             if (!s.EnsureClock("nvstream", std::addressof(enc_hz))) {
                 LogLine("   nvstream: NOT submitting - NVENC clock not established (%u Hz)", enc_hz);
                 VicStage("ns:no_clock");
-                return;
+                return StreamEnd::Failed;
             }
             s.SetSetupByte(SetupRcQpI, qp);
             {
                 u64 rn = 0; u32 sg = 0;
-                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvstream: %s", SlotReadFailure()); return; }
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvstream: %s", SlotReadFailure()); return StreamEnd::GameGone; }
                 s.Decide("nvstream");
             }
 
@@ -4796,8 +5070,17 @@ namespace ams::mitm::applet {
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
             bool pending = false, stalled = false, need_idr = true;
             const char *why = "all frames sent";
+            StreamEnd end = StreamEnd::Done;
             u64 s_read = 0, s_vic = 0, s_enc = 0, s_copy = 0, s_usb = 0, s_bytes = 0, m_work = 0, m_bytes = 0;
             u64 s_bytes_i = 0, s_bytes_p = 0, s_age = 0, m_age = 0;
+            /* M86: Run K had one 320 ms frame and no way to say where. Keep
+             * each stage's maximum, and the breakdown of the first stalls
+             * (work > 50 ms), logged with the progress lines, not in the loop. */
+            u64 m_read = 0, m_vic = 0, m_enc = 0, m_copy = 0, m_usbw = 0;
+            struct Stall { u32 frame; u32 read_us, vic_us, enc_us, usbw_us, copy_us; u64 at_ms; };
+            Stall stalls[8] = {};
+            u32 n_stalls = 0, n_stalls_logged = 0;
+            u32 viewer_gaps = 0;   /* M86b: USB waits > 500 ms, each followed by an IDR */
             u32 pic = NvfPictureIndex + 0x100;
             const u32 q0 = g_queue_count.load(std::memory_order_relaxed);
             const u64 loop_t0 = armTicksToNs(armGetSystemTick());
@@ -4806,10 +5089,10 @@ namespace ams::mitm::applet {
             for (u32 i = 0; i < nframes; ++i) {
                 u64 rn = 0; u32 sg = 0;
                 const u64 t0 = armTicksToNs(armGetSystemTick());
-                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped))) { why = SlotReadFailure(); break; }
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped))) { why = SlotReadFailure(); end = StreamEnd::GameGone; break; }
                 const u64 present_ns = armTicksToNs(s.present_tick);
                 const u64 t1 = armTicksToNs(armGetSystemTick());
-                if (!s.Vic("ns:vic")) { why = "VIC did not complete"; break; }
+                if (!s.Vic("ns:vic")) { why = "VIC did not complete"; end = StreamEnd::Failed; break; }
                 last_vic = i;
                 const u64 t2 = armTicksToNs(armGetSystemTick());
 
@@ -4834,8 +5117,8 @@ namespace ams::mitm::applet {
                 nvenc_pic_stat_s st = {};
                 u64 en = 0;
                 const int r = NvfEncode(s.x, pic++, std::addressof(st), std::addressof(en), j);
-                if (r == 1) { why = "NVENC submit rejected"; break; }
-                if (r == 2) { g_vic_quiet = false; s.Stall("nvstream", is_idr ? "stream (IDR)" : "stream (P)"); stalled = true; why = "NVENC stalled"; break; }
+                if (r == 1) { why = "NVENC submit rejected"; end = StreamEnd::Failed; break; }
+                if (r == 2) { g_vic_quiet = false; s.Stall("nvstream", is_idr ? "stream (IDR)" : "stream (P)"); stalled = true; why = "NVENC stalled"; end = StreamEnd::EngineStall; break; }
                 const u64 t3 = armTicksToNs(armGetSystemTick());
                 const u32 bytes = st.total_bit_count / 8;
                 if (st.ucode_error_status != 0 || bytes == 0 || st.bitstream_start_pos != 0 || bytes > 0x100000) {
@@ -4850,7 +5133,7 @@ namespace ams::mitm::applet {
                 /* the previous transfer has had this whole frame to finish in */
                 if (pending) {
                     size_t got = 0;
-                    if (!UsbWaitAsync(urb, std::addressof(got))) { pending = false; why = "USB transfer did not complete (host gone?)"; break; }
+                    if (!UsbWaitAsync(urb, std::addressof(got))) { pending = false; why = "USB transfer did not complete (viewer gone?)"; end = StreamEnd::ViewerGone; break; }
                     ++sent;
                     pending = false;
                 }
@@ -4871,12 +5154,16 @@ namespace ams::mitm::applet {
                 h.kind = i;                   /* frame number */
                 std::memcpy(g_usb_hdr, std::addressof(h), sizeof(h));
                 size_t hs = 0;
-                if (!UsbSendBuffer(g_usb_hdr, sizeof(SftHdrWire), std::addressof(hs))) { why = "USB header send failed"; break; }
-                if (!UsbPostAsync(g_stream_stage[parity], payload, std::addressof(urb))) { why = "USB post failed"; break; }
+                if (!UsbSendBuffer(g_usb_hdr, sizeof(SftHdrWire), std::addressof(hs))) { why = "USB header send failed (viewer gone?)"; end = StreamEnd::ViewerGone; break; }
+                if (!UsbPostAsync(g_stream_stage[parity], payload, std::addressof(urb))) { why = "USB post failed"; end = StreamEnd::ViewerGone; break; }
                 pending = true;
                 parity ^= 1;
                 last_sent = i;
                 const u64 t6 = armTicksToNs(armGetSystemTick());
+                /* M86b: a USB wait this long means the reader changed (Run L:
+                 * a viewer reopened inside the 5 s timeout and joined mid-GOP).
+                 * Start the next frame from an IDR so it decodes at once. */
+                if ((t4 - t3) > UINT64_C(500000000) || (t6 - t5) > UINT64_C(500000000)) { need_idr = true; ++viewer_gaps; }
 
                 ++done;
                 s_read += rn; s_vic += t2 - t1; s_enc += t3 - t2; s_copy += t5 - t4; s_usb += (t4 - t3) + (t6 - t5);
@@ -4887,10 +5174,33 @@ namespace ams::mitm::applet {
                 if (bytes > m_bytes) { m_bytes = bytes; }
                 const u64 work = (t6 - t0) - ((t1 - t0) - rn);
                 if (work > m_work) { m_work = work; }
+                if (rn > m_read) { m_read = rn; }
+                if (t2 - t1 > m_vic) { m_vic = t2 - t1; }
+                if (t3 - t2 > m_enc) { m_enc = t3 - t2; }
+                if (t4 - t3 > m_usbw) { m_usbw = t4 - t3; }
+                if (t5 - t4 > m_copy) { m_copy = t5 - t4; }
+                if (work > UINT64_C(50000000)) {
+                    if (n_stalls < 8) {
+                        stalls[n_stalls] = { i, static_cast<u32>(rn / 1000), static_cast<u32>((t2 - t1) / 1000),
+                                             static_cast<u32>((t3 - t2) / 1000), static_cast<u32>((t4 - t3) / 1000),
+                                             static_cast<u32>((t5 - t4) / 1000), (t0 - loop_t0) / 1000000 };
+                    }
+                    ++n_stalls;
+                }
+                auto log_stalls = [&]() {
+                    const u32 upto = n_stalls < 8 ? n_stalls : 8;
+                    for (; n_stalls_logged < upto; ++n_stalls_logged) {
+                        const Stall &k = stalls[n_stalls_logged];
+                        LogLine("   nvstream: STALL at frame %u (+%llu ms): read %u us, VIC %u us, NVENC %u us, waiting for the previous USB transfer %u us, copy %u us",
+                                k.frame, static_cast<unsigned long long>(k.at_ms), k.read_us, k.vic_us, k.enc_us, k.usbw_us, k.copy_us);
+                    }
+                };
 
-                /* every ~10 s: the clock (re-ensured if it fell) and a progress
-                 * line, so a stream that dies midway says how far it got */
-                if ((i + 1) % 600 == 0) {
+                /* every ~10 s (~60 s live): the clock (re-ensured if it fell)
+                 * and a progress line, so a stream that dies midway says how
+                 * far it got */
+                if ((i + 1) % progress_every == 0) {
+                    log_stalls();
                     u32 hz = 0;
                     if (!ClockRateOf(PcvModule_NVENC, std::addressof(hz)) || hz < 400000000u) {
                         ++clock_fixes;
@@ -4915,7 +5225,7 @@ namespace ams::mitm::applet {
                  * with the IPC thread that answers the game (M60b) */
                 os::SleepThread(TimeSpan::FromMicroSeconds(500));
             }
-            if (pending) {
+            if (pending && end != StreamEnd::ViewerGone) {   /* a gone viewer's transfer was cancelled */
                 size_t got = 0;
                 if (UsbWaitAsync(urb, std::addressof(got))) { ++sent; }
             }
@@ -4942,17 +5252,30 @@ namespace ams::mitm::applet {
                     n_p, static_cast<unsigned long long>(n_p ? s_bytes_p / n_p : 0), clock_fixes);
             LogLine("   nvstream: console latency, the game's present -> header sent: avg %llu us, max %llu us",
                     static_cast<unsigned long long>(s_age / nd / 1000), static_cast<unsigned long long>(m_age / 1000));
+            LogLine("   nvstream: present fences: %u waited, avg %llu us, max %llu us, %u timed out (30 ms), %u presents without a readable fence",
+                    s.fence_waits, static_cast<unsigned long long>(s.fence_waits ? s.fence_wait_sum / s.fence_waits / 1000 : 0),
+                    static_cast<unsigned long long>(s.fence_wait_max / 1000), s.fence_timeouts, s.fence_unknown);
+            LogLine("   nvstream: per-stage max us: read %llu  VIC %llu  NVENC %llu  USB wait %llu  copy %llu; %u frame(s) over 50 ms of work; %u USB wait(s) over 500 ms (IDR forced after each)",
+                    static_cast<unsigned long long>(m_read / 1000), static_cast<unsigned long long>(m_vic / 1000),
+                    static_cast<unsigned long long>(m_enc / 1000), static_cast<unsigned long long>(m_usbw / 1000),
+                    static_cast<unsigned long long>(m_copy / 1000), n_stalls, viewer_gaps);
+            for (u32 k = n_stalls_logged; k < (n_stalls < 8 ? n_stalls : 8); ++k) {
+                LogLine("   nvstream: STALL at frame %u (+%llu ms): read %u us, VIC %u us, NVENC %u us, waiting for the previous USB transfer %u us, copy %u us",
+                        stalls[k].frame, static_cast<unsigned long long>(stalls[k].at_ms), stalls[k].read_us, stalls[k].vic_us,
+                        stalls[k].enc_us, stalls[k].usbw_us, stalls[k].copy_us);
+            }
             DebugPumpLogStats("nvstream");
             /* M85: the drift test's reference - the VIC's picture of the last
              * frame that went out, and which frame that was. Only when that
              * frame is also the last one the VIC converted. */
-            if (!stalled && last_sent != ~0u && last_sent == last_vic) {
+            if (!live && !stalled && last_sent != ~0u && last_sent == last_vic) {
                 LogLine("   nvstream: last frame sent #%u, %s, %u frame(s) after its IDR", last_sent, last_pos == 0 ? "IDR" : "P", last_pos);
                 armDCacheFlush(s.x.a + NvfOffCur, NvfLuma + NvfChroma);
                 WriteEngineOutputToSd("sdmc:/nvstream-last-y.bin", s.x.a + NvfOffCur, NvfLuma, nullptr);
                 WriteEngineOutputToSd("sdmc:/nvstream-last-uv.bin", s.x.a + NvfOffCurUV, NvfChroma, nullptr);
             }
             VicStage(stalled ? "ns:STALLED_left_open" : (sent == nframes ? "ns:DONE" : "ns:stopped"));
+            return end;
         }
 
         /* ---- M83: P frames, an opt-in probe ("nvp") ---------------------------

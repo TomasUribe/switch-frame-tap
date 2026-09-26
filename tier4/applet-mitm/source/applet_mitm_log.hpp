@@ -56,4 +56,10 @@ namespace ams::mitm::applet {
     bool UsbPostAsync(const void *buf, size_t len, u32 *out_urb);
     bool UsbWaitAsync(u32 urb, size_t *out_sent);
 
+    /* M86: true if a host program is reading the stream endpoint right now.
+     * Sends one empty SFTR header (length 0, which raw-view skips) and waits
+     * `timeout_ms` for it to be taken. A cable with no viewer open stays
+     * Configured, so UsbReady alone cannot tell. */
+    bool UsbViewerPresent(u32 timeout_ms);
+
 }

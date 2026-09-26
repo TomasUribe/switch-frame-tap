@@ -30,11 +30,18 @@ namespace ams::mitm::applet {
         u32 slot_offset[8];    /* plane[0].offset per registered slot          */
         u32 num_slots;
         bool armed;            /* >=1 slot captured, blit not yet done         */
+        /* M87: per-game geometry for live mode */
+        u32 buf_size;          /* one buffer's size (NvGraphicBuffer total_size) */
+        u64 color_format;      /* plane[0] NvColorFormat, raw                  */
+        u32 layout;            /* plane[0] NvLayout: 3 = BlockLinear           */
+        u32 generation;        /* bumped when a new buffer set (nvmap id) starts */
     };
     extern GameSurface g_game_surface;
 
     /* Record one setPreallocatedBuffer's NvGraphicBuffer into g_game_surface. */
-    void CaptureGameSurface(const NvGraphicBufferRaw *gb, u32 which);
+    /* M87: `slot` is the swapchain slot the parcel names (not a running
+     * count), or -1 if it could not be parsed. */
+    void CaptureGameSurface(const NvGraphicBufferRaw *gb, s32 slot);
 
     /* Opt-in gates, parsed once at startup from sdmc:/applet-mitm.armed:
      *   "vic"        -> g_vic_armed:   run the probe at all
@@ -85,6 +92,7 @@ namespace ams::mitm::applet {
     extern bool g_nvstream_armed; /* M83: game -> VIC -> NVENC H.264 -> USB */
     extern u32  g_nvstream_n, g_nvstream_qp;
     extern u32  g_nvstream_gop;   /* M85: 0 = IDR-only; N = an IDR every N frames, P frames between */
+    extern bool g_live_armed;     /* M86: stream whenever a viewer and a game are there */
     extern bool g_nvp_armed;      /* M83: IDR + P frames probe */
     extern u32  g_nvp_n;
     extern u32  g_matrix_mode;
@@ -94,6 +102,12 @@ namespace ams::mitm::applet {
     extern std::atomic<u32> g_queue_count;
     extern std::atomic<s32> g_queue_slot;
     extern std::atomic<u64> g_queue_tick;   /* M85: system tick of the latest queueBuffer */
+    /* M88: the latest queueBuffer's acquire fence - the GPU is done drawing
+     * the slot once every syncpoint (id << 32 | value) has reached its value */
+    extern std::atomic<u32> g_queue_fence_n;
+    extern std::atomic<u64> g_queue_fence[4];
+    /* M89: a seqlock over slot + fence: odd while the binder thread writes */
+    extern std::atomic<u32> g_queue_seq;
 
     /* Spawn the worker. The VIC probe MUST NOT run on the binder dispatch
      * thread: doing so blocks the game's queueBuffer, which wedges vi, which

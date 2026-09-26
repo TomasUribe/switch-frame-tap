@@ -199,7 +199,7 @@ int main(int argc, char **argv)
      * with it; and the console's own age of the frame (present -> header). */
     static Uint64 t_rx[256];
     double lat_sum = 0.0, lat_max = 0.0, age_sum = 0.0, age_max = 0.0;
-    long lat_n = 0, age_n = 0, keyframes = 0;
+    long lat_n = 0, age_n = 0, keyframes = 0, sessions = 1;
     int64_t out_kind = -1;
 
     while (!g_quit && (max_frames == 0 || packets < max_frames)) {
@@ -235,6 +235,11 @@ int main(int argc, char **argv)
             /* kind carries the console's frame number: gaps are frames it
              * skipped (an encode error) or that never arrived */
             if (have_kind && hdr.kind > last_kind + 1) lost += hdr.kind - last_kind - 1;
+            /* M86 live mode: a new console session restarts at frame 0 */
+            if (have_kind && hdr.kind < last_kind) {
+                sessions++;
+                fprintf(stderr, "\nnew stream session %ld (the console reattached)\n", sessions);
+            }
             last_kind = hdr.kind; have_kind = 1;
             if (es) fwrite(payload, 1, hdr.length, es);
             t_rx[hdr.kind & 255] = t_hdr;
@@ -282,6 +287,10 @@ int main(int argc, char **argv)
             SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
             win = SDL_CreateWindow("switch-frame-tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                    (int)(hdr.width*scale), (int)(hdr.height*scale), SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+            /* M86b: SDL scales nearest-neighbour by default, which made edges
+             * look pixelated in a resized or maximized window. Linear, and keep
+             * 16:9 with letterboxing instead of stretching. */
+            SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
             ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
             t_first = SDL_GetPerformanceCounter(); t_prev = t_first;
         }
@@ -291,6 +300,7 @@ int main(int argc, char **argv)
             W = hdr.width; H = hdr.height; fmt = want_fmt;
             SDL_SetWindowSize(win, (int)(W*scale), (int)(H*scale));
             tex = SDL_CreateTexture(ren, fmt, SDL_TEXTUREACCESS_STREAMING, (int)W, (int)H);
+            SDL_RenderSetLogicalSize(ren, (int)W, (int)H);
             fprintf(stderr, "\nstream: %ux%u %s\n", W, H, is_h264 ? "H.264" : packed420 ? "packed 4:2:0" : "raw");
             worst_gap = 0.0;
         }
