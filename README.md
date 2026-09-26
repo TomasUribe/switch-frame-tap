@@ -1,10 +1,16 @@
 # switch-frame-tap
 
-A Nintendo Switch sysmodule that streams the game you are playing to a PC over
-a plain USB cable, at the console's **native handheld resolution (1280x720)
-and the game's full frame rate, 60 fps**, compressed with the console's own
-hardware H.264 encoder. No capture card. Homebrew, built on and for the
-author's own console.
+A Nintendo Switch sysmodule that streams the game you are playing to a PC
+with no capture card, compressed with the console's own hardware H.264
+encoder. Homebrew, built on and for the author's own console.
+
+**The goal of this project is 1080p at 60 fps**: the game's native docked
+resolution, at full frame rate, on any PC.
+
+**Where it is today:** the first half of that goal is done. In **handheld
+mode** it streams the console's **native 1280x720 at 60 fps** over a plain USB
+cable. **Docked 1080p60** is the next and final stage; see
+[the road to 1080p60](#the-road-to-1080p60).
 
 > **It works, and it is playable.** Live mode streams whenever the PC viewer is
 > open and a game is running, reattaches by itself when you close the viewer,
@@ -14,8 +20,9 @@ author's own console.
 > or torn frames in 6,965**; about **45 ms** from the game presenting a frame to
 > it being on the PC screen (monitor not included).
 >
-> It is still **experimental**: handheld only, two games tested, no audio, one
-> console tested. Read [Limitations](#limitations) before installing it.
+> It is still **experimental**: handheld 720p only so far (1080p60 docked is
+> the goal still ahead), two games tested, no audio, one console tested. Read
+> [Limitations](#limitations) before installing it.
 
 ![A frame off the live stream: Mario Kart 8 Deluxe race start, 1280x720, decoded from the console's H.264](docs/stream-mk8-go.jpg)
 
@@ -294,6 +301,28 @@ Earlier captures, kept for the record: the game's swapchain read out at native
 and the raw 768x432 "packed 4:2:0" stream that preceded H.264
 ([`docs/frame-stream-packed420.png`](docs/frame-stream-packed420.png)).
 
+## The road to 1080p60
+
+The final goal is the game's native docked output, **1920x1080 at 60 fps**,
+streamed to a PC. Everything upstream of the encoder already works at that
+size: the capture reads full 1080p swapchain slots (the earliest captures were
+native 1080p, [`docs/frame-1080p.png`](docs/frame-1080p.png)), and the VIC
+converts and scales any size. What is left:
+
+1. **A 1080p NVENC setup.** The encoder job used today is the one the system's
+   own recorder builds, and that is 1280x720 (Switch video clips are 720p), so
+   there is no 1080p job to copy. The setup fields that scale with the picture
+   are known (size, SPS, history and bitstream buffers, slice control, surface
+   configs); it will be built and verified on the PC first, then on hardware
+   with a single frame, as the 720p setup was.
+2. **A network transport.** Docked, the dock owns the console's only USB-C
+   port, so USB device mode is not available. 1080p60 H.264 with P frames is
+   tens of Mbps, which suits Wi-Fi or a LAN adapter in the dock. The PC side
+   exists in part (`switch-stream/receiver` speaks TCP).
+3. **Frame budget.** At 1080p the read, the VIC and NVENC each handle 2.25x
+   the pixels of 720p; the current per-frame work (~9-10 ms at 720p, of a
+   16.7 ms budget) says it should fit, and the first 1080p run will measure it.
+
 ## Roadmap
 
 | stage | state |
@@ -305,9 +334,9 @@ and the raw 768x432 "packed 4:2:0" stream that preceded H.264
 | Live mode: viewer and game come and go | **done, on hardware** (M86-M86b) |
 | Games beyond MK8D (per-game swapchain geometry, `vi:u` command 1) | **done for BOTW** (M87); others untested |
 | Frame-exact capture (GPU fence, slot+fence snapshot) | **done, on hardware** (M88-M89): 0 stale, 0 torn |
-| Bitrate tuning (better P frames, QP) | next |
+| Bitrate tuning (better P frames, QP) | next; also lowers what 1080p60 needs from the network |
+| **Docked 1080p60 over the network - the final goal** | not started: a 1080p encoder setup (grc's is 720p) and a network transport, see [above](#the-road-to-1080p60) |
 | Audio | not started |
-| Docked 1080p over the network | not started: needs a 1080p encoder setup (grc's is 720p) and a network transport |
 | Windows viewer | not started |
 | USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |
 | Home menu and system overlays | not possible through any route found |

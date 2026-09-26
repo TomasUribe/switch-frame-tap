@@ -25,9 +25,10 @@ README's quick start is the install procedure; `STATUS.md` has every run.
 
 ## 1. The goal and where it stands
 
-**Goal:** capture the Switch's display at native resolution and 60 fps and
-stream it to a PC, over USB or Wi-Fi. **Handheld over USB is done**; docked
-1080p over the network, audio and bitrate tuning remain.
+**Goal: 1080p at 60 fps** - the game's native docked output, streamed to a
+PC. **The handheld half is done** (native 720p60 over USB). What remains for
+the goal: a 1080p NVENC setup and a network transport for docked play
+(questions 3 and 4 below); bitrate tuning and audio alongside.
 
 **The live pipeline (M86-M89)**, entered from `TryDebugCapture` when `live` is
 armed (`RunLive`):
