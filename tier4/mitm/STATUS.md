@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 86 hardware test cycles (through M88 Run O). Current build: **M89** (slot + fence as one snapshot; not yet run). Last run: M88 Run O - fence waits removed the scan lines; repeats nearly gone. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
+`0100000000000C20`. 87 hardware test cycles (through M89 Run P). Current build: **M89** (Run P: MK8 and BOTW live, 0 stale and 0 torn frames in 6965). Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -115,7 +115,27 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M89: take the slot and its fence together (built, not yet run) ***
+## *** M89: take the slot and its fence together (Run P: clean) ***
+
+### Run P result (logs `logs/m89-runP*`)
+
+User: "that run looked perfect". No crash report.
+
+- `sft_tool artifacts` over **all 6965 frames** (MK8 then BOTW): **0 older
+  frames, 0 torn** (Run N 29/22, Run O 17/3 per 3000 frames).
+- MK8: 5540 frames at 57.4 fps, fences 5516 waited avg 5.5 ms, 1 timeout;
+  BOTW: 1425 frames at 29.4 fps (game 28.9), fences avg 7.5 ms, 1 timeout;
+  0 presents without a readable fence; 0 encode errors.
+- raw-view: 0 lost, 0 undecodable; latency console 22.2 ms + PC 24.3 ms avg.
+
+### Recordings (2026-09-26)
+
+The full `.sft` recordings of Runs I-P (4.4 GB) were deleted to recover disk
+space; every number from them is in the logs and this file. Kept, outside
+the repo, in `~/switch-captures/samples/`: `m87-runN-first400.sft` (3 stale,
+2 torn - the before case), `m88-runO-first120.sft`, `m89-runP-first400.sft`
+(0/0 - the after case). Record future runs only when a recording is
+needed for analysis, and delete it once analysed.
 
 ### Run O (M88, logs `logs/m88-runO*`): the fence was the right fix
 
