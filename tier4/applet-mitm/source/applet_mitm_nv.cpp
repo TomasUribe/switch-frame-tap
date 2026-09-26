@@ -72,6 +72,7 @@ namespace ams::mitm::applet {
     constinit bool g_nvstream_armed = false;
     constinit u32  g_nvstream_n    = 3600;
     constinit u32  g_nvstream_qp   = 20;
+    constinit u32  g_nvstream_gop  = 0;
     constinit bool g_nvp_armed     = false;
     constinit u32  g_nvp_n         = 30;
     constinit u32  g_matrix_mode   = 0;
@@ -233,7 +234,11 @@ namespace ams::mitm::applet {
             /* M63: reaches 24 MB. M55 measured 411,260 KB free in the Applet
              * resource-limit group at probe time, so 16 MB was never the
              * ceiling - it was simply the largest rung the ladder offered. */
-            for (const size_t sz : { 24_MB, 20_MB, 16_MB, 12_MB, 10_MB, 8_MB, 4_MB, 2_MB }) {
+            /* M85: 32 and 28 MB first. A P-frame stream needs its reference
+             * pictures and ME buffers past the stream stages, which ends at
+             * ~22.1 MB of capture region; 24 MB gives 21.1. The Applet group had
+             * ~400 MB free at probe (M55), and a refusal just descends. */
+            for (const size_t sz : { 32_MB, 28_MB, 24_MB, 20_MB, 16_MB, 12_MB, 10_MB, 8_MB, 4_MB, 2_MB }) {
                 const auto rc = os::SetMemoryHeapSize(sz);
                 LogLine("   SetMemoryHeapSize(%zu MB) rc=0x%x", sz / (1024 * 1024), rc.GetValue());
                 if (R_SUCCEEDED(rc)) { want = sz; break; }
@@ -1248,6 +1253,7 @@ namespace ams::mitm::applet {
 
     constinit std::atomic<u32> g_queue_count{0};
     constinit std::atomic<s32> g_queue_slot{-1};
+    constinit std::atomic<u64> g_queue_tick{0};
 
     void CaptureGameSurface(const NvGraphicBufferRaw *gb, u32 which) {
         if (gb == nullptr || gb->num_planes == 0) { return; }
@@ -4402,6 +4408,7 @@ namespace ams::mitm::applet {
             SrcDesc src{ 1920, 1080, 1920, vic::BLK_KIND_GENERIC_16Bx2, 4, vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, 1920, 1080 };
             bool corner = false;       /* handheld: read and convert the 1280x720 corner 1:1 */
             u32 seen = 0;              /* g_queue_count at the last capture */
+            u64 present_tick = 0;      /* M85: g_queue_tick of the present the last capture took */
             size_t arena_base = NvfArenaBase;
             u32 arena_size = NvfArenaSize;
 
@@ -4471,6 +4478,7 @@ namespace ams::mitm::applet {
                     os::SleepThread(TimeSpan::FromMilliSeconds(1));
                 }
                 const u32 now = g_queue_count.load(std::memory_order_relaxed);
+                present_tick = g_queue_tick.load(std::memory_order_relaxed);
                 if (dropped != nullptr && now - seen > 1) { *dropped += now - seen - 1; }
                 seen = now;
                 const s32 slot = g_queue_slot.load(std::memory_order_relaxed);
@@ -4555,6 +4563,11 @@ namespace ams::mitm::applet {
 
             char path[48];
             auto save = [&](const char *tag, const nvenc_pic_stat_s &st) {
+                /* M85: the arena is CACHEABLE. Run J's q20/q24 files were read
+                 * partly through lines still cached from the q16 read before
+                 * them (decoded half green); drop those lines first. */
+                armDCacheFlush(s.x.a + NvfOffStatus, 0x1000);
+                armDCacheFlush(s.x.a + NvfOffBits, NvfBitsLen(st));
                 std::snprintf(path, sizeof(path), "sdmc:/nvframe-%s-status.bin", tag);
                 WriteEngineOutputToSd(path, s.x.a + NvfOffStatus, 0x1000, nullptr);
                 std::snprintf(path, sizeof(path), "sdmc:/nvframe-%s-bits.bin", tag);
@@ -4685,38 +4698,79 @@ namespace ams::mitm::applet {
             VicStage(done == nframes ? "nf:DONE" : "nf:partial");
         }
 
-        /* ---- M83: the stream -----------------------------------------------
+        /* P-frame buffers, past the IDR arena (M83 nvp; M85 nvstream with nvgop) */
+        constexpr u32 NvpOffSetupP = NvfArenaSize;
+        constexpr u32 NvpOffRefB   = NvpOffSetupP + 0x1000;
+        constexpr u32 NvpOffMeA    = NvpOffRefB + 0x160000;
+        constexpr u32 NvpOffMeB    = NvpOffMeA + 0x40000;     /* grc's MEPRED buffers are 128 KB apart */
+        constexpr u32 NvpArenaSize = NvpOffMeB + 0x40000;
+        constexpr size_t NvpArenaBase = FbBlockRowStage + StreamStageSize;   /* past g_stage_buf */
+        constexpr size_t NvpAccBase   = NvpArenaBase + NvpArenaSize;        /* CPU-only: the GOP's bitstreams */
+        constexpr u32 SetupFrameNum = __builtin_offsetof(nvenc_h264_drv_pic_setup_s, pic_control)
+                                    + __builtin_offsetof(nvenc_h264_pic_control_s, frame_num);
+        constexpr u32 SetupRcQpP = SetupRc + __builtin_offsetof(nvenc_h264_rc_s, QP);   /* QP[P] */
+        static_assert(SetupFrameNum == 0x17C && nvenc_grc_p::Setup[SetupFrameNum] == 1 && nvenc_grc_p::Setup[SetupFrameNum + 2] == 2,
+                      "grc's P setup: frame_num 1 at 0x17C, POC lsb 2 at 0x17E");
+        static_assert(nvenc_grc_p::Setup[0x1A8] == 0x90 && nvenc_grc_idr::Setup[0x1A8] == 0x9C,
+                      "pic_control word: P (type 0, ref 1) vs IDR (type 3, ref 1)");
+        static_assert(sizeof(nvenc_grc_p::Setup) <= 0x1000);
+        static_assert((SetupFrameNum & ~0x3Fu) == ((SetupFrameNum + 3) & ~0x3Fu), "frame_num and POC share a cache line");
+
+        /* ---- M83: the stream; M85: P frames in it ---------------------------
          *
-         * game frame -> VIC (BT.709 NV12) -> NVENC IDR -> USB bulk -> PC.
+         * game frame -> VIC (BT.709 NV12) -> NVENC -> USB bulk -> PC.
          *
          * Each frame goes out as one SFTR packet, the transport M57-M71 proved:
          * a 32-byte header in its own transfer (a short packet the host reads
          * on its own), then the payload posted asynchronously, so frame N's
          * transfer runs while frame N+1 is captured and encoded. flags bit 1
-         * marks an H.264 payload: SPS + PPS + one IDR slice, a complete Annex-B
-         * access unit. Every frame is an IDR and carries its parameter sets, so
-         * the receiver can start, drop or resync anywhere; idr_pic_id alternates
-         * 0/1 as H.264 requires of back-to-back IDR pictures (grc's own IDR
-         * setups differ exactly there). kind carries the frame number.
+         * marks an H.264 payload: SPS + PPS + one slice, a complete Annex-B
+         * access unit; bit 2 (M85) marks an IDR. Every packet carries the
+         * parameter sets (a few dozen bytes), so a receiver can start at any
+         * IDR. idr_pic_id alternates 0/1 as H.264 requires of consecutive IDR
+         * pictures. kind carries the frame number; stride, unused for H.264,
+         * carries the console-side age of the frame in us (M85: queueBuffer ->
+         * header sent), which raw-view reports as the console's latency.
          *
-         * IDR-only is deliberate for this first cut. P frames need the ME and
-         * reference buffers grc binds on its P jobs, a P setup per frame, and a
-         * reference ping-pong; the setup data is in hand (Run E) but a wrong P
-         * setup can stall the engine mid-stream. IDR-only QP 20 measured 344 KB a
-         * frame in Run H, 165 Mbps at 60 fps - inside the ~290 Mbps link. */
+         * nvgop=N (M85): an IDR every N frames and grc's P job in between, with
+         * the references and MEPRED buffers ping-ponging as in grc's own jobs
+         * (Run E) and nvp. Run J's nvp decoded IPPP... cleanly; its "drift" was
+         * a one-frame offset in the probe (see TryNvencPFrames). Any encode
+         * error forces the next frame to be an IDR, so a bad frame can never
+         * become a reference. At the end the last frame's VIC planes are saved
+         * with its frame number: the PC decodes the recording and compares, a
+         * drift test at the end of a long P chain. */
         void TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                             u32 cmd_handle, u32 vsyncpt, u32 cfg_addr) {
             VicStage("ns:1");
             const u32 nframes = g_nvstream_n > 36000 ? 36000 : g_nvstream_n;
             const u8 qp = static_cast<u8>(g_nvstream_qp < 10 ? 10 : (g_nvstream_qp > 40 ? 40 : g_nvstream_qp));
-            LogLine("   ---- H.264 STREAM OVER USB (M83): %u frames, IDR-only, QP %u, BT.709 ----", nframes, qp);
+            u32 gop = g_nvstream_gop > 250 ? 250 : g_nvstream_gop;   /* frame_num and POC lsb wrap at 256 */
+            if (gop == 1) { gop = 0; }
+            if (gop != 0 && (g_ind_buf == nullptr || g_ind_size < NvfArenaBase + NvpArenaSize)) {
+                LogLine("   nvstream: nvgop=%u needs %zu KB of capture region, have %zu KB - streaming IDR-only",
+                        gop, (NvfArenaBase + NvpArenaSize) / 1024, g_ind_size / 1024);
+                gop = 0;
+            }
+            if (gop != 0) {
+                LogLine("   ---- H.264 STREAM OVER USB (M85): %u frames, an IDR every %u then P frames, QP %u, BT.709 ----", nframes, gop, qp);
+            } else {
+                LogLine("   ---- H.264 STREAM OVER USB (M83): %u frames, IDR-only, QP %u, BT.709 ----", nframes, qp);
+            }
             if (g_stream_stage[0] == nullptr || g_stream_stage[1] == nullptr) { LogLine("   nvstream: no stage buffers"); return; }
             /* the receiver should already be running; give a late one 5 s */
             for (u32 t = 0; t < 50 && !UsbReady(); ++t) { os::SleepThread(TimeSpan::FromMilliSeconds(100)); }
             if (!UsbReady()) { LogLine("   nvstream: USB not Configured (no host, or \"usb\" absent from the arm file) - not streaming"); VicStage("ns:no_usb"); return; }
             ON_SCOPE_EXIT { ClockWatchStop(); };
             NvfSession s;
+            if (gop != 0) { s.arena_size = NvpArenaSize; }   /* same base: past both stream stages */
             if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvstream")) { VicStage("ns:open_FAILED"); return; }
+            if (gop != 0) {
+                std::memcpy(s.x.a + NvpOffSetupP, nvenc_grc_p::Setup, sizeof(nvenc_grc_p::Setup));
+                s.x.a[NvpOffSetupP + SetupRcQpP] = qp;
+                s.x.a[NvpOffSetupP + SetupRcQpI] = qp;
+                armDCacheFlush(s.x.a + NvpOffSetupP, 0x1000);
+            }
             u32 enc_hz = 0;
             if (!s.EnsureClock("nvstream", std::addressof(enc_hz))) {
                 LogLine("   nvstream: NOT submitting - NVENC clock not established (%u Hz)", enc_hz);
@@ -4735,11 +4789,15 @@ namespace ams::mitm::applet {
             std::memcpy(g_stream_stage[0], nvenc_grc_hdrs::SpsPps, HdrsLen);
             std::memcpy(g_stream_stage[1], nvenc_grc_hdrs::SpsPps, HdrsLen);
 
+            const u32 refs[2] = { NvfOffRefOut, NvpOffRefB };
+            const u32 mes[2]  = { NvpOffMeA, NvpOffMeB };
             g_vic_quiet = true;
             u32 parity = 0, urb = 0, sent = 0, errs = 0, dropped = 0, done = 0, clock_fixes = 0;
-            bool pending = false, stalled = false;
+            u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
+            bool pending = false, stalled = false, need_idr = true;
             const char *why = "all frames sent";
             u64 s_read = 0, s_vic = 0, s_enc = 0, s_copy = 0, s_usb = 0, s_bytes = 0, m_work = 0, m_bytes = 0;
+            u64 s_bytes_i = 0, s_bytes_p = 0, s_age = 0, m_age = 0;
             u32 pic = NvfPictureIndex + 0x100;
             const u32 q0 = g_queue_count.load(std::memory_order_relaxed);
             const u64 loop_t0 = armTicksToNs(armGetSystemTick());
@@ -4749,18 +4807,45 @@ namespace ams::mitm::applet {
                 u64 rn = 0; u32 sg = 0;
                 const u64 t0 = armTicksToNs(armGetSystemTick());
                 if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped))) { why = SlotReadFailure(); break; }
+                const u64 present_ns = armTicksToNs(s.present_tick);
                 const u64 t1 = armTicksToNs(armGetSystemTick());
                 if (!s.Vic("ns:vic")) { why = "VIC did not complete"; break; }
+                last_vic = i;
                 const u64 t2 = armTicksToNs(armGetSystemTick());
-                s.SetSetupByte(SetupIdrPicId, static_cast<u8>(i & 1));
+
+                /* this frame's place in the GOP: 0 is an IDR */
+                if (gop == 0 || need_idr || pos >= gop) { pos = 0; }
+                NvfJob j;
+                j.ref_out = refs[pos & 1];
+                if (pos == 0) {
+                    s.SetSetupByte(SetupIdrPicId, static_cast<u8>(idrs & 1));
+                } else {
+                    const u16 fn = static_cast<u16>(pos % nvenc_grc_p::MaxFrameNum);
+                    const u16 poc = static_cast<u16>((2 * pos) % nvenc_grc_p::MaxPocLsb);
+                    std::memcpy(s.x.a + NvpOffSetupP + SetupFrameNum, std::addressof(fn), 2);
+                    std::memcpy(s.x.a + NvpOffSetupP + SetupFrameNum + 2, std::addressof(poc), 2);
+                    armDCacheFlush(s.x.a + NvpOffSetupP + (SetupFrameNum & ~0x3Fu), 0x40);
+                    j.setup  = NvpOffSetupP;
+                    j.ref_in = refs[(pos - 1) & 1];
+                    j.me_in  = mes[(pos - 1) & 1];
+                    j.me_out = mes[pos & 1];
+                }
+                const bool is_idr = (pos == 0);
                 nvenc_pic_stat_s st = {};
                 u64 en = 0;
-                const int r = NvfEncode(s.x, pic++, std::addressof(st), std::addressof(en));
+                const int r = NvfEncode(s.x, pic++, std::addressof(st), std::addressof(en), j);
                 if (r == 1) { why = "NVENC submit rejected"; break; }
-                if (r == 2) { g_vic_quiet = false; s.Stall("nvstream", "stream"); stalled = true; why = "NVENC stalled"; break; }
+                if (r == 2) { g_vic_quiet = false; s.Stall("nvstream", is_idr ? "stream (IDR)" : "stream (P)"); stalled = true; why = "NVENC stalled"; break; }
                 const u64 t3 = armTicksToNs(armGetSystemTick());
                 const u32 bytes = st.total_bit_count / 8;
-                if (st.ucode_error_status != 0 || bytes == 0 || st.bitstream_start_pos != 0 || bytes > 0x100000) { ++errs; continue; }
+                if (st.ucode_error_status != 0 || bytes == 0 || st.bitstream_start_pos != 0 || bytes > 0x100000) {
+                    ++errs;
+                    need_idr = true;       /* never predict from a frame we did not send */
+                    continue;
+                }
+                if (is_idr) { ++idrs; need_idr = false; }
+                last_pos = pos;
+                ++pos;
 
                 /* the previous transfer has had this whole frame to finish in */
                 if (pending) {
@@ -4773,26 +4858,32 @@ namespace ams::mitm::applet {
                 armDCacheFlush(s.x.a + NvfOffBits, bytes);
                 std::memcpy(g_stream_stage[parity] + HdrsLen, s.x.a + NvfOffBits, bytes);
                 const u32 payload = static_cast<u32>(HdrsLen + bytes);
+                const u64 t5 = armTicksToNs(armGetSystemTick());
+                const u64 age = (present_ns != 0 && t5 > present_ns) ? t5 - present_ns : 0;
                 SftHdrWire h = {};
                 h.magic = 0x52544653u;        /* "SFTR" */
                 h.version = 2;
-                h.flags = 2;                  /* bit 1: H.264 Annex-B access unit */
-                h.width = NvfW; h.height = NvfH; h.stride = 0;
+                h.flags = static_cast<u16>(2 | (is_idr ? 4 : 0));   /* bit 1: H.264 AU; bit 2: IDR */
+                h.width = NvfW; h.height = NvfH;
+                h.stride = static_cast<u32>(age / 1000);             /* M85: console-side age, us */
                 h.length = payload;
                 h.block_h_log2 = 0;
                 h.kind = i;                   /* frame number */
                 std::memcpy(g_usb_hdr, std::addressof(h), sizeof(h));
-                const u64 t5 = armTicksToNs(armGetSystemTick());
                 size_t hs = 0;
                 if (!UsbSendBuffer(g_usb_hdr, sizeof(SftHdrWire), std::addressof(hs))) { why = "USB header send failed"; break; }
                 if (!UsbPostAsync(g_stream_stage[parity], payload, std::addressof(urb))) { why = "USB post failed"; break; }
                 pending = true;
                 parity ^= 1;
+                last_sent = i;
                 const u64 t6 = armTicksToNs(armGetSystemTick());
 
                 ++done;
                 s_read += rn; s_vic += t2 - t1; s_enc += t3 - t2; s_copy += t5 - t4; s_usb += (t4 - t3) + (t6 - t5);
                 s_bytes += bytes;
+                if (is_idr) { s_bytes_i += bytes; ++n_i; } else { s_bytes_p += bytes; ++n_p; }
+                s_age += age;
+                if (age > m_age) { m_age = age; }
                 if (bytes > m_bytes) { m_bytes = bytes; }
                 const u64 work = (t6 - t0) - ((t1 - t0) - rn);
                 if (work > m_work) { m_work = work; }
@@ -4812,9 +4903,11 @@ namespace ams::mitm::applet {
                      * line said so */
                     const u64 gw_x10 = now > t_window ? static_cast<u64>(qn - q_window) * UINT64_C(10000000000) / (now - t_window) : 0;
                     q_window = qn; t_window = now;
-                    LogLine("   nvstream: %u frames in %llu ms, %u sent, avg %llu B/frame, NVENC %u Hz; game presented %llu.%llu fps this window",
+                    LogLine("   nvstream: %u frames in %llu ms, %u sent, avg %llu B/frame (IDR %llu, P %llu), NVENC %u Hz; game presented %llu.%llu fps this window",
                             i + 1, static_cast<unsigned long long>((now - loop_t0) / 1000000), sent,
-                            static_cast<unsigned long long>(done ? s_bytes / done : 0), hz,
+                            static_cast<unsigned long long>(done ? s_bytes / done : 0),
+                            static_cast<unsigned long long>(n_i ? s_bytes_i / n_i : 0),
+                            static_cast<unsigned long long>(n_p ? s_bytes_p / n_p : 0), hz,
                             static_cast<unsigned long long>(gw_x10 / 10), static_cast<unsigned long long>(gw_x10 % 10));
                     DebugPumpLogStats("nvstream");
                 }
@@ -4842,10 +4935,23 @@ namespace ams::mitm::applet {
                     static_cast<unsigned long long>(s_read / nd / 1000), static_cast<unsigned long long>(s_vic / nd / 1000),
                     static_cast<unsigned long long>(s_enc / nd / 1000), static_cast<unsigned long long>(s_copy / nd / 1000),
                     static_cast<unsigned long long>(s_usb / nd / 1000), static_cast<unsigned long long>(m_work / 1000));
-            LogLine("   nvstream: avg %llu B/frame (max %llu) -> %llu Mbps at the achieved rate; clock re-ensured %u time(s)",
+            LogLine("   nvstream: avg %llu B/frame (max %llu) -> %llu Mbps at the achieved rate; %u IDR avg %llu B, %u P avg %llu B; clock re-ensured %u time(s)",
                     static_cast<unsigned long long>(s_bytes / nd), static_cast<unsigned long long>(m_bytes),
-                    static_cast<unsigned long long>(wall ? s_bytes * 8 * 1000 / wall : 0), clock_fixes);
+                    static_cast<unsigned long long>(wall ? s_bytes * 8 * 1000 / wall : 0),
+                    n_i, static_cast<unsigned long long>(n_i ? s_bytes_i / n_i : 0),
+                    n_p, static_cast<unsigned long long>(n_p ? s_bytes_p / n_p : 0), clock_fixes);
+            LogLine("   nvstream: console latency, the game's present -> header sent: avg %llu us, max %llu us",
+                    static_cast<unsigned long long>(s_age / nd / 1000), static_cast<unsigned long long>(m_age / 1000));
             DebugPumpLogStats("nvstream");
+            /* M85: the drift test's reference - the VIC's picture of the last
+             * frame that went out, and which frame that was. Only when that
+             * frame is also the last one the VIC converted. */
+            if (!stalled && last_sent != ~0u && last_sent == last_vic) {
+                LogLine("   nvstream: last frame sent #%u, %s, %u frame(s) after its IDR", last_sent, last_pos == 0 ? "IDR" : "P", last_pos);
+                armDCacheFlush(s.x.a + NvfOffCur, NvfLuma + NvfChroma);
+                WriteEngineOutputToSd("sdmc:/nvstream-last-y.bin", s.x.a + NvfOffCur, NvfLuma, nullptr);
+                WriteEngineOutputToSd("sdmc:/nvstream-last-uv.bin", s.x.a + NvfOffCurUV, NvfChroma, nullptr);
+            }
             VicStage(stalled ? "ns:STALLED_left_open" : (sent == nframes ? "ns:DONE" : "ns:stopped"));
         }
 
@@ -4866,23 +4972,6 @@ namespace ams::mitm::applet {
          * SD (not USB): tools/nvp_check.py decodes the GOP, checks every frame
          * decoded, and compares the last one - a P frame predicted from a chain
          * of P frames - with the VIC's own picture, which is the drift test. */
-        constexpr u32 NvpOffSetupP = NvfArenaSize;
-        constexpr u32 NvpOffRefB   = NvpOffSetupP + 0x1000;
-        constexpr u32 NvpOffMeA    = NvpOffRefB + 0x160000;
-        constexpr u32 NvpOffMeB    = NvpOffMeA + 0x40000;     /* grc's MEPRED buffers are 128 KB apart */
-        constexpr u32 NvpArenaSize = NvpOffMeB + 0x40000;
-        constexpr size_t NvpArenaBase = FbBlockRowStage + StreamStageSize;   /* past g_stage_buf */
-        constexpr size_t NvpAccBase   = NvpArenaBase + NvpArenaSize;        /* CPU-only: the GOP's bitstreams */
-        constexpr u32 SetupFrameNum = __builtin_offsetof(nvenc_h264_drv_pic_setup_s, pic_control)
-                                    + __builtin_offsetof(nvenc_h264_pic_control_s, frame_num);
-        constexpr u32 SetupRcQpP = SetupRc + __builtin_offsetof(nvenc_h264_rc_s, QP);   /* QP[P] */
-        static_assert(SetupFrameNum == 0x17C && nvenc_grc_p::Setup[SetupFrameNum] == 1 && nvenc_grc_p::Setup[SetupFrameNum + 2] == 2,
-                      "grc's P setup: frame_num 1 at 0x17C, POC lsb 2 at 0x17E");
-        static_assert(nvenc_grc_p::Setup[0x1A8] == 0x90 && nvenc_grc_idr::Setup[0x1A8] == 0x9C,
-                      "pic_control word: P (type 0, ref 1) vs IDR (type 3, ref 1)");
-        static_assert(sizeof(nvenc_grc_p::Setup) <= 0x1000);
-        static_assert((SetupFrameNum & ~0x3Fu) == ((SetupFrameNum + 3) & ~0x3Fu), "frame_num and POC share a cache line");
-
         void TryNvencPFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                              u32 cmd_handle, u32 vsyncpt, u32 cfg_addr) {
             VicStage("np:1");
@@ -4922,6 +5011,12 @@ namespace ams::mitm::applet {
             u32 pic = NvfPictureIndex + 0x200;
             g_vic_quiet = true;
             for (u32 i = 0; i < n; ++i) {
+                /* M85: stop BEFORE encoding a frame that might not fit. Run J
+                 * encoded frame 20, found no room, and saved its VIC planes as
+                 * "the last frame" against a GOP that ended at 19 - a one-frame
+                 * offset that read as 19.2 dB of drift. 0x80000 is past the
+                 * largest frame seen (314 KB). */
+                if (acc_cap - acc_len < 0x80000) { LogLine("   nvp: accumulator full after %u frames (%zu KB)", i, acc_len / 1024); break; }
                 u64 rn = 0; u32 sg = 0;
                 if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvp: %s at frame %u", SlotReadFailure(), i); break; }
                 if (!s.Vic("np:vic")) { LogLine("   nvp: VIC did not complete at frame %u", i); break; }

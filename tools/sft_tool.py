@@ -11,6 +11,10 @@ summarises a recording and cuts a small sample of it:
       reports any that fail
   python3 tools/sft_tool.py head FILE OUT N
       copies the first N packets into OUT (commit that, not the recording)
+  python3 tools/sft_tool.py last FILE DIR
+      M85 drift test: decodes the whole recording and compares its last frame
+      with the console's VIC picture of it (DIR/nvstream-last-y.bin, -uv.bin);
+      its neighbours are compared too, so an off-by-one reads as one
   python3 tools/sft_tool.py selftest
 """
 import struct
@@ -34,13 +38,14 @@ def packets(path):
             if len(payload) < length:
                 return
             yield dict(version=version, flags=flags, w=w, h=hgt, length=length, kind=kind, raw=h + payload,
-                       payload=payload)
+                       payload=payload, stride=stride)
 
 
 def stats(path, decode=0, out=print):
     n = h264 = other = gaps = lost = 0
     sizes, last = [], None
     first = None
+    key_sizes, ages = [], []
     for p in packets(path):
         n += 1
         if p["flags"] & 2:
@@ -51,6 +56,10 @@ def stats(path, decode=0, out=print):
                 lost += p["kind"] - last - 1
             last = p["kind"]
             first = p["kind"] if first is None else first
+            if p["flags"] & 4:                       # M85: IDR
+                key_sizes.append(p["length"])
+            if 0 < p["stride"] < 10_000_000:         # M85: console-side age, us
+                ages.append(p["stride"])
         else:
             other += 1
     out(f"{path}: {n} packets ({h264} H.264, {other} other)")
@@ -59,6 +68,14 @@ def stats(path, decode=0, out=print):
         out(f"   frame numbers {first}..{last}: {lost} missing in {gaps} gap(s)")
         out(f"   payload avg {avg / 1024:.0f} KB, min {min(sizes) / 1024:.0f} KB, max {max(sizes) / 1024:.0f} KB "
             f"-> {avg * 8 * 60 / 1e6:.0f} Mbps / {avg * 60 / 1e6:.1f} MB/s at 60 fps")
+        if key_sizes:
+            other_n = len(sizes) - len(key_sizes)
+            other_avg = (sum(sizes) - sum(key_sizes)) / other_n if other_n else 0
+            out(f"   {len(key_sizes)} IDR avg {sum(key_sizes) / len(key_sizes) / 1024:.0f} KB, "
+                f"{other_n} P avg {other_avg / 1024:.0f} KB")
+        if ages:
+            out(f"   console latency (present -> header): avg {sum(ages) / len(ages) / 1000:.1f} ms, "
+                f"max {max(ages) / 1000:.1f} ms")
     if decode:
         import av
         ctx = av.CodecContext.create("h264", "r")
@@ -94,6 +111,59 @@ def head(path, out_path, count):
     print(f"wrote {k} packets to {out_path}")
 
 
+def last(path, d, out=print):
+    """Decode everything; compare the last frame (and its neighbours) with the
+    VIC's planes the console saved for it."""
+    import av
+    import numpy as np
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import nvframe_check as nf
+    d = Path(d)
+    ref = nf.Run(d, nf.M83_LAYOUT, "bt709", lambda *_: None)
+    vy = nf.deswizzle((d / "nvstream-last-y.bin").read_bytes(), nf.W, ref.luma_rows, ref.layout)[:nf.H]
+    vuv = nf.deswizzle((d / "nvstream-last-uv.bin").read_bytes(), nf.W, ref.chroma_rows, ref.layout)[:nf.H // 2]
+    ctx = av.CodecContext.create("h264", "r")
+    keep, kinds, bad = {}, [], 0
+
+    def take(frames):
+        for f in frames:
+            a = f.to_ndarray(format="yuv420p")
+            h, w = f.height, f.width
+            keep[f.pts] = (a[:h], a[h:h + h // 4].reshape(h // 2, w // 2), a[h + h // 4:h + h // 2].reshape(h // 2, w // 2))
+            for k in [k for k in keep if k < f.pts - 3]:
+                del keep[k]
+    for p in packets(path):
+        if not p["flags"] & 2:
+            continue
+        kinds.append(p["kind"])
+        pk = av.Packet(p["payload"])
+        pk.pts = p["kind"]
+        try:
+            take(ctx.decode(pk))
+        except Exception:  # noqa: BLE001
+            bad += 1
+    take(ctx.decode(None))
+    n = kinds[-1]
+    since = 0
+    for p in packets(path):
+        if p["flags"] & 4:
+            since = 0
+        elif p["flags"] & 2:
+            since += 1
+    out(f"{path}: {len(kinds)} H.264 packets, {bad} decode error(s); last frame #{n}, {since} frame(s) after its IDR")
+    best = None
+    for k in sorted(keep):
+        y, u, v = keep[k]
+        py, pu, pv = nf.psnr(y, vy), nf.psnr(u, vuv[:, 0::2]), nf.psnr(v, vuv[:, 1::2])
+        out(f"   frame #{k} against the VIC's last picture: Y {py:.1f} dB, U {pu:.1f} dB, V {pv:.1f} dB")
+        if k == n:
+            best = py
+    verdict = best is not None and best > 30
+    out("   -> " + ("THE LAST FRAME MATCHES: no drift along the P chain" if verdict
+                    else "*** the last frame does not match its VIC picture ***"))
+    return verdict
+
+
 def selftest():
     import tempfile
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -112,6 +182,22 @@ def selftest():
         assert any("decoded 9 frame(s)" in ln and "1280x720 colorspace 1 range 1" in ln for ln in lines), lines
         head(f, Path(td) / "h.sft", 3)
         assert stats(Path(td) / "h.sft", out=lambda *_: None)[0] == 3
+        # M85: the drift test on Run J's real single frame (46.4 dB) as a
+        # one-packet stream, and the same frame against a wrong picture
+        j = Path(__file__).resolve().parent.parent / "logs" / "m84-runJ"
+        if (j / "nvframe-last-bits.bin").exists():
+            import nvenc_replay as nr
+            (Path(td) / "nvstream-last-y.bin").write_bytes((j / "nvframe-last-y.bin").read_bytes())
+            (Path(td) / "nvstream-last-uv.bin").write_bytes((j / "nvframe-last-uv.bin").read_bytes())
+            pl = bytes(nr.stream_headers()) + (j / "nvframe-last-bits.bin").read_bytes()
+            g = Path(td) / "k.sft"
+            g.write_bytes(HDR.pack(MAGIC, 2, 6, 1280, 720, 9000, len(pl), 0, 7) + pl)
+            lines = []
+            assert last(g, td, out=lines.append), lines
+            assert any("#7" in ln and "Y 46.4 dB" in ln for ln in lines), lines
+            (Path(td) / "nvstream-last-y.bin").write_bytes((j / "nvframe-0-y.bin").read_bytes()[::-1])
+            assert not last(g, td, out=lambda *_: None)
+            print("drift test: Run J frame matches at 46.4 dB, a wrong picture fails")
     print("selftest OK")
 
 
@@ -121,6 +207,8 @@ if __name__ == "__main__":
         selftest()
     elif len(a) >= 2 and a[0] == "stats":
         stats(a[1], int(a[a.index("--decode") + 1]) if "--decode" in a else 0)
+    elif len(a) == 3 and a[0] == "last":
+        sys.exit(0 if last(a[1], a[2]) else 1)
     elif len(a) == 4 and a[0] == "head":
         head(a[1], a[2], int(a[3]))
     else:

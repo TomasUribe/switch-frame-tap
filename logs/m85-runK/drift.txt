@@ -1,0 +1,6 @@
+/home/tomas/switch-captures/m85-runK.sft: 3600 H.264 packets, 0 decode error(s); last frame #3599, 59 frame(s) after its IDR
+   frame #3596 against the VIC's last picture: Y 16.8 dB, U 25.8 dB, V 27.4 dB
+   frame #3597 against the VIC's last picture: Y 17.7 dB, U 26.8 dB, V 28.7 dB
+   frame #3598 against the VIC's last picture: Y 18.8 dB, U 28.5 dB, V 30.6 dB
+   frame #3599 against the VIC's last picture: Y 42.0 dB, U 43.6 dB, V 44.5 dB
+   -> THE LAST FRAME MATCHES: no drift along the P chain

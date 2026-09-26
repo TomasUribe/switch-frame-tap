@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 81 hardware test cycles (through M84 Run J). Current build: **M84** (Run J: a live 720p60 H.264 stream).
+`0100000000000C20`. 82 hardware test cycles (through M85 Run K). Current build: **M85** (Run K: a playable 720p60 IDR+P stream, ~31 ms measured latency).
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -114,6 +114,73 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M85: P frames in the stream, latency measured on both ends (Run K: playable, no drift, ~31 ms) ***
+
+### Run K result (logs `logs/m85-runK*`, recording `~/switch-captures/m85-runK.sft`)
+
+User: "the image looks sharp and the latency is actually good enough to play".
+
+- **Stream:** 3600/3600 frames, 0 lost, 0 undecodable, 58.4 fps sent / 58.7 at
+  raw-view; game presenting 57.9-60.0 fps every window; 0 encode errors.
+- **P frames work.** 60 IDR (avg 196 KB) + 3540 P (avg 117 KB); 55 Mbps
+  against Run J's 98. Sizes grew with the content (P 21 KB in the first
+  window, 117 KB racing), so P is ~60% of an IDR in a fast race at QP 20.
+- **No drift:** `sft_tool last`: frame #3599, 59 P frames after its IDR,
+  42.0 / 43.6 / 44.5 dB against the console's VIC picture; its neighbours
+  16.8-18.8 dB (so the pairing is right). nvp: 30/30, IPPP..., last frame
+  42.0 dB. Run J's 19.2 dB was the probe's off-by-one, as reanalysed.
+- **Latency, measured:** console (game's queueBuffer -> header sent) avg
+  10.5 ms; PC (header arrival -> on screen, 2 decode threads) avg 20.8 ms;
+  ~31 ms before the monitor. Per frame on the console: read 4.6 ms, VIC 1.0,
+  NVENC 2.4, copy 0.1, USB 0.9.
+- **One hiccup:** a single frame took 320 ms of work (console age max
+  313 ms, raw-view worst gap 331 ms), in an otherwise flat run. Which stage
+  is not logged; the next build should keep a per-stage maximum.
+- Pump: 18 thread events (2 starts, 16 exits) continued, longest hold 68 us.
+- Heap: 32 MB granted at the first rung; capture region 29,312 KB.
+
+### Run J's "drift" was the probe, not the encoder (reanalysis, high confidence)
+
+nvp encoded frame 20, found the accumulator full, stopped - and saved frame
+20's VIC planes as "the last frame" against a GOP whose last frame is 19. The
+decoded GOP (IPPP..., 20 frames) is clean to the eye, and its PSNR against
+the saved picture *rises* along the chain - 13.1 dB at frame 0, 19.2 at 19 -
+which is a scene moving toward a picture one frame later, not a chain
+decaying. Consecutive decoded frames differ by a mean 15-20 luma steps, the
+same size as the "drift". grc's P setup and P job were re-checked against Run
+E: the same bindings in the same order; the reference layout (16x16 tiled,
+chroma at +921,600) fits our 0x160000 buffers; only RCMODE differs (0 vs 18).
+
+### The changes
+
+- **nvstream `nvgop=N`**: an IDR every N frames, grc's P job between, the
+  references and MEPRED buffers ping-ponging as in nvp. Any encode error
+  forces the next frame to be an IDR. Header flags bit 2 marks an IDR. At
+  the end, the VIC planes of the last frame sent are saved
+  (`nvstream-last-y/uv.bin`) with its frame number: `sft_tool.py last`
+  decodes the whole recording and compares, a drift test at the end of a
+  long P chain (and its neighbours, so an off-by-one shows as one).
+- **Heap ladder starts at 32 MB** (was 24): the P arena after the stream
+  stages ends at ~22.1 MB of capture region; 24 MB gave 21.1. Without the
+  room, nvgop logs it and streams IDR-only.
+- **Latency, measured, not felt.** The console stamps each frame's age
+  (game's queueBuffer -> header sent, us) into the header's unused `stride`;
+  raw-view pairs every displayed frame with its header's arrival (decoder
+  pts = frame number) and reports PC latency (arrival -> on screen) and the
+  console's, live in the title bar and at exit. raw-view now defaults to 2
+  decode threads (was one per core, ~250 ms on this PC).
+- **Probe fixes:** nvp stops *before* encoding a frame that might not fit;
+  nvframe's saves drop stale cache lines first (Run J's half-green q20/q24).
+
+### Run K (planned)
+
+Arm file `vic exec dbg usb nvstream nvgop=60 nvp wait=60` (in
+`test/armfile_test.cpp`), handheld, USB to raw-view, racing. Pass: the
+stream at ~60 fps with P frames far smaller than IDRs, `sft_tool last`
+matching, nvp's last frame matching, and the latency numbers.
+
+---
 
 ## *** M84: keep the attached game running - a debug event pump (Run J: 3600/3600 frames at 59.9 fps through loading screens) ***
 

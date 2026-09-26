@@ -20,7 +20,8 @@
  *   ./raw-view --file s.sft --headless --frames 10   # decode only (tests)
  *   ./raw-view --swap          # flip R and B for a raw stream if colours look wrong
  *   ./raw-view --low-latency   # one decode thread, frames out immediately
- *   ./raw-view --threads 2     # N frame threads: N-1 frames of decoder delay
+ *   ./raw-view --threads 2     # N frame threads: N-1 frames of decoder delay (default 2;
+ *                              # 0 = one per core, which cost ~250 ms in M84 Run J)
  *
  * Decoding: an IDR-only 720p60 stream at QP 20 is ~150-170 Mbps of CABAC,
  * which one core may not keep up with (a 4-vCPU cloud box: 32 ms/frame on one
@@ -47,6 +48,7 @@
 #define SFT_MAGIC 0x52544653u
 #define SFT_FLAG_PACKED420 1u
 #define SFT_FLAG_H264      2u
+#define SFT_FLAG_KEY       4u   /* M85: an IDR access unit (H.264 only) */
 
 #pragma pack(push, 1)
 typedef struct {
@@ -113,10 +115,11 @@ static int h264_open(h264_t *d, int low_latency, int threads)
 }
 
 /* one access unit in, at most one frame out (1 = frame in d->frm) */
-static int h264_decode(h264_t *d, uint8_t *buf, int len)
+static int h264_decode(h264_t *d, uint8_t *buf, int len, int64_t pts)
 {
     d->pkt->data = buf;
     d->pkt->size = len;
+    d->pkt->pts = pts;   /* the console's frame number, to pair output with arrival */
     int rc = avcodec_send_packet(d->c, d->pkt);
     if (rc < 0 && rc != AVERROR(EAGAIN)) return rc;
     rc = avcodec_receive_frame(d->c, d->frm);
@@ -134,7 +137,7 @@ static void h264_close(h264_t *d)
 
 int main(int argc, char **argv)
 {
-    int swap_rb = 0, scale = 1, headless = 0, low_latency = 0, threads = 0;
+    int swap_rb = 0, scale = 1, headless = 0, low_latency = 0, threads = 2;
     long max_frames = 0;
     const char *file = NULL, *record = NULL, *h264_out = NULL;
     for (int i = 1; i < argc; i++) {
@@ -191,6 +194,13 @@ int main(int argc, char **argv)
     uint64_t bytes = 0;
     Uint64 t_first = 0, t_prev = 0, freq = SDL_GetPerformanceFrequency();
     double worst_gap = 0.0, dec_ms_total = 0.0;
+    /* M85 latency: arrival time of each frame's header, indexed by frame
+     * number, so a frame that comes out of the decoder later can be paired
+     * with it; and the console's own age of the frame (present -> header). */
+    static Uint64 t_rx[256];
+    double lat_sum = 0.0, lat_max = 0.0, age_sum = 0.0, age_max = 0.0;
+    long lat_n = 0, age_n = 0, keyframes = 0;
+    int64_t out_kind = -1;
 
     while (!g_quit && (max_frames == 0 || packets < max_frames)) {
         if (!headless && win) {
@@ -204,6 +214,7 @@ int main(int argc, char **argv)
         sft_hdr_t hdr;
         int r = read_exact((uint8_t *)&hdr, sizeof(hdr), 1000);
         if (r <= 0) continue;
+        const Uint64 t_hdr = SDL_GetPerformanceCounter();
         if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); continue; }
         if (hdr.length == 0 || hdr.length > 64u*1024*1024) continue;
         if (hdr.length > cap) {
@@ -226,6 +237,15 @@ int main(int argc, char **argv)
             if (have_kind && hdr.kind > last_kind + 1) lost += hdr.kind - last_kind - 1;
             last_kind = hdr.kind; have_kind = 1;
             if (es) fwrite(payload, 1, hdr.length, es);
+            t_rx[hdr.kind & 255] = t_hdr;
+            if (hdr.flags & SFT_FLAG_KEY) keyframes++;
+            /* M85 builds put the console-side age (present -> header, us) in
+             * the otherwise unused stride; older recordings carry 0 */
+            if (hdr.stride != 0 && hdr.stride < 10000000u) {
+                const double a = hdr.stride / 1000.0;
+                age_sum += a; age_n++;
+                if (a > age_max) age_max = a;
+            }
         }
 
         const uint8_t *planes[3] = {0}; int pitches[3] = {0};
@@ -233,11 +253,12 @@ int main(int argc, char **argv)
         if (is_h264) {
             if (!dec_ok) { undecoded++; continue; }
             Uint64 d0 = SDL_GetPerformanceCounter();
-            int got = h264_decode(&dec, payload, (int)hdr.length);
+            int got = h264_decode(&dec, payload, (int)hdr.length, (int64_t)hdr.kind);
             dec_ms_total += (double)(SDL_GetPerformanceCounter() - d0) * 1000.0 / (double)freq;
             if (got < 0) { undecoded++; continue; }
             if (got == 0) continue;          /* frame threads still filling up */
             for (int k = 0; k < 3; k++) { planes[k] = dec.frm->data[k]; pitches[k] = dec.frm->linesize[k]; }
+            out_kind = dec.frm->pts;
             hdr.width = (uint32_t)dec.frm->width;
             hdr.height = (uint32_t)dec.frm->height;
         }
@@ -304,17 +325,25 @@ int main(int argc, char **argv)
         SDL_RenderPresent(ren);
 
         Uint64 now = SDL_GetPerformanceCounter();
+        /* header arrival -> on screen, for the frame actually shown (with
+         * frame threads that is an older one than the packet just read) */
+        if (is_h264 && out_kind >= 0 && !g_in) {
+            const double l = (double)(now - t_rx[out_kind & 255]) * 1000.0 / (double)freq;
+            if (l >= 0 && l < 5000) { lat_sum += l; lat_n++; if (l > lat_max) lat_max = l; }
+        }
         double gap = (double)(now - t_prev) * 1000.0 / (double)freq;
         if (frames > 1 && gap > worst_gap) worst_gap = gap;
         t_prev = now;
         if ((frames % 30) == 0) {
             double secs = (double)(now - t_first) / (double)freq;
             char title[200];
-            snprintf(title, sizeof(title), "switch-frame-tap  %ux%u  %.1f fps  %.0f Mbps  (worst gap %.1f ms, %ld lost)",
-                     W, H, frames / secs, (double)bytes * 8.0 / 1e6 / secs, worst_gap, lost);
+            snprintf(title, sizeof(title), "switch-frame-tap  %ux%u  %.1f fps  %.0f Mbps  (worst gap %.1f ms, %ld lost)  pc %.1f ms  console %.1f ms",
+                     W, H, frames / secs, (double)bytes * 8.0 / 1e6 / secs, worst_gap, lost,
+                     lat_n ? lat_sum / lat_n : 0.0, age_n ? age_sum / age_n : 0.0);
             SDL_SetWindowTitle(win, title);
-            fprintf(stderr, "\r%ld frames  %.1f fps  %.0f Mbps  worst gap %.1f ms  %ld lost   ",
-                    frames, frames / secs, (double)bytes * 8.0 / 1e6 / secs, worst_gap, lost);
+            fprintf(stderr, "\r%ld frames  %.1f fps  %.0f Mbps  worst gap %.1f ms  %ld lost  pc %.1f ms  console %.1f ms   ",
+                    frames, frames / secs, (double)bytes * 8.0 / 1e6 / secs, worst_gap, lost,
+                    lat_n ? lat_sum / lat_n : 0.0, age_n ? age_sum / age_n : 0.0);
             fflush(stderr);
         }
     }
@@ -332,6 +361,11 @@ int main(int argc, char **argv)
     if (frames > 1 && secs > 0) fprintf(stderr, ", %.1f fps, worst gap %.1f ms", frames / secs, worst_gap);
     if (frames > 0 && dec_ms_total > 0) fprintf(stderr, ", decode avg %.2f ms", dec_ms_total / frames);
     fprintf(stderr, "\n");
+    if (keyframes) fprintf(stderr, "%ld keyframes (IDR), %ld other\n", keyframes, packets - keyframes);
+    if (lat_n) fprintf(stderr, "PC latency (header arrival -> on screen): avg %.1f ms, max %.1f ms over %ld frames\n",
+                       lat_sum / lat_n, lat_max, lat_n);
+    if (age_n) fprintf(stderr, "console latency (present -> header sent): avg %.1f ms, max %.1f ms\n",
+                       age_sum / age_n, age_max);
     /* machine-readable last line, for tests */
     printf("packets=%ld frames=%ld undecoded=%ld lost=%ld\n", packets, frames, undecoded, lost);
 

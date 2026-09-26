@@ -108,6 +108,7 @@ namespace ams::mitm::applet {
         if (code == 7) {
             const s32 qs = ParseQueueBufferSlot(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize());
             if (qs >= 0 && qs < 8) { g_queue_slot.store(qs, std::memory_order_relaxed); }
+            g_queue_tick.store(armGetSystemTick(), std::memory_order_relaxed);
             g_queue_count.fetch_add(1, std::memory_order_relaxed);
         }
 

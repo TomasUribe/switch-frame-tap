@@ -84,6 +84,7 @@ namespace ams::mitm::applet {
     extern u32  g_nvframe_n;
     extern bool g_nvstream_armed; /* M83: game -> VIC -> NVENC H.264 -> USB */
     extern u32  g_nvstream_n, g_nvstream_qp;
+    extern u32  g_nvstream_gop;   /* M85: 0 = IDR-only; N = an IDR every N frames, P frames between */
     extern bool g_nvp_armed;      /* M83: IDR + P frames probe */
     extern u32  g_nvp_n;
     extern u32  g_matrix_mode;
@@ -92,6 +93,7 @@ namespace ams::mitm::applet {
 
     extern std::atomic<u32> g_queue_count;
     extern std::atomic<s32> g_queue_slot;
+    extern std::atomic<u64> g_queue_tick;   /* M85: system tick of the latest queueBuffer */
 
     /* Spawn the worker. The VIC probe MUST NOT run on the binder dispatch
      * thread: doing so blocks the game's queueBuffer, which wedges vi, which
