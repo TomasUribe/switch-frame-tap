@@ -162,11 +162,17 @@ int main(int argc, char **argv)
         if (!g_in) { perror(file); return 1; }
     } else {
         if (libusb_init(&ctx) != 0) { fprintf(stderr, "libusb_init failed\n"); return 1; }
+        /* the console enumerates a few seconds into its boot: wait for it
+         * (Ctrl-C to give up) rather than making the user start us after it */
         g_usb = libusb_open_device_with_vid_pid(ctx, SFT_VID, SFT_PID);
         if (!g_usb) {
-            fprintf(stderr, "device %04x:%04x not found - is the console booted with 'usb' and a stream flag armed?\n",
+            fprintf(stderr, "waiting for the console (%04x:%04x) - boot it with 'usb' in sdmc:/applet-mitm.armed...\n",
                     SFT_VID, SFT_PID);
-            libusb_exit(ctx); return 1;
+            while (!g_usb && !g_quit) {
+                SDL_Delay(500);
+                g_usb = libusb_open_device_with_vid_pid(ctx, SFT_VID, SFT_PID);
+            }
+            if (!g_usb) { libusb_exit(ctx); return 1; }
         }
         libusb_set_auto_detach_kernel_driver(g_usb, 1);
         if (libusb_claim_interface(g_usb, SFT_IFACE) != 0) {

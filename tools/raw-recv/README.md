@@ -1,3 +1,28 @@
+# raw-view and raw-recv
+
+**`raw-view`** is the PC viewer for the switch-frame-tap stream: libusb +
+libavcodec + SDL2 in one process. It waits for the console to appear on USB
+(`1209:5f1e`), decodes the H.264 stream live, and shows the frame rate, the
+bitrate, frames lost, and two latencies in the title bar: `console` (the game
+presenting a frame -> its header leaving the Switch) and `pc` (the header
+arriving -> the frame on screen).
+
+```
+sudo apt install libusb-1.0-0-dev libsdl2-dev libavcodec-dev libavutil-dev
+make                                   # must say "raw-view built WITH H.264"
+./raw-view                             # live
+./raw-view --record s.sft              # also save the stream (large: ~0.5-1 GB/min)
+./raw-view --file s.sft                # replay a recording
+./raw-view --threads N                 # decode threads (default 2; 0 = one per core)
+./raw-view --low-latency               # one decode thread, frames out immediately
+```
+
+`python3 ../sft_tool.py stats|last|artifacts|head` inspects recordings.
+
+---
+
+The original raw-frame tooling follows.
+
 # raw-recv
 
 Reads raw captured frames from `switch-frame-tap` over USB bulk and writes them

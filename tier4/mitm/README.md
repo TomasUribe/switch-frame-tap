@@ -12,13 +12,14 @@ This directory's docs, in reading order:
 
 The module itself is in **[../applet-mitm/](../applet-mitm/)**.
 
-### Where the frame problem stands
+### Where it stands
 
-The output half is finished: a byte-exact VIC pipeline (block-linear →
-linear, scale, format convert) driven from a sysmodule, with NVENC open. The
-input half is the problem — three routes to another process's pixels are closed
-with evidence, and the live one is the kernel's debug SVCs. STATUS.md's first
-two sections cover both in full.
+Done, on hardware: live native 720p60 H.264 streaming over USB from handheld
+mode, across game relaunches, for MK8D and BOTW (M83-M89). The pixels come
+through the kernel's debug SVCs (the three graphics-stack routes are closed,
+with evidence), the VIC converts them, NVENC encodes them, and
+`tools/raw-recv/raw-view` shows them. **[PROJECT-HANDOFF.md](PROJECT-HANDOFF.md)**
+is the map; the top-level README has the quick start.
 
 ### Historical
 

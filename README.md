@@ -1,550 +1,340 @@
 # switch-frame-tap
 
-Building a Nintendo Switch → PC screen streamer that runs at **native
-resolution and 60 fps**, and the research needed to get there. Homebrew,
-developed on and for the author's own console.
+A Nintendo Switch sysmodule that streams the game you are playing to a PC over
+a plain USB cable, at the console's **native handheld resolution (1280x720)
+and the game's full frame rate, 60 fps**, compressed with the console's own
+hardware H.264 encoder. No capture card. Homebrew, built on and for the
+author's own console.
 
-> **There is a working, playable stream.** Live video from the console to a PC
-> over USB at **768x432 / 59.6 fps**, through the Tegra VIC, into a one-process
-> libusb + SDL2 viewer. 3600 frames with zero stale iterations. Low enough
-> latency to play from the PC window.
+> **It works, and it is playable.** Live mode streams whenever the PC viewer is
+> open and a game is running, reattaches by itself when you close the viewer,
+> close the game or start another one, and has been tested for several minutes
+> at a time with Mario Kart 8 Deluxe (60 fps) and Zelda: Breath of the Wild
+> (30 fps). Measured on the last run: **0 frames lost, 0 undecodable, 0 stale
+> or torn frames in 6,965**; about **45 ms** from the game presenting a frame to
+> it being on the PC screen (monitor not included).
 >
-> **It is still not a finished tool**, and the reason is now measured rather
-> than estimated. The goal is native resolution at 60 fps, and **raw pixels
-> cannot get there**: the USB 2.0 link saturates at **~37 MB/s**, which puts the
-> 60 fps ceiling at about 800x450. Raw 1080p60 needs 186.6 MB/s even at 1.5
-> bytes/pixel. The remaining work is **compression** (1080p60 H.264 all-intra at
-> 50 Mbps is 6.25 MB/s — a sixth of what the cable already carries), or
-> SuperSpeed for handheld only: docked, the dock owns the console's one USB-C
-> port, so docked 1080p has to go over the network, compressed. What is
-> finished is finished properly and verified on hardware; what is not is marked
-> as such throughout. See [Roadmap](#roadmap).
->
-> **Latest (M82 Run H, on hardware; M83 built):** real game frames went
-> through the VIC and NVENC at **60.5 fps** (120/120 frames, 12.7 ms of a
-> 16.7 ms budget). The decode did not match, and Run H's own data says why:
-> NVENC reads 16-row blocks where the VIC wrote 32 (the decode matches the
-> VIC's bytes read that way at 42-48 dB). The same run solved the VIC's
-> colour matrix: an exact model of its arithmetic reproduces all 528 measured
-> values, and explains why three earlier attempts produced a flat picture.
-> **M83 is the first end-to-end stream:** game -> VIC (BT.709) -> NVENC H.264
-> -> USB -> a PC viewer that decodes live, IDR-only at native 720p handheld,
-> plus an opt-in P-frame probe. Every PC-side part is tested
-> (`bash tools/run_pc_tests.sh`); the hardware run is next. **Picking the
-> project up? Start at [PROJECT-HANDOFF.md](tier4/mitm/PROJECT-HANDOFF.md).**
+> It is still **experimental**: handheld only, two games tested, no audio, one
+> console tested. Read [Limitations](#limitations) before installing it.
 
-**Console under test:** Mariko, firmware **22.5.0**, Atmosphère **1.11.2**.
-79 hardware test cycles.
+![A frame off the live stream: Mario Kart 8 Deluxe race start, 1280x720, decoded from the console's H.264](docs/stream-mk8-go.jpg)
 
-![Mario Kart 8 Deluxe captured at native 1920x1080 from the game's own swapchain](docs/frame-1080p.png)
+*A frame off the live stream, decoded on the PC from the console's own H.264
+(Run M, live mode). [A 6.7 s clip of the stream](docs/stream-mk8-title-60fps.mp4)
+is the console's bitstream exactly as it arrived over USB, only put in an MP4
+container: 60 fps, keyframe every 60 frames. Below, the same clip as a small
+animation.*
 
-*A real capture: read out of the game's swapchain by the sysmodule, de-swizzled
-from Tegra block-linear on the PC. Native 1920x1080, docked.*
+![The live stream: Mario Kart 8 Deluxe title screen, animated](docs/stream-mk8-title.webp)
 
-![A frame off the live stream, VIC-scaled and packed 4:2:0, decoded on the PC](docs/frame-stream-packed420.png)
+| | measured |
+|---|---|
+| Resolution / frame rate | 1280x720 (native handheld); the game's own rate: MK8D 57-59 fps, BOTW 29 fps |
+| Transport | USB 2.0 bulk, the Switch's own USB-C port, no dock |
+| Video | H.264 from the Switch's NVENC, constant QP 20, keyframe every 60 frames; ~40-55 Mbps in a race |
+| Latency | ~20-23 ms on the console (game present -> sent) + ~21-24 ms on the PC (arrival -> on screen) |
+| Reliability | 0 lost / 0 undecodable frames in every run since M84; 0 stale or torn frames (M89) |
+| Console | Mariko, firmware 22.5.0, Atmosphère 1.11.2 (the only one tested) |
 
-*A frame off the **live stream**: scaled and format-converted by the VIC on the
-console, sent over USB at 1.5 bytes/pixel, reassembled by the viewer. No codec
-and no colour matrix involved — see [packed 4:2:0](#the-vic-does-no-colour-conversion-and-that-turned-out-to-be-useful).*
+For comparison, [SysDVR](https://github.com/exelix11/SysDVR), the established
+tool, is capped at 720p30 for game video, because it reads the system's own
+game-recording encoder, whose settings are fixed in firmware. This project
+takes the frame before that encoder.
 
+## How it works
+
+```
+the game presents a frame (queueBuffer)
+  | vi:u mitm sees it: which swapchain slot, and the GPU fence for it
+  v
+wait for the fence (the GPU is often still drawing: ~5-11 ms)
+  v
+svcReadDebugProcessMemory: copy the slot out of the game's memory
+  |   (the kernel debug SVCs - the only route to another process's pixels)
+  v
+VIC: RGBA block-linear -> BT.709 NV12 (the Tegra's video compositor)
+  v
+NVENC: H.264, IDR + P frames (the job the system's own recorder builds)
+  v
+USB bulk -> tools/raw-recv/raw-view on the PC: libusb + libavcodec + SDL2
+```
+
+The sysmodule never touches the GPU or the display stack's buffers directly.
+It watches the game's display traffic through a `vi:u` mitm, reads the
+finished frame with the same debug SVCs Atmosphère's cheat engine uses, and
+drives the VIC and NVENC engines itself over raw `nvdrv` ioctls.
+
+## Quick start
+
+**You need:** a Switch running Atmosphère (tested: Mariko, 22.5.0, 1.11.2), a
+Linux PC, a USB-C cable, Docker, and a NAND backup. This drives hardware
+engines directly; a bug can freeze the console (see
+[If something goes wrong](#if-something-goes-wrong)).
+
+**1. Build the sysmodule** (in the `devkitpro/devkita64` Docker image; the first
+build compiles libstratosphere, ~15 minutes):
+
+```bash
+git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
+bash tier4/applet-mitm/build.sh        # -> tier4/applet-mitm/applet-mitm.nsp
+```
+
+**2. Build the PC viewer**, and let it open the USB device without sudo:
+
+```bash
+sudo apt install libusb-1.0-0-dev libsdl2-dev libavcodec-dev libavutil-dev
+make -C tools/raw-recv                 # must say "raw-view built WITH H.264"
+sudo cp tools/raw-recv/99-switch-frame-tap.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+**3. Install on the SD card** (card reader or Hekate USB mass storage):
+
+```
+sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp          <- applet-mitm.nsp
+sdmc:/atmosphere/contents/0100000000000C20/flags/boot2.flag   <- an empty file
+sdmc:/applet-mitm.armed                                        <- one line, below
+```
+
+```
+vic exec dbg usb nvgop=60 live wait=20
+```
+
+There must be **no** `mitm.lst` in that contents folder.
+
+**4. Stream.** Handheld, USB-C cable from the Switch to the PC. Start the viewer,
+then boot and launch a game:
+
+```bash
+tools/raw-recv/raw-view                # --record FILE.sft to also save the stream
+```
+
+The picture appears a few seconds after the game is on screen (and at the
+earliest 20 s after boot: `wait=20`). The window title shows the frame rate,
+the bitrate and both latencies. Close the viewer or the game whenever you like;
+the stream picks up again when both are back.
+
+The sysmodule logs to `sdmc:/applet-mitm.log` (rewritten at every boot) and to
+`sdmc:/applet-mitm.last`, a one-line breadcrumb that survives a forced
+power-off.
+
+## Limitations
+
+- **Handheld only.** It streams through the Switch's USB-C port in device mode,
+  and docked, the dock owns that port. Docked 1080p needs a network transport
+  (not started).
+- **Two games tested:** Mario Kart 8 Deluxe (three 1920x1080 buffers) and
+  Zelda: Breath of the Wild (two). Other games should work if their swapchain
+  is block-linear RGBA, at most 1920x1080, in one memory object; the log says
+  so if not. Colours are verified for the A8B8G8R8 format those two use.
+- **No audio** yet.
+- **The PC viewer is Linux-only** as written (libusb, SDL2, libavcodec; porting
+  is plausible but not done).
+- **It debug-attaches to the running game.** A process can have one debugger,
+  so expect Atmosphère's cheat engine (dmnt) and similar tools not to work on
+  a game while it is being streamed.
+- **Occasional micro-stutters** during loading and heavy scenes: reads,
+  the VIC and NVENC are shared with the whole system (NVENC also with the
+  console's own background recording), and a frame can take 50-200 ms then.
+- **Bitrate is not tuned.** P frames are about 60% of a keyframe in a fast
+  race at QP 20; ~40-55 Mbps fits USB 2.0 (~290 Mbps) easily but is more than
+  it needs to be.
+- **One console tested.** Mariko, firmware 22.5.0, Atmosphère 1.11.2.
+
+## If something goes wrong
+
+Delete `atmosphere/contents/0100000000000C20/` from the SD card on a PC, or
+boot holding **Volume Up**, which makes Atmosphère skip `contents` sysmodules.
+Nothing here touches NAND or the bootloader. Keep a NAND backup anyway.
+
+Read the SD card through a card reader or Hekate's USB mass storage, **not
+MTP**: MTP returns I/O errors on a log whose tail was cut by a forced
+power-off. Copy the log off before the console boots Atmosphère again.
 
 ## How this was built — with an AI, openly
 
-I built this together with **Claude** (Anthropic's AI model, Opus 5, through
-Claude Code). I want to be straightforward about that, because it should change
-how you read and trust what's here.
+I built this together with **Claude** (Anthropic's AI model, through Claude
+Code). That should change how you read and trust what's here.
 
 - **Claude** wrote nearly all of the code and the documentation, did the
-  source-reading (Atmosphère and its kernel mesosphere, libdrm, switchbrew),
-  designed each hardware probe, and interpreted the logs that came back.
-- **I** set the goal and the direction, ran every one of the 71 hardware tests
-  on my own console, read the logs back off the SD card, decided which routes to
-  keep pushing and when to drop one, and decided what to publish.
+  source-reading (Atmosphère and its kernel mesosphere, NVIDIA's open headers,
+  switchbrew, reference drivers), designed each hardware probe, and
+  interpreted the logs that came back.
+- **I** set the goal and the direction, ran every one of the 87 hardware test
+  cycles on my own console, read the logs back off the SD card, decided which
+  routes to keep pushing and when to drop one, and decided what to publish.
 
 What that means for you:
 
-- **"Verified on hardware" means exactly that** — a real run on a real console,
-  with the log. Conclusions drawn from reading source rather than running it are
-  labelled as such.
-- **The AI got things wrong, and some mistakes were not cheap.** Since Claude
-  wrote nearly all the code, the bugs are its bugs: including the ones that
-  froze my console, one that fataled another sysmodule at boot, and a build
-  (M33) that shipped without the NPDM flag it needed to work at all. Every one
-  is recorded in [`tier4/mitm/STATUS.md`](tier4/mitm/STATUS.md). That log is
-  written in the first person because Claude wrote it as the work happened.
-- **The history shows it too.** Most commits carry a
-  `Co-Authored-By: Claude` trailer.
+- **"Verified on hardware" means exactly that**: a real run on a real console,
+  with the log, committed under [`logs/`](logs). Conclusions drawn from reading
+  source rather than running it are labelled as such.
+- **The AI got things wrong, and some mistakes were not cheap**: bugs that froze
+  the console, one that fataled another sysmodule at boot, a timing figure
+  (a "119 ms" VIC blit that was really SD-card logging) published before it
+  was checked, and an early NVENC result over-read. Every one is recorded in
+  [`tier4/mitm/STATUS.md`](tier4/mitm/STATUS.md), corrections left in place.
+- **The history shows it.** Most commits carry a `Co-Authored-By: Claude`
+  trailer.
 
 Review it as you would a contribution from someone you haven't worked with
-before — which is good advice for homebrew that drives hardware engines anyway.
+before, which is good advice for homebrew that drives hardware engines anyway.
 
 ---
 
-## Why
+## The research
 
-[SysDVR](https://github.com/exelix11/SysDVR) streams the Switch screen to a PC,
-capped at **720p30, game layer only**. That cap is not SysDVR's: it reads
-`grc:d`, the game-recording encoder, whose configuration is fixed in firmware.
+The full log, newest first, with every dead end and its evidence, is
+[`tier4/mitm/STATUS.md`](tier4/mitm/STATUS.md). The map for picking the
+project up is [`tier4/mitm/PROJECT-HANDOFF.md`](tier4/mitm/PROJECT-HANDOFF.md);
+the early narrative is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md). The
+highlights:
 
-The obvious question is whether a sysmodule can do better by taking the frame
-*before* the encoder — reading the game's own swapchain and running it through
-the Tegra X1's own fixed-function blocks. This repository is the answer, worked
-all the way down.
+### Getting the pixels: three routes closed, one open
 
-## Where the difficulty is
-
-**A sysmodule can process frames at full speed. Getting hold of one is the
-problem.**
-
-Three independent routes to another process's pixels have each been taken to
-the point of a definite verdict:
+A sysmodule can process frames at full speed; getting hold of one is the
+problem. Three routes through the graphics stack were each taken to a definite
+verdict:
 
 | route | verdict |
 |---|---|
-| Import the game's swapchain `nvmap` handle (`FROM_ID` + `MAP_CMD_BUFFER`) | Pins to `phys=0`, silently. Survives `is_compr`, `MAP_CMD_BUFFER_EX`, relocs, the full `0xFFFFFFFF` `nvdrv:t` permission mask, and the game's exact aruid adopted before any `Open`. **Structural:** at `Initialize` nvservices is handed `CUR_PROCESS_HANDLE` and maps client memory through *that*. The game's pages live in the game's process. |
-| `vi` indirect layers (`GetIndirectLayerImageMap`) | `0x60A PreconditionViolation`. The whole object graph builds — `CreateIndirectLayer` → producer endpoint → consumer endpoint — and the layer is simply **empty**. Wiring an application's layer to an indirect layer is **AM's** job, and a sysmodule cannot drive AM. |
-| Read back the display controller | **No such ioctl exists.** `nvdisp-disp0` is `FLIP` / `SET_MODE` / `GET_WINDOW`; `nvdcutil` is DSI/EDID test plumbing. Grepping all of nvdrv for `READBACK\|CAPTURE\|GET_FRAME\|SCANOUT` returns nothing. |
+| Import the game's swapchain `nvmap` handle (`FROM_ID` + `MAP_CMD_BUFFER`) | Pins to `phys=0`, silently, whatever the flags, permission mask or aruid. **Structural:** nvservices maps client memory through the handle of the process that initialised it, and the game's pages are in the game's process. |
+| `vi` indirect layers (`GetIndirectLayerImageMap`) | `0x60A`. The object graph builds and the layer stays empty: attaching an application's layer to an indirect layer is AM's job. |
+| Read back the display controller | No such ioctl in nvdrv. |
 
-`caps` `CaptureRawImage`, the other obvious candidate, is `[1.0.0]` — removed
-long before 22.5.0.
+The route that works goes around the graphics stack: `svcDebugActiveProcess`
++ `svcReadDebugProcessMemory`, with `"force_debug": true` in the NPDM (as
+`creport` and `dmnt.gen2` declare). mesosphere's permission check ignores the
+`DeviceShared` attribute that sank the nvmap route (`kern_k_page_table_base.cpp`),
+and a whole 1080p slot reads in ~5 ms. Two things are needed to stay attached
+without hurting the game:
 
-**This is very likely why SysDVR is stuck at 720p30.** It is not that nobody
-tried; the platform does not let a sysmodule reach another process's
-framebuffer through the graphics stack.
+- **A debug event pump.** While attached, every thread start or exit in the
+  game suspends *all* its threads until the debugger continues
+  (`KDebugBase::ProcessDebugEvent`). Loading screens start threads; the first
+  stream froze on one. `applet_mitm_dbgpump.cpp` does what dmnt's cheat engine
+  does: block on the debug handle, drain, continue - on the new thread's core.
+- **Never hold the game's graphics resources.** Importing the game's buffer
+  handle or adopting its aruid in our nvdrv session kept an exited game's
+  memory alive, and the next launch hung on a black screen. Live mode uses
+  only its own buffers.
 
-The one route that is *not* closed goes around the graphics stack entirely —
-the kernel's debug SVCs. See [Where it stands](#where-it-stands).
+### Reading a finished frame
 
-## What is here that you might want
+The mitm sees `queueBuffer` when the game *submits* a frame, and the GPU is
+often still drawing it: queueBuffer carries an acquire fence, which the
+compositor waits on. Reading early produced torn frames and whole frames from
+two or three presents back. The capture now snapshots the slot and its fence
+together (a seqlock against the binder thread), waits for the fence (measured:
+5.5 ms average in MK8D, 7.5-11 ms in BOTW), then reads. `tools/sft_tool.py
+artifacts` counts both artifacts in a recording: 29 stale / 22 torn per 3000
+frames before, 0 / 0 after.
 
-Several pieces are finished, verified on hardware, and — as far as I can tell —
-not published anywhere else. They are useful on their own, whether or not the
-capture problem is solved, so take any of them.
+### Driving the Tegra engines from a sysmodule
 
-### 1. Non-domain mitm sub-object forwarding for libstratosphere
+- **VIC** over raw nvdrv, byte-exact: `SETCL` is mandatory (nvservices, unlike
+  the Linux DRM driver, does not set the class), relocs are inert on Horizon
+  (pin with `MAP_CMD_BUFFER` and inline the address), the syncpoint increment
+  must be in the command stream, and a zero address hangs the VIC and with it
+  the compositor.
+- **The VIC's colour matrix, solved.** Three attempts produced a flat picture;
+  an 11-probe sweep gave an exact law (`out = sum(K * in) * 2^-(8 + shift) +
+  offset`, [`tools/vic_csc.py`](tools/vic_csc.py)) that reproduces all 528
+  measured values. The stream uses real BT.709 limited range.
+- **Block-height units differ:** the VIC's is log2 of GOBs; NVENC's
+  `block_height` value 2 means 16 rows. Mismatched, the encode came out
+  perfectly scrambled.
+- **NVENC was never "unbooted firmware" - it was unclocked.** On Horizon a
+  client requests the engine's clock from `mm:u` before using it (as averne's
+  FFmpeg nvtegra code does); an unclocked engine accepts a job and never runs
+  it. With the clock up, the job the system's own recorder (grc) builds,
+  captured from grc and replayed from our own channel, encodes correctly;
+  constant QP works through RCMODE 0; `error_status` 2 is routine (grc's own
+  frames carry it). P frames use grc's P setup and job with the references
+  ping-ponging; the drift test (last frame of a 59-P-frame chain against the
+  console's own picture) passes at 42 dB.
 
-[`tier4/applet-mitm/patch_libstrat.py`](tier4/applet-mitm/patch_libstrat.py) —
-55 lines, idempotent.
+![A P frame 29 frames into its chain, decoded on the PC](docs/stream-mk8-p-frame.jpg)
 
-Atmosphère's mitm framework can forward commands it does not implement, but
-only for objects on a **domain** session. `vi:u` hands out
-`IApplicationDisplayService` and `IHOSBinderDriver` as sub-objects on a
-**non-domain** session, and upstream libstratosphere has nowhere to put the
-forward service for those — so every undeclared command on a wrapped sub-object
-fails instead of passing through. The patch adds that path.
+*The last frame of a 30-frame IDR + P chain encoded on the console (Run K),
+decoded on the PC: 42 dB against the console's own picture of it.*
 
-**If you have ever tried to mitm `vi` and given up, this is the missing piece.**
+### The transport
 
-### 2. A transparent `vi:u` mitm that sees every frame
+USB 2.0 bulk through `usb:ds` saturates at ~37 MB/s from this module (measured
+across five resolutions), which is why raw pixels stopped at 768x432 and the
+stream is H.264. Transfers that time out are cancelled, so a newly opened
+viewer never starts mid-frame. SuperSpeed descriptors (including the BOS
+`usbDsSetBinaryObjectStore` needs) are accepted but the link still trains to
+High Speed on the cable tested.
 
-Wraps `GetDisplayService` → `IApplicationDisplayService` → `GetRelayService` →
-`IHOSBinderDriver`, and intercepts `TransactParcelAuto`. Measured **60.0 fps
-sustained**, invisible to the game.
+### Pieces you might want on their own
 
-From the binder traffic it recovers the exact layout of every frame:
-`setPreallocatedBuffer` (code 14) carries a flattened `NvGraphicBuffer`, and
-`queueBuffer` (code 7) names the swapchain slot — the latter behind Android's
-`writeInterfaceToken`, which is parsed rather than guessed. For Mario Kart 8:
-one nvmap object, 3 × 1920×1080 A8B8G8R8, block-linear kind `0xFE`,
-`block_height_log2 = 4`, pitch 7680, slots at `0` / `0x870000` / `0x10E0000`.
+- **Non-domain mitm sub-object forwarding for libstratosphere**
+  ([`tier4/applet-mitm/patch_libstrat.py`](tier4/applet-mitm/patch_libstrat.py),
+  55 lines): Atmosphère's mitm framework forwards undeclared commands only on
+  domain sessions; `vi:u` hands out its sub-objects on non-domain ones. If you
+  have tried to mitm `vi` and given up, this is the missing piece.
+- **A transparent `vi:u` mitm** that recovers every frame's layout from the
+  binder traffic (`setPreallocatedBuffer`, `queueBuffer` with its fence), and
+  handles both `GetDisplayService` and `GetDisplayServiceWithProxyNameExchange`
+  (command 1, used by BOTW: its request is forwarded byte for byte).
+- **Undocumented `vi` ABIs:** `CreateIndirectLayer` (2050),
+  `CreateIndirectProducerEndPoint` (2052), `CreateIndirectConsumerEndPoint`
+  (2054), all `{u64, u64} -> u64`; `GetDisplayService`'s command id is the
+  service type (`vi:u` 0, `vi:s` 1, `vi:m` 2).
+- **A dmnt-style debug event pump** for any sysmodule that stays attached to a
+  game.
+- **PC tools with self-tests** (`bash tools/run_pc_tests.sh`): the viewer,
+  `sft_tool.py` (recording stats, drift test, artifact detector), the VIC matrix
+  model, NVENC setup decoders.
 
-### 3. A complete VIC pipeline driven from a sysmodule, byte-exact
-
-The Video Image Compositor is the Tegra block that converts block-linear to
-linear, scales, and changes pixel format — no GPU involved.
-[`applet_mitm_nv.cpp`](tier4/applet-mitm/source/applet_mitm_nv.cpp) +
-[`vic40_config.hpp`](tier4/applet-mitm/source/vic40_config.hpp) drive it end to
-end over raw `nvdrv` ioctls:
-
-```
-heap alloc -> svcSetMemoryAttribute(Uncached) -> nvmap CREATE/ALLOC
-  -> MAP_CMD_BUFFER pin -> host1x cmdbuf (SETCL + methods + INCR_SYNCPT)
-  -> CHANNEL_SUBMIT -> syncpoint wait -> cache invalidate -> read back
-```
-
-A fill and a real blit both reproduce their expected output **byte for byte**.
-Output byte order is A,R,G,B (`AV_PIX_FMT_ARGB`). NVENC
-(`/dev/nvhost-msenc`) opens too, so the rest of a GPU-free encode pipeline is
-reachable.
-
-Four things cost days each and are worth knowing before you start:
-
-- **`SETCL` is mandatory.** `METHOD_OFFSET` (0x10) and `METHOD_DATA` (0x11) are
-  registers *of the current host1x class*. libdrm never emits `SETCL` because
-  the DRM kernel driver sets the class itself; nvservices' `CHANNEL_SUBMIT`
-  does **not**. Without `SETCL(0, 0x5D, 0)` every method write lands on
-  meaningless registers — while `INCR_SYNCPT` (register 0x00, present in every
-  class) still fires, so the job looks like it completed. This cost six runs.
-- **Relocs are inert on Horizon.** The command buffer is never patched. Pin
-  with `MAP_CMD_BUFFER` and inline the returned address; submit with
-  `num_relocs = 0`.
-- **The syncpoint increment must be in the command stream.** `syncpt_incrs` in
-  the submit only raises the syncpoint's *max*. Omit the
-  `NONINCR(UCLASS_INCR_SYNCPT, 1)` and nvnflinger — which composites on the
-  same VIC syncpoint — waits forever, and the console freezes.
-- **A zero address does not fail politely.** The VIC hangs, and a hung VIC takes
-  the compositor and the whole console with it. Froze this console twice.
-
-### 4. Undocumented `vi` ABIs
-
-`CreateIndirectLayer` (2050), `CreateIndirectProducerEndPoint` (2052),
-`CreateIndirectConsumerEndPoint` (2054) — all `{u64, u64} -> u64`, guessed by
-analogy with `viCreateManagedLayer` and confirmed on hardware. Also:
-`GetDisplayService`'s **command id is the service type**, not 0 — `vi:u` = 0,
-`vi:s` = 1, `vi:m` = 2.
-
-### 5. A low-latency PC receiver
-
-[`switch-stream/receiver/`](switch-stream/receiver) — FFmpeg + SDL2 over
-USB or TCP, hardware decode, near-zero buffering. Written before settling on
-this research direction; builds and runs, and is reusable as the client for
-anything here.
-
-## Where it stands
-
-The kernel debug SVCs are the remaining avenue, and unlike the graphics stack
-they are not obviously closed: Atmosphère's own cheat engine reads a running
-game's memory at 60 Hz through them.
-
-```
-pm:dmnt GetApplicationProcessId -> svcDebugActiveProcess
-  -> svcQueryDebugProcessMemory (find the framebuffer)
-  -> svcReadDebugProcessMemory  (read it)
-```
-
-Reading mesosphere settles most of it in advance:
-
-- **The framebuffer's attributes do not block the read.**
-  `kern_k_page_table_base.cpp:2743` checks state and permission with an
-  attribute mask of `None`, so `MemoryAttribute_DeviceShared` — which every
-  nvmap-pinned page carries — does not disqualify the range. This is exactly
-  what defeated the nvmap route, and it does not apply here.
-- **The NPDM must declare a debug flag.** `kern_svc_debug.cpp:38` requires
-  `target->IsPermittedDebug() || CanForceDebug() || CanForceDebugProd()`. This
-  module now declares `"force_debug": true`, the same flag `creport` and
-  `dmnt.gen2` use.
-- **`svcMapProcessMemory` is not an alternative**, tempting as it looks.
-  `kern_svc_process_memory.cpp:92` requires the source range to have *no*
-  attributes set at all, which permanently excludes nvmap-pinned memory.
-- **Staying attached is possible.** `ContinueDebugEvent(ExceptionHandled |
-  ContinueAll)` resumes the target while the debug handle is held — that is how
-  dmnt reads at 60 Hz, and it is what a streaming implementation would need.
-
-**Run on hardware: it works, and it now streams.** The swapchain is located at
-runtime by exact-size match, `ContinueDebugEvent` keeps the game running while
-we stay attached, and a whole 8,847,360-byte slot reads in **5.6 ms** against a
-16.67 ms frame budget.
-
-The full pipeline runs end to end:
-
-```
-queueBuffer intercept -> svcReadDebugProcessMemory (7.6 ms)
-  -> VIC scale + pack to 4:2:0 (2.1 ms) -> copy out (1.5 ms)
-  -> USB bulk IN (async, 0.14 ms wait) -> SDL2 viewer
-```
-
-Two findings shaped it, both the hard way:
-
-- **The VIC "cannot be used per-frame" — retracted in M63.** A full-frame blit
-  appeared to cost **119 ms**, and a tight blit loop starved the compositor. Both
-  were the same instrumentation bug: the timed region contained ~7 `LogLine`
-  calls, each an SD-card open/write/**flush**/close, plus a 65,536-iteration
-  checksum. Seven SD flushes is 35–140 ms on its own. The engine was never
-  measured. `g_vic_quiet` now gates the diagnostics; the real cost is being
-  measured rather than inferred. **The real cost is 0.8–1.1 ms**, about 6% of a
-  60 fps frame, and the shipping stream now scales on the VIC rather than on the
-  CPU. This figure was published here and in a public forum thread as a hardware
-  finding before it was checked; both have been corrected in place.
-- **Every thread here is pinned to core 3**, including the mitm's own IPC
-  thread. A stream loop at equal priority starves it and the game blocks on a
-  binder call nobody answers. The worker runs below IPC priority and yields
-  each iteration.
-
-### The VIC does no colour conversion, and that turned out to be useful
-
-Set the VIC's output format to `Y8_U8V8_N420` and it writes the NV12 **plane
-layout** — but it does not convert colour at all. The planes come back carrying
-raw channels:
-
-| plane | contents | resolution |
-|---|---|---|
-| luma | **B** | full |
-| chroma, even bytes | **R** | half in both axes |
-| chroma, odd bytes | **G** | half in both axes |
-
-That is 4:2:0-subsampled RGB, and the host reassembles it for free. **1.5
-bytes/pixel instead of 4** — a 2.67x reduction with no codec, no colour matrix
-and no measurable cost. `tools/nv12topng.py` decodes it; `raw-view.c` does the
-same thing live when `hdr.flags & 1`.
-
-The honest cost: because this subsamples **R and G** rather than real chroma, it
-looks worse than proper 4:2:0 at identical bandwidth. The eye barely registers
-missing chroma detail; it very much registers missing red and green. Fixing that
-needs the VIC's colour matrix, and three attempts have failed — the offset
-column lands and every coefficient reads back zero (4096>>10 = 4, 32768>>10 =
-32). If you have programmed a Tegra VIC matrix successfully, please open an
-issue.
-
-### The USB 2.0 wall, measured
-
-One run, five resolutions, 300 frames each, live gameplay:
-
-| resolution | B/frame | fps | usb wait | effective |
-|---|---|---|---|---|
-| 768x432 | 497,696 | **58.0** | 140 us | 28.9 MB/s |
-| 896x504 | 677,408 | 52.2 | 1,064 us | 35.4 MB/s |
-| 960x540 | 777,632 | 46.4 | 1,925 us | 36.1 MB/s |
-| 1152x648 | 1,119,776 | 32.1 | 7,823 us | 35.9 MB/s |
-| 1280x720 | 1,382,432 | 27.4 | 12,796 us | 37.9 MB/s |
-
-**The link saturates at ~37 MB/s.** The console side barely moves across that
-sweep — the framebuffer read stays ~7 ms at every size and the VIC only goes 2.1
-→ 3.0 ms — so the cable is conclusively the binding constraint. `usb wait`
-growing from 140 us to 12,796 us is the wall being hit.
-
-At 768x432 the pipeline is not even transport-limited: 11.3 ms of work against a
-16.67 ms budget means **58 fps is the game's own rate, not ours.**
-
-### NVENC: the engine takes the work and never finishes it
-
-The channel is real and submits are accepted, but the syncpoint never advances.
-An early probe swept every candidate firmware magic and learned nothing, because
-a deliberately invalid control magic behaved exactly like the real ones — the
-signature of a job that never runs. So the next probe stopped varying the job's
-*contents* and varied its *structure*: five submits, each adding one layer, the
-first four ending with an IMMEDIATE syncpoint increment that host1x performs as
-it retires the opcode regardless of the engine.
-
-```
-L0  bare INCR_SYNCPT (no class, no engine)   words= 2  fence 4009/4009  REACHED
-L1  + SETCL class 0x21                       words= 3  fence 4011/4011  REACHED
-L2  + SET_APPLICATION_ID                     words= 6  fence 4013/4013  REACHED
-L3  + full surfaces + EXECUTE                words=39  fence 4015/4015  REACHED
-L4  same, INCR on OP_DONE                    words=39  fence 4015/4017  STALLED
-```
-
-L3 and L4 are the **same 39 words** and differ only in the increment condition,
-so the split is exact: **host1x accepts and retires the full job, and the engine
-never signals completion.** L3/L4 carried a complete H.264 all-intra IDR setup
-at 256x128 — populated SPS/PPS/RC/pic_control, slice + ME + MD + quant control
-blocks at their offsets, and every surface the firmware can dereference. The
-bitstream came back all zeros.
-
-**What that does and does not prove — corrected after M71.** It was first
-written up as ruling out the "missing surfaces" theory and leaving "the Falcon
-firmware is not booted" as the only explanation. That over-reads it. In every
-run, the first job carrying `EXECUTE` is the only one that tells us anything:
-if its config hangs the engine, every later job queues behind the hang and
-stalls identically. (The same thing explains why an invalid magic behaved
-exactly like the real ones in M69.) What is actually established is narrower:
-**the engine never completed the first job we gave it.** "Firmware not
-running" and "our config hangs it" look the same from here.
-
-And the firmware theory has a fact against it: grc, the system's own game
-recorder — the thing SysDVR reads from — drives this same engine on this same
-firmware, so on a running console the ucode is very probably loaded.
-
-### M72: record grc instead of guessing
-
-So instead of reverse-engineering a 512-byte config struct blind, M72 records
-the one client known to drive NVENC successfully. It is a **logging-only mitm on
-`nvdrv:s`, accepted for grc (`0100000000000035`) and nobody else**. It records
-grc's device opens and its encoder and buffer-allocation ioctls; on grc's first
-encoder submits it attaches with the debug SVCs, reads the command-buffer words
-and the `drv_pic_setup` they point at out of grc's memory, and writes all of it
-to `sdmc:/nvenc-grc.bin`. Every request is still forwarded unchanged.
-
-- `mitm.lst` in the contents directory makes boot2 declare the mitm in advance,
-  so grc's first session waits for us rather than racing past.
-- It runs on its own server and threads, separate from `vi:u`, so a grc call
-  blocked inside nvservices can never stall the game's picture.
-- [`tools/nvrec.py`](tools/nvrec.py) decodes the record stream and names every
-  method in the command buffers from NVIDIA's `clc5b7.h`;
-  [`tools/nvsetup-dump.c`](tools/nvsetup-dump.c) decodes the captured
-  `drv_pic_setup` with NVIDIA's own header, so the bitfield layout is exact.
-
-Replaying grc's job from our module and diffing field by field against ours is
-the next step. **If you have driven Tegra NVENC from userspace on Horizon or
-L4T, a pointer is still very welcome** — it is the whole difference between
-800x450 and native resolution.
-
-### M76: the encoders were never clocked
-
-A desk review against the two open-source drivers that do run Tegra engines on
-this console under Horizon — averne's
-[oss-nvjpg](https://github.com/averne/oss-nvjpg) and averne's FFmpeg `nvtegra`
-hwaccel — found what every engine probe here had in common:
-
-- **No clock was ever requested.** On Horizon a client asks the multimedia
-  service `mm:u` for a frequency on NVDEC/NVENC/NVJPG before using it; both
-  drivers do it, and FFmpeg's comment says it reproduces official code. This
-  module never opened `mm:u`. An unclocked engine accepts the submit and never
-  runs a cycle — exactly NVJPG's `cycles=0`. The VIC never needed it because
-  nvnflinger keeps it running. (For NVENC this is less certain: grc's
-  background recording may keep it clocked during gameplay. The survey checks
-  before asking for anything.)
-- **The NVJPG method table was from a multi-core generation** (`clc9d1.h`).
-  From 0x704 on it was one register off, so the M73/M74 jobs wrote **0 into the
-  bitstream address**. The single-core `cle7d0.h` matches the map oss-nvjpg
-  uses on this hardware. Fixed.
-- **The NVJPG encode setup struct is probably not this chip's format.** The
-  T210 decode record that works is a different, higher-level layout, so NVJPG
-  encode stays parked until its record is known.
-
-M76 builds `clk`, a clock survey with no engine contact, and `jpgdec`: one
-NVJPG **decode** whose picture-info record is generated on the PC
-([`tools/nvjpg_dec_control.py`](tools/nvjpg_dec_control.py)) and matches
-oss-nvjpg's own struct and parser **byte for byte**. It is the first job in this
-project whose configuration is not a guess, so for the first time a stall
-would say something about the engine rather than the config. Test plan in
-[STATUS.md](tier4/mitm/STATUS.md).
-
-### Two constraints worth knowing
-
-- **`usbDsSetBinaryObjectStore` is required for SuperSpeed.** Declaring USB 3.0
-  device and endpoint descriptors is not enough: enumeration needs a Binary
-  Object Store carrying a SuperSpeed Device Capability descriptor. Atmosphère's
-  own haze calls it immediately after its SuperSpeed device descriptor
-  (`usb_session.cpp:220`). We had never called it at all. Adding it did **not**
-  make the link train to SuperSpeed, so it was a real hole but not the whole
-  story — the descriptor set now matches haze's, leaving the cable as the one
-  untested variable.
-- **Stream width must be a multiple of 64.** 768 (64x12) and 1280 (64x20) are
-  pixel-clean; 800 (64x12.5) runs at 59.7 fps and tears into vertical bands. The
-  Tegra GOB is 64 bytes wide. The pipeline always had this constraint and every
-  size tried until then happened to satisfy it by accident.
-
-The full research log, in reverse chronological order with every dead end and
-its evidence, is [`tier4/mitm/STATUS.md`](tier4/mitm/STATUS.md). The narrative
-version is [`tier4/mitm/WRITEUP.md`](tier4/mitm/WRITEUP.md).
+Earlier captures, kept for the record: the game's swapchain read out at native
+1080p and de-swizzled on the PC ([`docs/frame-1080p.png`](docs/frame-1080p.png)),
+and the raw 768x432 "packed 4:2:0" stream that preceded H.264
+([`docs/frame-stream-packed420.png`](docs/frame-stream-packed420.png)).
 
 ## Roadmap
 
 | stage | state |
 |---|---|
-| `vi:u` mitm frame tap at 60 fps | **done, on hardware** |
-| Swapchain geometry from binder traffic | **done, on hardware** |
-| VIC: block-linear → linear, scale, format convert | **done, byte-exact on hardware** |
-| **Get the game's pixels into our address space** | **done, on hardware** — three graphics routes closed; the kernel debug-SVC route works. 120 consecutive native 1080p frames, 0 missed, 59 fps, ~9 ms of a 16.67 ms budget |
-| USB transport, device side | **done, on hardware** — enumerates as `1209:5f1e`, bulk IN, byte-exact |
-| Live PC viewer | **done** — [`tools/raw-recv/raw-view.c`](tools/raw-recv/raw-view.c), libusb + SDL2 in one process |
-| **End-to-end stream** | **done, on hardware** — **768x432 at 59.6 fps**, 3600 frames, 0 stale; user-confirmed playable |
-| VIC scale + packed 4:2:0 in the stream path | **done, on hardware** — 2.1 ms/frame, 1.5 B/px, no codec |
-| Native resolution at 60 fps | **blocked on bandwidth, now measured.** The link saturates at ~37 MB/s, capping 60 fps at ~800x450. Raw 1080p60 needs 186.6 MB/s |
-| NVENC H.264 encode | **done, on hardware (M80 Run F).** One 1280x720 IDR frame in 2.1 ms; decodes on the PC to the input, reconstruction exact. M68-M71's hand-built jobs never completed; grc's job, replayed verbatim, does. Constant-QP mode works too (M81) |
-| Engine clocks via `mm:u` (M76) | **done, on hardware.** NVJPG 0 -> 652.8 MHz on request; NVENC already clocked. NVJPG's rate does not persist on its own (M76 Run B) |
-| NVJPG decode positive control (M76/M77) | **done, on hardware (M77 Run C).** 64x64 decode in 314 us, output matches. First completed non-VIC engine job; the submit path is proven |
-| grc's NVENC job, read out of grc (M75 observer, M78/M79 dumps) | **done, on hardware (M79 Run E).** IDR and P setups plus the command buffer, decoded with NVIDIA's headers |
-| NVENC job replayed from our own channel (M80) | **done, on hardware (M80 Run F).** All three output files verified byte for byte against the console's own hashes |
-| What `error_status` 2 means (M81) | **done, on hardware (M81 Run G): nothing.** grc's own frames carry it; so does every variant (over-budget frame, no rate control, HRD off, two-pass off) |
-| Real game frames through NVENC (M82) | **on hardware (M82 Run H): 60.5 fps, 12.7 ms/frame, 0 errors - but the wrong block height** (NVENC reads 16-row blocks; the VIC wrote 32). Fixed in M83, not yet re-run |
-| VIC RGB->YUV matrix (M82) | **solved (M82 Run H).** An exact model reproduces all 528 measured values ([`tools/vic_csc.py`](tools/vic_csc.py)); M83 programs real BT.709 with it |
-| **H.264 stream over USB (M83)** — the main goal, handheld | **built, not yet run.** game -> VIC BT.709 -> NVENC IDR -> USB -> [`raw-view`](tools/raw-recv/) decoding live; the PC side is tested end to end without hardware |
-| P frames (M83 `nvp`) | **built, not yet run.** grc's own P setup and P job; the PC checks the GOP for drift |
-| **Compressed stream over USB 2.0** — the main goal | **in progress.** The link carries ~290 Mbps; H.264 1080p60 is visually lossless at 100–150 Mbps even all-intra, so bitrate has 2–3x headroom and the tuning target is quality and latency, not size. NVENC encodes real frames at 60 fps (M82); M83 streams them (IDR-only QP 20 measured 165 Mbps, inside the link); P frames next |
-| grc recorder (M72) — capture how the system drives NVENC | **built, not yet run on hardware** |
-| USB 3.0 SuperSpeed — **handheld only** | descriptors **and BOS** accepted, link still negotiates High. Device side now matches haze exactly; the cable is the one untested variable. Docked, the dock owns the USB-C port, so this can never carry a docked stream |
-| Docked 1080p transport | **not started.** USB device mode is impossible while docked; it needs Wi-Fi or a LAN adapter in the dock, and therefore compression. `switch-stream`'s TCP path is the starting point |
-| **USB 3.0 lossless mode** — future option, handheld | planned. Once SuperSpeed trains, stream uncompressed. Handheld native is 720p: 720p60 packed-420 is 83 MB/s, well inside a USB 3.0 Gen 1 link, with no encoder at all |
-| Capture the home menu and system overlays | wanted, and not possible through any route found so far |
-
-Capture is no longer the gate — **bandwidth is**, and the figure is now measured
-rather than estimated: ~37 MB/s. Everything upstream of the cable is done; at
-768x432 the console finishes a frame in 11.3 ms of a 16.67 ms budget, so the
-pipeline has headroom it cannot spend. The next move is compression (the only
-route to docked 1080p), or, for handheld 720p, proving SuperSpeed with a
-known-good USB 3.0 cable.
-
-NVENC wants NV12 input and the VIC is the natural way to produce it — that
-dependency is satisfied, at 2.1 ms/frame. What is not satisfied is the engine
-itself executing anything (see [above](#nvenc-the-engine-takes-the-work-and-never-finishes-it)). NVIDIA's own [open-gpu-doc](https://github.com/NVIDIA/open-gpu-doc)
-supplies what was missing: the VIC output chroma offsets (0x724/0x728, alongside
-a luma offset byte-identical to one we proved on hardware), the full NVENC
-method table, and `nvenc_drv.h` version-gated back to the generation Tegra X1
-belongs to. See [`ref/README.md`](ref/README.md).
+| Capture the game's frames (`vi:u` mitm + debug SVCs) | **done, on hardware** |
+| VIC conversion to BT.709 NV12 | **done, on hardware** |
+| NVENC H.264, IDR + P frames | **done, on hardware**; no drift over 59-frame chains |
+| USB transport + live PC viewer with latency readout | **done, on hardware** |
+| Live mode: viewer and game come and go | **done, on hardware** (M86-M86b) |
+| Games beyond MK8D (per-game swapchain geometry, `vi:u` command 1) | **done for BOTW** (M87); others untested |
+| Frame-exact capture (GPU fence, slot+fence snapshot) | **done, on hardware** (M88-M89): 0 stale, 0 torn |
+| Bitrate tuning (better P frames, QP) | next |
+| Audio | not started |
+| Docked 1080p over the network | not started: needs a 1080p encoder setup (grc's is 720p) and a network transport |
+| Windows viewer | not started |
+| USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |
+| Home menu and system overlays | not possible through any route found |
 
 ## Layout
 
-| path | what | state |
-|---|---|---|
-| `tier4/applet-mitm/` | The mitm module. `vi:u` interposition, binder intercept, hand-rolled nvdrv, the VIC pipeline, and the debug-SVC probe. | mitm + VIC **verified on hardware**; debug probe untested |
-| `tier4/recon/` | `tier4-recon` — a read-only, opt-in diagnostic sysmodule that mapped what a *plain* (non-mitm) sysmodule can reach. `nvdrv`, `apm` and `caps:sc` live capture are all off-limits from there. | done; its job is finished |
-| `tier4/stream-oc/` | `stream-oc` — a charger-gated overclock companion (docked clocks while on the official 39 W adapter). Runs alongside stock SysDVR. | builds; untested |
-| `switch-stream/` | A from-scratch low-latency USB/TCP streamer. The **PC receiver** is the reusable half. | receiver builds and runs; its sysmodule half is untested |
-| `tier4/DESIGN.md`, `tier4/FINDINGS.md` | Working notes from the early research phase. | historical |
-| `ref/` | Not committed. Third-party reference trees — see [`ref/README.md`](ref/README.md). | — |
-
-## Building
-
-Everything Switch-side builds in the `devkitpro/devkita64` Docker image; no
-local toolchain needed.
-
-```bash
-# plain libnx sysmodules
-cd tier4/recon && docker run --rm -v "$PWD":/proj -w /proj devkitpro/devkita64:latest make
-```
-
-```bash
-# applet-mitm: needs an Atmosphere checkout in ref/Atmosphere (see ref/README.md).
-# build.sh rsyncs the module in, applies patch_libstrat.py, builds, copies the
-# .nsp back. The first build recompiles libstratosphere - about 15 minutes.
-git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
-bash tier4/applet-mitm/build.sh
-```
-
-```bash
-# PC receiver: FFmpeg + SDL2 + libusb
-cd switch-stream/receiver && cmake -B build && cmake --build build -j
-```
-
-## Installing
-
-```
-sdmc:/atmosphere/contents/<TITLE_ID>/exefs.nsp         <- the built .nsp, renamed
-sdmc:/atmosphere/contents/<TITLE_ID>/flags/boot2.flag  <- an EMPTY file
-```
-
-| module | title id |
+| path | what |
 |---|---|
-| `tier4-recon` | `0100000000000C00` |
-| `stream-oc` | `0100000000000C10` |
-| `applet-mitm` | `0100000000000C20` |
-
-`applet-mitm` is a **pure observer** unless `sdmc:/applet-mitm.armed` exists.
-Keywords in that file opt in to each stage: `vic` runs the nvdrv/VIC probe,
-`exec` runs the real blit rather than a no-op command buffer, `dbg` runs the
-debug-SVC probe, `clk` runs the M76 clock survey, `jpgdec` (with `vic`) runs
-the NVJPG decode control. `wait=N` sets when probes fire. Every parsed flag is
-dumped on one `ARMED FLAGS:` line at boot. Logs land at `sdmc:/applet-mitm.log`, with a last-step
-breadcrumb in `sdmc:/applet-mitm.last` that survives a hard power-off.
-
-**Read the SD card in a card reader, not over MTP** — MTP returns I/O errors on
-a log whose tail was cut by a forced power-off.
-
-## If something goes wrong
-
-Delete `atmosphere/contents/<TITLE_ID>/` from the SD card on a PC, or boot
-holding **Volume Up**, which makes Atmosphère skip `contents` sysmodules.
-Nothing here touches NAND or the bootloader. Have a NAND backup anyway.
-
-These modules interpose on the graphics stack and drive hardware engines
-directly. Bugs in them freeze the console — that happened twice here, both
-times from an address of zero reaching the VIC. Run this on a console you are
-willing to have crash.
+| `tier4/applet-mitm/` | The sysmodule: `vi:u` mitm, binder intercept, debug-SVC capture and event pump, VIC and NVENC over raw nvdrv, USB. |
+| `tools/raw-recv/` | `raw-view`, the PC viewer (and `raw-recv`, the raw-frame receiver it grew out of). |
+| `tools/` | PC-side analysis and self-tests: `sft_tool.py`, `nvframe_check.py`, `nvp_check.py`, `vic_csc.py`, `nvenc_replay.py`, `nvrec.py`. |
+| `tier4/mitm/` | `STATUS.md` (the research log), `PROJECT-HANDOFF.md` (the map), `WRITEUP.md`. |
+| `logs/` | The hardware runs' logs and checked outputs. |
+| `docs/` | Images and the stream clip. |
+| `tier4/recon/`, `tier4/stream-oc/`, `switch-stream/` | Early side projects: a diagnostic sysmodule, an overclock companion, a first streamer attempt. Historical. |
+| `ref/` | Not committed: third-party reference trees, see [`ref/README.md`](ref/README.md). |
 
 ## Contact
 
-Questions, corrections, or if you want to take a piece of this further — I'd
-genuinely like to hear about it, especially if you can tell me I'm wrong about
-why nvservices refuses foreign handles.
+Questions, corrections, or if you want to take a piece of this further - I'd
+genuinely like to hear about it.
 
 - **Email:** Some_Potato_1@protonmail.com
 - **Reddit:** [u/Papux200](https://www.reddit.com/user/Papux200)
 - **Issues:** [GitHub issues](https://github.com/TomasUribe/switch-frame-tap/issues)
 
-Forks are welcome and no permission is needed. If you get further than this
-repo does, please say so publicly — the whole point of writing the dead ends
-down was to save somebody else the 47 test cycles.
+Forks are welcome and no permission is needed.
 
 ## License
 

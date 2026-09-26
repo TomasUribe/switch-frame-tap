@@ -55,6 +55,19 @@ Read **[WRITEUP.md](WRITEUP.md)** first for the why. This file is the what-now.
    debug-SVC route (`svcDebugActiveProcess` + `ReadDebugProcessMemory`) reads
    the presented swapchain slot at ~1.5 GB/s, game running. This is the frame
    source everything above uses; the graphics routes below stay closed.
+12. **A live, playable H.264 stream** (M83-M89): native 1280x720, the game's
+   own frame rate, IDR + P frames without drift, over USB 2.0 to `raw-view`;
+   ~22 ms console + ~24 ms PC latency (M85, M89).
+13. **Live mode** (M86-M86b): streams whenever a viewer is reading and a game
+   is presenting; survives closing the viewer, closing and relaunching the
+   game, and switching games (Runs M-P).
+14. **More than one game** (M87): BOTW, via vi:u command 1 and per-game
+   swapchain geometry (Run N).
+15. **Frame-exact capture** (M88-M89): the present's acquire fence is waited
+   on, with slot and fence taken as one snapshot; 0 stale and 0 torn frames
+   in 6965 (Run P).
+16. **The attached game keeps running** (M84): a debug event pump continues
+   thread start/exit events, as dmnt's cheat engine does.
 
 ## What is blocked, and why — BOTH GRAPHICS ROUTES CLOSED
 

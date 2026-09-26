@@ -1,4 +1,4 @@
-# switch-frame-tap: project handoff (after M84)
+# switch-frame-tap: project handoff (after M89)
 
 This is for whoever continues the project cold, most likely a local session
 with the SD card and the console at hand. It covers:
@@ -13,53 +13,50 @@ with the SD card and the console at hand. It covers:
 `tier4/mitm/STATUS.md` has the full evidence behind each item, newest
 milestone first. This page is the map.
 
-**Current build: M84, run on hardware (Run J, 2026-09-25): a live, compressed,
-native 1280x720 handheld stream at 59.9 fps over USB, 0 frames lost, through
-loading screens.** Results and analysis: `STATUS.md` (M84 section). Work is
-now local on `master`; the next build is M85 (section 6).
-
-M84's one change: a debug event pump (`applet_mitm_dbgpump.cpp`). While we
-stay attached, every thread start/exit in the game suspends all its threads
-until continued; Run I froze at a loading screen for want of it.
+**Current build: M89, run on hardware (Run P, 2026-09-25).** Live mode: the
+module streams native 1280x720 H.264 (IDR + P) over USB whenever the PC
+viewer is reading and a game is presenting, and reattaches by itself when the
+viewer, the game or the game title changes. Tested with MK8D (60 fps) and
+BOTW (30 fps): 0 lost, 0 undecodable, 0 stale and 0 torn frames in 6965;
+~22 ms console + ~24 ms PC latency. The user plays from the PC window. The
+README's quick start is the install procedure; `STATUS.md` has every run.
 
 ---
 
 ## 1. The goal and where it stands
 
 **Goal:** capture the Switch's display at native resolution and 60 fps and
-stream it to a PC, over USB or Wi-Fi.
+stream it to a PC, over USB or Wi-Fi. **Handheld over USB is done**; docked
+1080p over the network, audio and bitrate tuning remain.
 
-**The pipeline as built in M83** (handheld, 1280x720 = native):
+**The live pipeline (M86-M89)**, entered from `TryDebugCapture` when `live` is
+armed (`RunLive`):
 
 ```
-game (MK8D) presents a swapchain slot
-  | vi:u mitm: binder queueBuffer tells us WHICH slot           (M20s-M30s, proven)
+wait for a viewer (UsbViewerPresent: an empty SFTR header taken within 300 ms)
+  and a game (pm:dmnt application pid, and queueBuffer moving)
   v
-svcReadDebugProcessMemory of that slot into our heap            (M56, proven, ~1.5 GB/s)
-  | handheld: only the 1280x720 corner, 3.9 MB                  (M83, new)
+snapshot the game's geometry (setPreallocatedBuffer: slots, size, format)
   v
-VIC: RGBA block-linear -> NV12, BT.709 matrix,                  (layout M82/M83, matrix M83)
-     16-row block-linear, into an arena shared with NVENC
+DebugActiveProcess -> FindSwapchainBySize(the game's real total size)
+  -> drain + ContinueDebugEvent -> DebugPumpStart (applet_mitm_dbgpump.cpp)
   v
-NVENC: H.264 IDR, constant QP, grc's own setup and job          (M80-M82 proven; input fix M83)
+TryNvencStream(live):
+  per present: snapshot slot + acquire fence (seqlock g_queue_seq),
+  wait for the fence (nvhost-ctrl SYNCPT_READ), ReadDebugProcessMemory the slot
+  (MK8/BOTW handheld: the 1280x720 corner only), VIC -> BT.709 NV12 16-row
+  block-linear, NVENC IDR every nvgop frames else P (grc's jobs, refs and
+  MEPRED ping-pong), SFTR header (flags: H.264, IDR; stride = console age us)
+  + payload over usb:ds, double-buffered
   v
-usb:ds bulk: SFTR header + SPS/PPS + slice, double-buffered     (transport M57-M71 proven; H.264 framing M83)
-  v
-PC: tools/raw-recv/raw-view: libusb + libavcodec + SDL2         (M83, tested on the PC)
+until the viewer goes (USB timeout, cancelled), the game goes (read fails /
+pump sees ExitProcess), or NVENC stalls (parks for the boot)
+  -> DebugPumpStop, CloseHandle, back to waiting
 ```
 
-**Proven on hardware:** every stage separately, and capture -> VIC -> NVENC
-together at 60.5 fps (M82 Run H). Run H's encode had the wrong block height,
-so the decoded picture was scrambled. That is diagnosed and fixed in M83.
-
-**Not yet on hardware:**
-
-- the fixed layout;
-- the BT.709 matrix;
-- USB carrying H.264 end to end;
-- P frames.
-
-Run I tests all four, in that order.
+Live mode deliberately skips the old probe setup's `FROM_ID` import of the
+game's buffer and its aruid adoption (M86b: they kept an exited game's
+resources alive and the next launch hung), and the vi:m indirect-layer probe.
 
 ## 2. Proven vs inferred
 
@@ -80,8 +77,12 @@ Run I tests all four, in that order.
 | USB 2.0 carries ~37 MB/s from this module | **proven** | M70 sweep |
 | The game keeps running while we stay attached | **proven** with the M84 pump | Run J: 59.2-60.0 fps presented in every window, 2 thread events continued (63 us hold) |
 | USB carries the H.264 stream at 60 fps | **proven** | Run J: 3600/3600 frames, 59.9 fps at the PC, 0 lost; 98 Mbps IDR-only at QP 20 |
-| P frames from grc's P setup and P job decode without drift | **disproven as built**: they decode, but drift | Run J nvp: 20 frames IPPP.., P = 74% of IDR size, last frame 19.2 dB |
-| The PC can decode IDR-only 720p60 at ~100 Mbps | **proven** on the user's 20-core PC: 12.3 ms/frame on 1 thread, 6.2 ms on 2 | default frame threads (one per core) add ~250 ms: use `raw-view --threads 2` |
+| P frames from grc's P setup and P job decode without drift | **proven** | Run K: stream frame 59 P after its IDR at 42.0 dB against the console's picture; nvp 30/30 at 42.0 dB. (Run J's 19.2 dB was the probe's off-by-one.) |
+| Live mode survives viewer close, game exit, relaunch and a title switch | **proven** | Runs L-P: up to 4 sessions per boot; M86b fixed the relaunch hang |
+| Games beyond MK8D stream | **proven for BOTW** | Run N: vi:u command 1 forwarded verbatim, 2 slots, correct colours |
+| The capture reads only finished frames | **proven** | Run P: `sft_tool artifacts` 0 stale / 0 torn in 6965 (Run N: 29 / 22 per 3000) |
+| Latency | **measured** | console (present -> sent) ~22 ms incl. the fence wait; PC (arrival -> on screen, 2 decode threads) ~24 ms |
+| The PC decodes the stream in real time | **proven** on the user's 20-core PC: 12.3 ms/frame IDR-only on 1 thread | raw-view defaults to 2 decode threads (one frame of delay); one per core added ~250 ms |
 | SuperSpeed | **not working**: descriptors and BOS accepted, the link trains at High speed | M71; the cable is the untested variable |
 
 ## 3. Repository map (the parts that matter)
@@ -102,9 +103,15 @@ Run I tests all four, in that order.
     and `nvp` (`NvfSession`, `NvfEncode`, `TryNvencRealFrames`,
     `TryNvencStream`, `TryNvencPFrames`);
   - the raw M67 stream (`StreamFrames`);
+  - **live mode** (`RunLive`, `FindSwapchainBySize`) and the per-game
+    geometry (`CaptureGameSurface`, `NvfSession::SetGeometry`);
   - the grc observer (`TryGrcScan`) and the older NVENC/NVJPG probes.
 - `source/applet_mitm_clk.*`: engine clocks through `mm:u` and `clkrst`
   (`ClockEnsure`).
+- `source/applet_mitm_dbgpump.*`: the debug event pump (M84) that keeps an
+  attached game running.
+- `source/applet_mitm_service.*`: the `vi:u` mitm (commands 0 and 1), the
+  binder intercept, and the queueBuffer slot/fence publication (seqlock).
 - `source/applet_mitm_armfile.hpp`: the arm-file tokenizer (whole tokens).
   Host-tested by `test/armfile_test.cpp`, which carries every run's exact arm
   file.
@@ -130,7 +137,7 @@ Run I tests all four, in that order.
 | `nvframe_check.py` | real-frame run checks: deswizzle, layout scoring, decode, PSNR, "which layout did NVENC read", colour check |
 | `nvp_check.py` | P-frame GOP decode and the drift test |
 | `sft_stream_test.py` | builds the console's USB stream byte for byte and replays it through raw-view |
-| `sft_tool.py` | summarises a recorded stream (`raw-view --record`): packets, gaps, sizes, a decode check; cuts a committable sample |
+| `sft_tool.py` | recorded streams (`raw-view --record`): `stats` (gaps, IDR/P sizes, console latency), `last` (the drift test against the console's picture), `artifacts` (stale and torn frames), `head` (cut a sample) |
 | `raw-recv/` | `raw-view` (live viewer: raw, packed-4:2:0 and H.264), `raw-recv` (dumper), Makefile, udev rule |
 | `nvrec.py`, `nvsetup-dump.c` | decode the grc observer's records and NVENC setups |
 | `deswizzle.py`, `nv12topng.py`, `compare_vic.py` | older frame tools |
@@ -171,6 +178,8 @@ PC dependencies:
 - The module writes `sdmc:/applet-mitm.log`. It truncates the log on every
   boot, so copy it off before the next boot.
 
+**The live arm file:** `vic exec dbg usb nvgop=60 live wait=20`.
+
 **Arm-file flags that matter now:**
 
 | flag | does | needs |
@@ -181,25 +190,24 @@ PC dependencies:
 | `usb` | brings up the USB device (`1209:5f1e`) at boot | - |
 | `csc` | the 12 VIC colour-matrix probes -> `vic-csc.bin` | `vic exec` |
 | `nvframe[=N]` | frame 0 at 3 QPs + an N-frame timed loop, all saved (`nvframe-*.bin`) | `vic exec dbg` |
-| `nvstream[=N]` `nvqp=Q` | **the H.264 stream**, N frames (default 3600), QP Q (default 20) | `vic exec dbg usb` |
+| `live` | **the product mode:** stream whenever a viewer and a game are there, for the whole boot (implies `nvstream`) | `vic exec dbg usb` |
+| `nvgop=N` | an IDR every N frames, P frames between (0 = IDR-only); the live arm file uses 60 | `nvstream` or `live` |
+| `nvstream[=N]` `nvqp=Q` | the one-shot H.264 stream: N frames (default 3600), QP Q (default 20) | `vic exec dbg usb` |
 | `nvp[=N]` | IDR + (N-1) P frames saved (`nvp-*.bin`); opt-in, runs last | `vic exec dbg` |
 | `grcscan` | read-only observer of grc's NVENC jobs | `vic` |
-| `wait=S` | when the VIC worker starts (default 120 s) | - |
+| `wait=S` | when the VIC worker starts (default 120 s; live uses 20) | - |
 | **`grc`** | **the grc IPC interceptor: known dangerous. Never arm it.** | - |
 
 ## 5. Open questions
 
-1. **Why the P chain drifts** (Run J nvp: P frames 74% of the IDR, 19.2 dB
-   at frame 19). Suspects: the reference ping-pong, the MEPRED buffers, or
-   the P setup fields beyond frame_num/POC. The GOP also filled the 3.3 MB
-   accumulator at 20 of 30 frames.
-2. **P frames in the stream.** Once nvp passes, `nvstream` should send IDR + P
-   (a GOP of 30-60; grc uses 15). Frame N's `OUT_REF_PIC` becomes N+1's
-   `IN_REF_PIC0`, and the MEPRED buffers swap. Per frame only frame_num (u16
-   at 0x17C) and POC (0x17E, = 2 x frame_num) change, modulo 256. Two things
-   are unknown:
-   - the MEPRED buffer size (grc's are 128 KB apart; nvp gives 256 KB);
-   - whether the first P frame's zeroed MEPRED input costs quality.
+1. **Bitrate.** P frames are ~60% of an IDR in a fast race at QP 20 (Run K:
+   IDR 196 KB, P 117 KB). grc's own GOP is 15 and its P frames are small;
+   suspects: the zeroed first MEPRED input, ME settings in the setup, QP[P]
+   equal to QP[I]. ~40-55 Mbps fits USB 2.0 easily, so this matters most for
+   a network transport.
+2. **Stutters.** A handful of frames per minute take 50-200 ms (reads,
+   VIC, NVENC all slow at once, around loading). System-wide contention;
+   NVENC is shared with grc's background recording. Not yet attributed.
 3. **Docked 1080p** needs a 1080p NVENC setup. grc's setup is 1280x720
    (Switch video clips are 720p), so grc does not hand us one. The fields
    that scale with size are:
@@ -212,40 +220,30 @@ PC dependencies:
    Build it on the PC with `nvsetup-dump` side by side, then test it with
    nvframe first.
 4. **Docked transport.** USB device mode is impossible docked: the dock owns
-   the port. 1080p60 with P frames at ~30-60 Mbps suggests Wi-Fi or a LAN
-   adapter, and `switch-stream/` has a TCP receiver to start from.
+   the port. 1080p60 with P frames suggests Wi-Fi or a LAN adapter, and
+   `switch-stream/` has a TCP receiver to start from.
 5. **The VIC's completion check can be fooled.** It shares syncpoint 12 with
-   the compositor, so a fence can fire before our job finished. At worst
-   NVENC encodes a half-written frame (a visible tear). A marker the VIC
-   writes last, or a VIC job the NVENC job waits on, would fix it.
-6. **Game-agnostic capture.** The swapchain finder expects an exact 3 x
-   8,847,360 B device-shared region (1920x1080 RGBA, 128-row blocks). That is
-   MK8D's; other games may differ. The binder parcels carry each game's real
-   geometry (`g_game_surface`).
-7. **Latency** has not been measured end to end. Run J felt laggy; the
-   known part was raw-view's frame-thread decoder (~250 ms, fixed with
-   `--threads 2`). Console work is ~9.5 ms/frame. Measure with a
-   frame-number overlay or a light sensor.
+   the compositor, so a fence can fire before our job finished. No artifact
+   has been attributed to it since M89 (0 torn in 6965), but a marker the
+   VIC writes last would make it certain.
+6. **Other games.** The geometry path handles any single-object, block-linear
+   RGBA swapchain up to 1080p; games with one nvmap object per buffer, other
+   formats or other sizes are untested. Only A8B8G8R8 colours are verified.
+7. **Cheats and other debuggers.** Live mode holds a debug handle on the game
+   for the whole session; dmnt's cheat engine presumably cannot attach at
+   the same time. Untested.
 8. **Audio** has not been touched.
 9. **`error_status` 2.** Its meaning is unknown and not needed.
 
-## 6. Roadmap to native resolution at 60 fps over USB 2.0
+## 6. Roadmap
 
-1. **Done (M83 Run I, M84 Run J):** a live, compressed, native-720p60
-   handheld stream over USB 2.0.
-2. **M85 next:** latency (run with `raw-view --threads 2`, measure end to
-   end), the nvp drift, and the nvframe `save()` cache bug (the arena is
-   CACHEABLE; invalidate before copying the bitstream).
-3. **P frames in the stream.** Roughly a quarter of IDR-only's bitrate, which
-   frees the link and the PC's decoder. Add a periodic IDR (every 60 frames)
-   for recovery.
-4. **Tuning.** QP against the link (`nvqp`), measure latency, and consider
-   `--low-latency` decoding on a fast PC.
-5. **Docked 1080p60.** The 1080p setup (question 3) and a network transport
-   (question 4). Raw 1080p60 is 186.6 MB/s, far past USB 2.0 (and USB is not
-   available docked anyway), so this path is compressed by necessity.
-6. **Robustness.** Re-attach after the game is relaunched, reconnect on the receiver, a game-agnostic swapchain
-   finder, and the VIC completion marker.
+1. **Done:** handheld native 720p60 H.264 over USB 2.0, live mode, MK8D and
+   BOTW, frame-exact capture, measured latency (M83-M89).
+2. **Bitrate tuning:** better P frames (question 1), then QP against quality.
+3. **Audio.**
+4. **Docked 1080p60 over the network** (questions 3 and 4).
+5. **Robustness and reach:** more games, a Windows viewer, stutter
+   attribution, the VIC completion marker.
 
 ## 7. The SuperSpeed lossless option (later, handheld only)
 
@@ -308,6 +306,18 @@ Once USB 3.0 trains, handheld 720p60 could go uncompressed:
 - **Early "findings" were artifacts** more than once (M59's VIC speed, M73's
   matrix theory). Write the evidence next to the claim, label the
   confidence, and let the next run decide.
+
+- **An attached debugger stops the game on every thread start/exit** until
+  it continues (M83 Run I froze at a loading screen). Keep the pump running
+  whenever a debug handle is held.
+- **Never hold the game's graphics resources past its exit.** `FROM_ID` on its
+  buffer and `SetAruidWithoutCheck(game aruid)` kept an exited game alive in
+  nvservices; the relaunch hung on a black screen (M86 Run L, forced
+  power-off). Live mode uses only its own buffers.
+- **queueBuffer is not "frame finished".** Wait for its acquire fence, and
+  take the slot and fence as one snapshot (M88/M89).
+- **Stream recordings are large** (~0.5-1 GB a minute). Record only what will
+  be analysed; keep `sft_tool head` samples, not whole files.
 
 ## 9. The working method that has held up
 
