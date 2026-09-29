@@ -1269,6 +1269,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<u32> g_queue_fence_n{0};
     constinit std::atomic<u64> g_queue_fence[4] = {};
     constinit std::atomic<u32> g_queue_seq{0};
+    constinit PresentRec g_present_ring[PresentRingSize] = {};
 
     void CaptureGameSurface(const NvGraphicBufferRaw *gb, s32 slot_arg) {
         if (gb == nullptr || gb->num_planes == 0) { return; }
@@ -4820,12 +4821,97 @@ namespace ams::mitm::applet {
                 if (timed_out) { ++fence_timeouts; }
             }
 
+            /* M96: 1 = every syncpoint reached, 0 = the GPU is still drawing,
+             * -1 = no readable fence (treated as done, as M88 did) */
+            static int FenceState(u32 n, const u64 fence[4]) {
+                if (n == 0 || n > 4) { return -1; }
+                const u32 cfd = CtrlFd();
+                if (cfd == 0) { return -1; }
+                for (u32 k = 0; k < n; ++k) {
+                    const u32 id = static_cast<u32>(fence[k] >> 32), want = static_cast<u32>(fence[k]);
+                    if (id == 0xFFFFFFFFu || id >= 192) { continue; }
+                    struct { u32 id; u32 value; } r = { id, 0 };
+                    u32 e = 0;
+                    if (R_FAILED(NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e))) || e != 0) { return -1; }
+                    if (static_cast<s32>(r.value - want) < 0) { return 0; }
+                }
+                return 1;
+            }
+
+            struct PresentSnap { u32 count; s32 slot; u32 fence_n; u64 fence[4]; u64 tick; };
+
+            /* present c from the ring; false if it was overwritten (8+ behind) */
+            static bool ReadPresent(u32 c, PresentSnap *out) {
+                PresentRec &r = g_present_ring[c % PresentRingSize];
+                for (u32 tries = 0; tries < 8; ++tries) {
+                    const u32 s1 = r.seq.load(std::memory_order_acquire);
+                    if (s1 & 1) { continue; }
+                    out->count   = r.count.load(std::memory_order_relaxed);
+                    out->slot    = r.slot.load(std::memory_order_relaxed);
+                    out->fence_n = r.fence_n.load(std::memory_order_relaxed);
+                    for (u32 k = 0; k < 4; ++k) { out->fence[k] = r.fence[k].load(std::memory_order_relaxed); }
+                    out->tick    = r.tick.load(std::memory_order_relaxed);
+                    std::atomic_thread_fence(std::memory_order_acquire);
+                    if (r.seq.load(std::memory_order_relaxed) == s1) { return out->count == c; }
+                }
+                return false;
+            }
+
+            /* M96: how each capture chose its present */
+            u32 pick_ready = 0, pick_waited = 0, pick_legacy = 0;
+
+            /* M96: read in 2 MB pieces. One 8 MB ReadDebugProcessMemory holds
+             * the game's page-table lock for the whole ~8.5 ms copy
+             * (KPageTableBase::ReadDebugMemory); pieces let the game in
+             * between. A few extra SVCs, microseconds. */
+            static constexpr u32 ReadPiece = 0x200000;
+
             /* wait for a new present (M88: up to 50 ms, so a 30 fps game is not
-             * re-sent at ~45 fps), then its fence, then read the slot */
+             * re-sent at ~45 fps), then its fence, then read the slot.
+             *
+             * M96: which present. M89 took the LATEST queued one and waited on
+             * its fence; when the game queues ahead of the GPU (MK8 at 1080p)
+             * that skipped the finished frame before it and waited ~5 ms for
+             * the next (Run V: fence avg 6.7 ms, 2246 of ~11300 presents
+             * skipped, 47 fps). Now: the newest present since the last capture
+             * whose fence has been reached; if none has, the OLDEST one - the
+             * GPU finishes presents in order, so that is the next to be done.
+             * The slot is safe to read: a finished present stays on screen or
+             * queued until the one after it is drawn, and its slot can only be
+             * drawn into again after the present after THAT. */
             bool Capture(::ams::svc::Handle dbg, u64 slot_base, u64 *read_ns, u32 *sig, u32 *dropped = nullptr) {
                 for (u32 spins = 0; g_queue_count.load(std::memory_order_acquire) == seen && spins < 50; ++spins) {
                     os::SleepThread(TimeSpan::FromMilliSeconds(1));
                 }
+                const u32 qnow = g_queue_count.load(std::memory_order_acquire);
+                if (qnow != seen) {
+                    const u32 back = qnow - seen;
+                    const u32 lo = back > PresentRingSize - 2 ? qnow - (PresentRingSize - 2) : seen;   /* candidates (lo, qnow] */
+                    PresentSnap pick = {}, oldest = {};
+                    bool have_pick = false, have_oldest = false;
+                    for (u32 c = qnow; c != lo; --c) {
+                        PresentSnap p;
+                        if (!ReadPresent(c, std::addressof(p))) { continue; }
+                        if (FenceState(p.fence_n, p.fence) != 0) { pick = p; have_pick = true; break; }
+                        oldest = p; have_oldest = true;
+                    }
+                    if (!have_pick && have_oldest) {
+                        this->WaitPresentFence(oldest.fence_n, oldest.fence);
+                        pick = oldest; have_pick = true;
+                        ++pick_waited;
+                    } else if (have_pick) {
+                        ++fence_waits;     /* a wait of 0, so the average stays per capture */
+                        ++pick_ready;
+                    }
+                    if (have_pick) {
+                        if (dropped != nullptr && pick.count - seen > 1) { *dropped += pick.count - seen - 1; }
+                        seen = pick.count;
+                        present_tick = pick.tick;
+                        const s32 slot = pick.slot;
+                        return this->ReadSlot(dbg, slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0), read_ns, sig);
+                    }
+                }
+                ++pick_legacy;
                 /* M89: slot and fence as ONE snapshot, taken before the wait.
                  * M88 waited on the fence and only then read the slot; a
                  * present landing during the wait (avg 5.7 ms in MK8) swapped
@@ -4849,7 +4935,10 @@ namespace ams::mitm::applet {
                 if (now != seen) { this->WaitPresentFence(fn, fence); }
                 if (dropped != nullptr && now - seen > 1) { *dropped += now - seen - 1; }
                 seen = now;
-                const u64 base = slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0);
+                return this->ReadSlot(dbg, slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0), read_ns, sig);
+            }
+
+            bool ReadSlot(::ams::svc::Handle dbg, u64 base, u64 *read_ns, u32 *sig) {
                 const u64 t0 = armTicksToNs(armGetSystemTick());
                 if (corner) {
                     for (u32 br = 0; br < CornerBlockRows; ++br) {
@@ -4860,8 +4949,11 @@ namespace ams::mitm::applet {
                         armDCacheFlush(dst, CornerBlockRowBytes);
                     }
                 } else {
-                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, base, buf_bytes))) {
-                        return false;
+                    for (u32 off = 0; off < buf_bytes; off += ReadPiece) {
+                        const u32 n = buf_bytes - off < ReadPiece ? buf_bytes - off : ReadPiece;
+                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf + off), dbg, base + off, n))) {
+                            return false;
+                        }
                     }
                     const u64 tf = armTicksToNs(armGetSystemTick());
                     armDCacheFlush(g_ind_buf, buf_bytes);
@@ -5293,7 +5385,7 @@ namespace ams::mitm::applet {
              * it waits for NVENC, then sends the frame exactly as before. */
             struct InFlight { bool active; u32 i; u32 pic; u32 fence; u64 t_submit; bool is_idr; u32 pos; u64 present_ns, rn, vic_ns, t0, t1, flush_ns; };
             u64 w_read = 0, w_flush = 0, w_vic = 0, w_enc = 0, w_fence0 = 0;
-            u32 w_n = 0, w_sent0 = 0, w_fwait0 = 0;
+            u32 w_n = 0, w_sent0 = 0, w_fwait0 = 0, w_ready0 = 0, w_waited0 = 0, w_drop0 = 0;
             u64 w_t0 = armTicksToNs(armGetSystemTick());
             InFlight fl = {};
             const u32 curs[2]    = { L.off_cur, L.off_cur2 };
@@ -5470,13 +5562,16 @@ namespace ams::mitm::applet {
                         const u32 wd = w_n ? w_n : 1;
                         const u32 fw = s.fence_waits - w_fwait0;
                         const u64 wfps = wn > w_t0 ? static_cast<u64>(sent - w_sent0) * UINT64_C(10000000000) / (wn - w_t0) : 0;
-                        LogLine("   nvstream window: %llu.%llu fps sent; per frame avg us: read %llu (flush %llu of it)  VIC %llu  NVENC wait %llu  GPU fence %llu",
+                        LogLine("   nvstream window: %llu.%llu fps sent; per frame avg us: read %llu (flush %llu of it)  VIC %llu  NVENC wait %llu  GPU fence %llu; "
+                                "presents: %u already drawn, %u waited for, %u skipped",
                                 static_cast<unsigned long long>(wfps / 10), static_cast<unsigned long long>(wfps % 10),
                                 static_cast<unsigned long long>(w_read / wd / 1000), static_cast<unsigned long long>(w_flush / wd / 1000),
                                 static_cast<unsigned long long>(w_vic / wd / 1000), static_cast<unsigned long long>(w_enc / wd / 1000),
-                                static_cast<unsigned long long>(fw ? (s.fence_wait_sum - w_fence0) / fw / 1000 : 0));
+                                static_cast<unsigned long long>(fw ? (s.fence_wait_sum - w_fence0) / fw / 1000 : 0),
+                                s.pick_ready - w_ready0, s.pick_waited - w_waited0, dropped - w_drop0);
                         w_n = 0; w_read = w_flush = w_vic = w_enc = 0; w_t0 = wn; w_sent0 = sent;
                         w_fwait0 = s.fence_waits; w_fence0 = s.fence_wait_sum;
+                        w_ready0 = s.pick_ready; w_waited0 = s.pick_waited; w_drop0 = dropped;
                     }
                     u32 hz = 0;
                     if (!ClockRateOf(PcvModule_NVENC, std::addressof(hz)) || hz < 400000000u) {
@@ -5546,6 +5641,8 @@ namespace ams::mitm::applet {
             LogLine("   nvstream: present fences: %u waited, avg %llu us, max %llu us, %u timed out (30 ms), %u presents without a readable fence",
                     s.fence_waits, static_cast<unsigned long long>(s.fence_waits ? s.fence_wait_sum / s.fence_waits / 1000 : 0),
                     static_cast<unsigned long long>(s.fence_wait_max / 1000), s.fence_timeouts, s.fence_unknown);
+            LogLine("   nvstream: presents taken (M96): %u already drawn, %u waited for (the oldest not yet drawn), %u by the old latest-present rule",
+                    s.pick_ready, s.pick_waited, s.pick_legacy);
             LogLine("   nvstream: per-stage max us: read %llu  VIC %llu  NVENC %llu  USB wait %llu  copy %llu; %u frame(s) over 50 ms of work; %u USB wait(s) over 500 ms (IDR forced after each)",
                     static_cast<unsigned long long>(m_read / 1000), static_cast<unsigned long long>(m_vic / 1000),
                     static_cast<unsigned long long>(m_enc / 1000), static_cast<unsigned long long>(m_usbw / 1000),

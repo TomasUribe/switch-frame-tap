@@ -7,10 +7,14 @@ encoder. Homebrew, built on and for the author's own console.
 **The goal of this project is 1080p at 60 fps**: the game's native docked
 resolution, at full frame rate, on any PC.
 
-**Where it is today:** the first half of that goal is done. In **handheld
-mode** it streams the console's **native 1280x720 at 60 fps** over a plain USB
-cable. **Docked 1080p60** is the next and final stage; see
-[the road to 1080p60](#the-road-to-1080p60).
+**Where it is today: 1080p60 works.** Over a plain USB cable it streams
+**native 1920x1080 at the game's 60 fps** whenever the game renders 1080p, and
+the console's native 1280x720 at 60 fps in ordinary handheld mode. The USB
+port is only free in handheld, so 1080p over USB uses
+[ReverseNX-RT](https://github.com/masagrator/ReverseNX-RT) to make the game
+render its docked picture in handheld (Run W: 59.5-59.9 fps sent per 20 s
+window against the game's ~59.2, 0 errors). See
+[the road to 1080p60](#the-road-to-1080p60) for what is left.
 
 > **It works, and it is playable.** Live mode streams whenever the PC viewer is
 > open and a game is running, reattaches by itself when you close the viewer,
@@ -20,8 +24,8 @@ cable. **Docked 1080p60** is the next and final stage; see
 > or torn frames in 6,965**; about **45 ms** from the game presenting a frame to
 > it being on the PC screen (monitor not included).
 >
-> It is still **experimental**: handheld 720p only so far (1080p60 docked is
-> the goal still ahead), two games tested, no audio, one console tested. Read
+> It is still **experimental**: USB only (so 1080p needs ReverseNX-RT in
+> handheld), two games tested, no audio, one console tested. Read
 > [Limitations](#limitations) before installing it.
 
 ![A frame off the live stream: Mario Kart 8 Deluxe race start, 1280x720, decoded from the console's H.264](docs/stream-mk8-go.jpg)
@@ -36,10 +40,10 @@ animation.*
 
 | | measured |
 |---|---|
-| Resolution / frame rate | 1280x720 (native handheld); the game's own rate: MK8D 57-59 fps, BOTW 29 fps |
+| Resolution / frame rate | **1920x1080** when the game renders it (docked picture via ReverseNX-RT): MK8D 58.4 fps over a session, 59.5-59.9 per window; 1280x720 native handheld: MK8D 57-59 fps, BOTW 29 fps |
 | Transport | USB 2.0 bulk, the Switch's own USB-C port, no dock |
-| Video | H.264 from the Switch's NVENC, constant QP 20, keyframe every 60 frames; ~40-55 Mbps in a race |
-| Latency | ~20-23 ms on the console (game present -> sent) + ~21-24 ms on the PC (arrival -> on screen) |
+| Video | H.264 from the Switch's NVENC, constant QP 20, keyframe every 60 frames; 720p ~40-55 Mbps, 1080p ~90 Mbps in a race |
+| Latency | 720p: ~20-23 ms on the console (game present -> sent) + ~21-24 ms on the PC (arrival -> on screen); 1080p: ~34 + ~25 ms |
 | Reliability | 0 lost / 0 undecodable frames in every run since M84; 0 stale or torn frames (M89) |
 | Console | Mariko, firmware 22.5.0, Atmosphère 1.11.2 (the only one tested) |
 
@@ -117,7 +121,16 @@ tools/raw-recv/raw-view                # --record FILE.sft to also save the stre
 ```
 
 The picture appears a few seconds after the game is on screen (and at the
-earliest 20 s after boot: `wait=20`). The window title shows the frame rate,
+earliest 20 s after boot: `wait=20`).
+
+**For 1080p:** install [SaltyNX and ReverseNX-RT](https://github.com/masagrator/ReverseNX-RT),
+set the game to docked mode in the ReverseNX-RT overlay, and the stream
+switches to 1920x1080 by itself. Tested clocks (with a clock tool such as
+Horizon OC or sys-clk): **CPU 1785 MHz** (Nintendo's own boost clock), GPU
+768 MHz, RAM 1600 MHz - Nintendo's docked values. At CPU 1020 MHz the frame
+read is slower and the stream fell to 32-50 fps (Run V). Expect more heat and
+battery drain than handheld, and some games dislike fake docked mode (MK8D
+crashes with Joy-Cons attached; use a Pro Controller). The window title shows the frame rate,
 the bitrate and both latencies. Close the viewer or the game whenever you like;
 the stream picks up again when both are back.
 
@@ -128,8 +141,10 @@ power-off.
 ## Limitations
 
 - **Handheld only.** It streams through the Switch's USB-C port in device mode,
-  and docked, the dock owns that port. Docked 1080p needs a network transport
-  (not started).
+  and docked, the dock owns that port. 1080p works in handheld through
+  ReverseNX-RT; streaming from the dock needs a network transport (not started).
+- **1080p60 wants CPU 1785 MHz.** The frame copy runs on the CPU; at the stock
+  1020 MHz it is slower and 1080p drops below 60. Stock clocks are next to test.
 - **Two games tested:** Mario Kart 8 Deluxe (three 1920x1080 buffers) and
   Zelda: Breath of the Wild (two). Other games should work if their swapchain
   is block-linear RGBA, at most 1920x1080, in one memory object; the log says
@@ -303,25 +318,28 @@ and the raw 768x432 "packed 4:2:0" stream that preceded H.264
 
 ## The road to 1080p60
 
-The final goal is the game's native docked output, **1920x1080 at 60 fps**,
-streamed to a PC. Everything upstream of the encoder already works at that
-size: the capture reads full 1080p swapchain slots (the earliest captures were
-native 1080p, [`docs/frame-1080p.png`](docs/frame-1080p.png)), and the VIC
-converts and scales any size. What is left:
+The goal is the game's native docked output, **1920x1080 at 60 fps**, streamed
+to a PC. **Reached over USB (M96, Run W):** 58.4 fps over a session against the
+game's 59.2, 59.5-59.9 fps per 20 s window once running, 0 lost or undecodable
+frames in 9,090. How it got there:
 
-1. **A 1080p NVENC setup.** The encoder job used today is the one the system's
-   own recorder builds, and that is 1280x720 (Switch video clips are 720p), so
-   there is no 1080p job to copy. The setup fields that scale with the picture
-   are known (size, SPS, history and bitstream buffers, slice control, surface
-   configs); it will be built and verified on the PC first, then on hardware
-   with a single frame, as the 720p setup was.
-2. **A network transport.** Docked, the dock owns the console's only USB-C
-   port, so USB device mode is not available. 1080p60 H.264 with P frames is
-   tens of Mbps, which suits Wi-Fi or a LAN adapter in the dock. The PC side
-   exists in part (`switch-stream/receiver` speaks TCP).
-3. **Frame budget.** At 1080p the read, the VIC and NVENC each handle 2.25x
-   the pixels of 720p; the current per-frame work (~9-10 ms at 720p, of a
-   16.7 ms budget) says it should fit, and the first 1080p run will measure it.
+1. **A 1080p NVENC setup** (M90-M92). The system's own recorder only builds
+   720p jobs, so the 1080p setup was derived from grc's 720p one
+   (`tools/nvenc_replay.py`). 1920x1080 stalls the engine; **1920x1088** (whole
+   macroblock rows) encodes, and the SPS crops the picture to 1080.
+2. **1080p over USB** (M93). ReverseNX-RT makes the game render its docked
+   picture in handheld, where the USB port is free; the stream detects the size
+   change and restarts at 1080p by itself.
+3. **The frame budget** (M94-M96). A 1080p frame is an 8.3 MB copy out of the
+   game (~8.5 ms at CPU 1785 MHz), a 1.7 ms VIC conversion and a 5.6 ms encode.
+   The encode now runs while the next frame is read (M94), and the capture
+   takes the newest frame the GPU has *finished* instead of the newest one
+   queued (M96: waiting on the latest queued frame skipped 20% of frames; now
+   1.6%).
+
+What is left: **stock clocks** (1080p60 at CPU 1020 MHz), and a **network
+transport** for streaming from the dock, where the dock owns the USB port
+(1080p60 at ~90 Mbps needs a LAN adapter or bitrate tuning for Wi-Fi).
 
 ## Roadmap
 
@@ -334,8 +352,10 @@ converts and scales any size. What is left:
 | Live mode: viewer and game come and go | **done, on hardware** (M86-M86b) |
 | Games beyond MK8D (per-game swapchain geometry, `vi:u` command 1) | **done for BOTW** (M87); others untested |
 | Frame-exact capture (GPU fence, slot+fence snapshot) | **done, on hardware** (M88-M89): 0 stale, 0 torn |
+| **1080p60 over USB** (1920x1088 NVENC setup, pipelined encode, finished-frame capture) | **done, on hardware** (M90-M96): 58.4 fps sent vs the game's 59.2, with ReverseNX-RT in handheld and CPU 1785 MHz |
+| 1080p60 at stock clocks (CPU 1020 MHz) | next to test |
 | Bitrate tuning (better P frames, QP) | next; also lowers what 1080p60 needs from the network |
-| **Docked 1080p60 over the network - the final goal** | not started: a 1080p encoder setup (grc's is 720p) and a network transport, see [above](#the-road-to-1080p60) |
+| 1080p60 from the dock, over the network | not started: needs a network transport, see [above](#the-road-to-1080p60) |
 | Audio | not started |
 | Windows viewer | not started |
 | USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |

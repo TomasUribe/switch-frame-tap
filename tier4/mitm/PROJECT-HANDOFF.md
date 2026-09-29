@@ -26,9 +26,15 @@ README's quick start is the install procedure; `STATUS.md` has every run.
 ## 1. The goal and where it stands
 
 **Goal: 1080p at 60 fps** - the game's native docked output, streamed to a
-PC. **The handheld half is done** (native 720p60 over USB). What remains for
-the goal: a 1080p NVENC setup and a network transport for docked play
-(questions 3 and 4 below); bitrate tuning and audio alongside.
+PC. **Reached over USB (M96, Run W, 2026-09-29):** native 1920x1080 at
+58.4 fps sent against the game's 59.2 (59.5-59.9 per window), with
+ReverseNX-RT making the game render docked in handheld and the CPU at
+1785 MHz; native 720p60 in plain handheld since M85. The 1080p NVENC setup is
+1920x1088 coded, SPS-cropped (M92); the encode is pipelined (M94); the capture
+takes the newest FINISHED present from an 8-entry ring (M96). What remains:
+1080p60 at stock clocks (CPU 1020), a network transport for play from the
+dock (question 4 below; questions 3's 1080p setup is solved - see STATUS.md
+M90-M92), bitrate tuning and audio.
 
 **The live pipeline (M86-M89)**, entered from `TryDebugCapture` when `live` is
 armed (`RunLive`):

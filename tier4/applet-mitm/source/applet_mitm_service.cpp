@@ -160,8 +160,22 @@ namespace ams::mitm::applet {
             } else {
                 g_queue_fence_n.store(0, std::memory_order_relaxed);
             }
-            g_queue_tick.store(armGetSystemTick(), std::memory_order_relaxed);
-            g_queue_count.fetch_add(1, std::memory_order_relaxed);
+            const u64 qtick = armGetSystemTick();
+            g_queue_tick.store(qtick, std::memory_order_relaxed);
+            {
+                /* M96: this present's record, complete before the count moves */
+                const u32 c = g_queue_count.load(std::memory_order_relaxed) + 1;
+                PresentRec &r = g_present_ring[c % PresentRingSize];
+                r.seq.fetch_add(1, std::memory_order_relaxed);
+                std::atomic_thread_fence(std::memory_order_release);
+                r.count.store(c, std::memory_order_relaxed);
+                r.slot.store((qs >= 0 && qs < 8) ? qs : -1, std::memory_order_relaxed);
+                r.fence_n.store(have_fence ? fn : 0, std::memory_order_relaxed);
+                for (u32 k = 0; k < 4; ++k) { r.fence[k].store(have_fence ? fv[k] : 0, std::memory_order_relaxed); }
+                r.tick.store(qtick, std::memory_order_relaxed);
+                r.seq.fetch_add(1, std::memory_order_release);
+            }
+            g_queue_count.fetch_add(1, std::memory_order_release);
             g_queue_seq.fetch_add(1, std::memory_order_release);
         }
 

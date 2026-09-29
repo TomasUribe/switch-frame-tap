@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 93 hardware test cycles (through M94 Run U). Current build: **M95** (send during the GPU wait; per-window timings; not yet run). Last run: M94 Run U - 1080p pipelined, 43.4 fps, NVENC fully hidden. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
+`0100000000000C20`. 95 hardware test cycles (through M96 Run W). Current build: **M96**. Last run: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -128,7 +128,90 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M95: use the GPU wait; find what bounds the read (built, not yet run) ***
+## *** M96: capture the newest FINISHED present (Run W: 1080p60) ***
+
+### Run W (M96; logs `logs/m96-runW*`): 1080p at the game's frame rate
+
+MK8, ReverseNX fake-docked, handheld, CPU 1785 MHz, Pro Controller. User:
+"That ran smooth as butter! we did it." No crash report; the session ended
+when the game was closed.
+
+| | Run V (M95) | **Run W (M96)** |
+|---|---|---|
+| sent / game, session | 47.4 / 59.1 fps | **58.4 / 59.2 fps** |
+| last five windows | 51-54 fps | **59.5-59.9 fps** |
+| presents skipped | 2246 (~20%) | **152 (1.6%)**; 1-9 per 1200-frame window once warm |
+| read + flush / VIC | 10.0 / 2.3 ms | 8.1 / 1.7 ms |
+| GPU fence (per capture) | 6.7 ms | 5.0 ms |
+| console latency | 37.8 ms | 33.8 ms (PC side 24.7 ms) |
+| size | 65 Mbps | 89 Mbps, 0 lost, 0 undecoded of 9090 |
+
+Presents taken: 1669 already drawn, 7398 waited for (the oldest not yet
+drawn), 25 by the old rule. The ring mostly waits on the NEXT present to
+finish rather than the latest queued one - which is exactly the frame M95
+skipped. The 2 MB read pieces cost nothing (read 8.1-8.6 ms at 1785 MHz,
+Run V 8.4-8.5).
+
+Open: whether stock clocks (CPU 1020) hold 60 - Run V read 10.6-15.6 ms
+there, which with the VIC and the collect is at the 16.7 ms edge.
+
+### Run V (M95; logs `logs/m95-runV*`): the read is CPU-bound; presents are skipped
+
+User: "i changed the clock speed and it looked smoother, still not as smooth
+as what i can see on the switch screen". MK8, ReverseNX fake-docked,
+handheld, Pro Controller. No crash report. 9055 frames, 0 encode errors,
+151 IDR avg 295 KB, P avg 171 KB, 65 Mbps.
+
+| window (1080p) | CPU | fps sent | read (flush) | VIC | GPU fence |
+|---|---|---|---|---|---|
+| 97-121 s | 1020 MHz | 50.3 | 10.6 (2.2) ms | 2.1 | 3.2 |
+| 121-148 s | 1020 | 44.5 | 11.2 (1.7) | 2.4 | 6.9 |
+| 148-186 s | 1020 | 32.1 | 15.6 (2.7) | 3.1 | 9.4 |
+| 186-208 s | **1785** | **54.3** | **8.5 (1.0)** | 1.8 | 6.8 |
+| 208-230 s | 1785 | 54.2 | 8.5 (1.3) | 2.2 | 6.6 |
+| 230-253 s | 1785 | 51.3 | 8.5 (1.3) | 2.6 | 7.2 |
+| 253-276 s | 1785 | 52.3 | 8.4 (1.2) | 2.6 | 7.0 |
+
+- **The read is bound by the CPU copy**: it fell from 10.6-15.6 ms to 8.5 ms
+  when the CPU clock rose. That matches the kernel's code:
+  `KPageTableBase::ReadDebugMemory` flushes the source from the data cache and
+  copies it with a 64-byte `ldp`/`sttr` loop, all on the calling core.
+- **Splitting it across cores cannot help**: `KDebugBase::ReadMemory` takes
+  the debug object's lock for the whole call, so parallel reads on one debug
+  handle serialize. (A second debug handle on the same process is refused.)
+- **USB is not the cost** it looked like: the session's copy + USB is 1.9 ms a
+  frame (`usb 1659 us`), payload posted asynchronously as before.
+- **The "GPU fence" wait is the real loss**, with 2246 presents skipped of
+  ~11,300. MK8 at 1080p queues a frame before the GPU has drawn the one
+  before it. Capture took the LATEST queued present and waited on its fence,
+  so whenever a cycle ended late, the finished frame before it was skipped
+  and the capture waited ~5 ms for the next one. Skips at 60 fps read as
+  judder: "not as smooth as the Switch screen".
+
+### The change
+
+- The binder thread keeps the **last 8 presents** (slot, fence, tick), each
+  under its own seqlock, written before `g_queue_count` moves.
+- `Capture` takes the **newest present since the last capture whose fence has
+  been reached**; if none has, the **oldest** not yet taken (the GPU finishes
+  them in order, so that is the next one done) and waits on its fence. With
+  read + VIC ~11 ms at 1785 MHz, every present fits in 16.7 ms. The slot
+  read is safe: a finished present's slot cannot be drawn into again before
+  the present after the next one is drawn.
+- The slot is read in **2 MB pieces**: one 8 MB call held the game's
+  page-table lock for the whole copy.
+- Logs: per window "presents: N already drawn, N waited for, N skipped";
+  at the end, the same totals and how many used the old rule.
+
+### Run W (planned)
+
+Same as Run V: `vic exec dbg usb nvgop=60 live wait=20`, MK8 fake-docked,
+Pro Controller, CPU 1785 MHz from the start. Look for ~0 skipped presents
+per window and fps sent near the game's.
+
+---
+
+## *** M95: use the GPU wait; find what bounds the read (Run V: 51-54 fps at CPU 1785 MHz) ***
 
 ### Run U (M94; logs `logs/m94-runU*`): the pipeline hides NVENC
 

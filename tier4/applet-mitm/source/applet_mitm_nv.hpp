@@ -111,6 +111,22 @@ namespace ams::mitm::applet {
     extern std::atomic<u64> g_queue_fence[4];
     /* M89: a seqlock over slot + fence: odd while the binder thread writes */
     extern std::atomic<u32> g_queue_seq;
+    /* M96: the last few presents, each under its own seqlock and written
+     * before g_queue_count moves, so the capture can take the newest one the
+     * GPU has FINISHED. Run V: MK8 at 1080p queues a frame before the
+     * previous one is drawn, and waiting on the latest present's fence
+     * skipped the finished one before it - 20% of presents. Present c
+     * (g_queue_count after its increment) lives at [c % PresentRingSize]. */
+    struct PresentRec {
+        std::atomic<u32> seq;
+        std::atomic<u32> count;
+        std::atomic<s32> slot;
+        std::atomic<u32> fence_n;
+        std::atomic<u64> fence[4];
+        std::atomic<u64> tick;
+    };
+    constexpr u32 PresentRingSize = 8;
+    extern PresentRec g_present_ring[PresentRingSize];
 
     /* Spawn the worker. The VIC probe MUST NOT run on the binder dispatch
      * thread: doing so blocks the game's queueBuffer, which wedges vi, which
