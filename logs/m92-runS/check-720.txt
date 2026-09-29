@@ -1,0 +1,33 @@
+== settings: VIC block height h=1, colour bt709 ==
+
+== frame 0, as the VIC wrote it ==
+nvframe-0-y.bin: 921600 B; roughness by layout: block-linear h=1 13.9, block-linear h=4 15.8, block-linear h=2 16.2, block-linear h=3 16.3, block-linear h=0 19.2, pitch 42.9  -> smoothest: block-linear h=1  (as configured)
+   Y mean 145.0 range 16..236; U mean 144.1 range 16..214; V mean 107.5 range 23..240
+   -> logs/m92-runS/nvframe-0-vic.png
+
+== frame 0 at QP 16 ==
+status: picture_index=0x4d383300 error_status=2 ucode_error_status=0x0 397557 B pic_type=3 slices=1 avgQP=16 intra/inter=3600/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 397569 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1280x720; PSNR against the VIC's planes: Y 45.5 dB, U 46.2 dB, V 46.4 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m92-runS/nvframe-q16-decoded.png
+
+== frame 0 at QP 20 ==
+status: picture_index=0x4d383301 error_status=2 ucode_error_status=0x0 296301 B pic_type=3 slices=1 avgQP=20 intra/inter=3600/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 296313 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1280x720; PSNR against the VIC's planes: Y 42.2 dB, U 43.0 dB, V 43.4 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m92-runS/nvframe-q20-decoded.png
+
+== frame 0 at QP 24 ==
+status: picture_index=0x4d383302 error_status=2 ucode_error_status=0x0 207752 B pic_type=3 slices=1 avgQP=24 intra/inter=3600/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 207764 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1280x720; PSNR against the VIC's planes: Y 38.9 dB, U 39.9 dB, V 40.4 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m92-runS/nvframe-q24-decoded.png
+
+== the last frame of the timed loop (QP 20) ==
+nvframe-last-y.bin: 921600 B; roughness by layout: block-linear h=1 15.1, block-linear h=4 17.6, block-linear h=3 18.1, block-linear h=2 18.3, block-linear h=0 21.1, pitch 50.8  -> smoothest: block-linear h=1  (as configured)
+   Y mean 151.3 range 16..236; U mean 130.7 range 16..214; V mean 118.0 range 58..222
+   -> logs/m92-runS/nvframe-last-vic.png
+status: picture_index=0x4d38337a error_status=2 ucode_error_status=0x0 299295 B pic_type=3 slices=1 avgQP=20 intra/inter=3600/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 299307 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1280x720; PSNR against the VIC's planes: Y 42.2 dB, U 42.9 dB, V 43.3 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m92-runS/nvframe-last-decoded.png

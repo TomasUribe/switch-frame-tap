@@ -1,0 +1,46 @@
+== M91 size ladder ==
+
+== rung 720l32 (1280x720, level 3.2): not run ==
+
+== rung 720l42 (1280x720, level 4.2): not run ==
+
+== rung 1920x720 (1920x720, level 4.2): not run ==
+
+== rung 1920x1088 (1920x1088, level 4.2): not run ==
+
+== rung 1080 (1920x1080, level 4.2): not run ==
+
+== M90 nv1080: 1920x1080, VIC block height h=1, BT.709 ==
+== settings: VIC block height h=1, colour bt709 ==
+
+== frame 0, as the VIC wrote it ==
+nv1080-0-y.bin: 2088960 B; roughness by layout: block-linear h=1 2.1, block-linear h=2 3.4, block-linear h=3 3.7, block-linear h=4 3.7, block-linear h=0 7.3, pitch 20.9  -> smoothest: block-linear h=1  (as configured)
+   Y mean 88.3 range 16..236; U mean 121.8 range 25..156; V mean 127.9 range 107..165
+   -> logs/m92-runS/nv1080-0-vic.png
+nv1080-0-src.bin: the game's pixels for rows 0-127, converted to bt709 in float, against the VIC's planes:
+   Y: mean error 0.32, 99th percentile 0.77 steps
+   U/V against a 2x2 average: mean 0.31/0.31; against the top-left sample: mean 0.25/0.25 steps
+   -> THE VIC WRITES REAL BT709 YUV
+
+== frame 0 at QP 16 ==
+status: picture_index=0x4d383600 error_status=2 ucode_error_status=0x0 106675 B pic_type=3 slices=1 avgQP=16 intra/inter=8160/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 106687 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1920x1080; PSNR against the VIC's planes: Y 51.3 dB, U 51.2 dB, V 51.4 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m92-runS/nv1080-q16-decoded.png
+
+== frame 0 at QP 20 ==
+status: picture_index=0x4d383601 error_status=2 ucode_error_status=0x0 71081 B pic_type=3 slices=1 avgQP=20 intra/inter=8160/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 71093 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1920x1080; PSNR against the VIC's planes: Y 49.7 dB, U 50.0 dB, V 50.5 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m92-runS/nv1080-q20-decoded.png
+
+== frame 0 at QP 24 ==
+status: picture_index=0x4d383602 error_status=2 ucode_error_status=0x0 50040 B pic_type=3 slices=1 avgQP=24 intra/inter=8160/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 50052 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1920x1080; PSNR against the VIC's planes: Y 47.9 dB, U 47.8 dB, V 48.6 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m92-runS/nv1080-q24-decoded.png
+
+== the GOP (IDR + P) ==
+nv1080 GOP: 10 frames, 375361 B (index says 375361 B); sizes 69427, 4140, 42844, 41895, 39672, 41996, 34736, 34912, 33482, 32257
+   decoded 10 of 10 frames at 1920x1080: IPPPPPPPPP
+   last frame against the VIC's picture: Y 51.8 dB, U 52.6 dB, V 53.4 dB -> P FRAMES DECODE, NO DRIFT

@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 89 hardware test cycles (through M91 Run R). Current build: **M92** (1080p = 1920x1088 coded, SPS-cropped; not yet run). Last run: M91 Run R - the ladder: 1920x1088 encodes, 1920x1080 does not. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
+`0100000000000C20`. 90 hardware test cycles (through M92 Run S). Current build: **M92** (Run S: native 1080p encodes, P frames without drift, 10.5 ms/frame - 1080p60 fits). Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -128,7 +128,40 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M92: 1080p is 1920x1088 coded, 1080 shown (built, not yet run) ***
+## *** M92: 1080p is 1920x1088 coded, 1080 shown (Run S: 1080p60 fits the budget) ***
+
+### Run S result (docked; logs `logs/m92-runS*`)
+
+No freeze, no crash report; all 25 files match the console's FNV-1a.
+
+- **Colour at 1080p:** the game's own docked pixels, converted in float,
+  against the VIC's planes: mean error **0.32 steps** (99th percentile 0.77)
+  -> real BT.709.
+- **1080p IDRs** (1920x1088 coded, SPS-cropped): QP 16/20/24 = 106,675 /
+  71,081 / 50,040 B in 4.6-5.0 ms; decode at **1920x1080** and match the
+  VIC's planes at 51.3 / 49.7 / 47.9 dB.
+- **1080p GOP:** IDR + 9 P decode as IPPPPPPPPP; the last frame is **51.8 dB**
+  against the VIC's picture - no drift. P frames 2.3-5.3 ms.
+- **Timed, native 1080p, docked:** 120/120 frames at 58.1 fps (game 60.0),
+  0 errors. Per frame avg/max: read 5.8/17.2 ms, VIC 1.8/25.5, NVENC 2.9/10.4,
+  **work 10.5 ms of 16.7**; 2 IDR avg 89 KB, 118 P avg 16 KB (a menu scene).
+- 720p nvframe re-check: 4/4 again.
+
+**The console side of 1080p60 is done:** capture, conversion and encoding of
+native 1080p frames fit the frame budget with ~6 ms to spare. What remains
+is the stream: live mode at 1080p, and a transport.
+
+### Transport, from the GBAtemp thread (2026-09-27)
+
+A forum member asked about 1080p over USB on a Switch Lite faking docked
+mode with ReverseNX. USB 2.0 only rules out raw 1080p: compressed 1080p60 at
+QP 20 should be ~50-130 Mbps (720p racing P frames x 2.25), against the ~290
+Mbps this module measured. A game told it is docked renders its 1080p
+docked picture while the USB-C port stays in device mode - so **1080p60
+over the existing USB stream may not need the network at all**. Another
+member suggested presenting the Switch as a UVC webcam (H.264 or MJPEG) so
+no custom viewer is needed - worth investigating for usability.
+
 
 ### Run R (M91, docked; logs `logs/m91-runR*`): the ladder names the cause
 
