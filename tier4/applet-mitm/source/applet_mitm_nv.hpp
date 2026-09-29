@@ -95,6 +95,7 @@ namespace ams::mitm::applet {
     extern bool g_live_armed;     /* M86: stream whenever a viewer and a game are there */
     extern bool g_nv1080_armed;   /* M90: 1080p encoder probe (frame 0, GOP, timed) */
     extern u32  g_nv1080_n;
+    extern bool g_cap720_armed;   /* M93: stream 1080p content scaled to 720p (the M86-M89 behaviour) */
     extern bool g_nvp_armed;      /* M83: IDR + P frames probe */
     extern u32  g_nvp_n;
     extern u32  g_matrix_mode;

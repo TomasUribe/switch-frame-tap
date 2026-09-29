@@ -76,6 +76,7 @@ namespace ams::mitm::applet {
     constinit u32  g_nvstream_gop  = 0;
     constinit bool g_live_armed    = false;
     constinit bool g_nv1080_armed  = false;
+    constinit bool g_cap720_armed  = false;
     constinit u32  g_nv1080_n      = 120;
     constinit bool g_nvp_armed     = false;
     constinit u32  g_nvp_n         = 30;
@@ -854,7 +855,7 @@ namespace ams::mitm::applet {
         void TryNvencRealFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                                 u32 cmd_handle, u32 vsyncpt, u32 cfg_addr);
         /* M86: why a stream ended - live mode decides what to wait for next */
-        enum class StreamEnd { Done, GameGone, ViewerGone, EngineStall, Failed };
+        enum class StreamEnd { Done, GameGone, ViewerGone, EngineStall, Failed, Reconfigure };
         StreamEnd TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                                  u32 cmd_handle, u32 vsyncpt, u32 cfg_addr, bool live = false,
                                  const GameSurface *geo = nullptr);
@@ -2427,10 +2428,11 @@ namespace ams::mitm::applet {
                                                      (geo.num_slots != 0 && geo.buf_size != 0) ? std::addressof(geo) : nullptr);
                 DebugPumpStop();
                 ::ams::svc::CloseHandle(dbg);
-                static const char *const names[] = { "done", "the game went away", "the viewer went away", "NVENC stalled", "failed" };
+                static const char *const names[] = { "done", "the game went away", "the viewer went away", "NVENC stalled", "failed",
+                                                     "the picture size changed - restarting at the new size" };
                 LogLine("   live[%u]: session ended - %s; detached", sessions, names[static_cast<int>(end)]);
                 if (end == StreamEnd::Failed) { os::SleepThread(TimeSpan::FromSeconds(5)); }
-                else { os::SleepThread(TimeSpan::FromSeconds(1)); }
+                else if (end != StreamEnd::Reconfigure) { os::SleepThread(TimeSpan::FromSeconds(1)); }
             }
         }
 
@@ -4595,6 +4597,29 @@ namespace ams::mitm::applet {
             return zero;
         }
 
+        /* M93: SlotContentIs720's samples, read straight from the game's slot
+         * (140 reads of 4 bytes) - 1 if all outside the corner are black, 0 if
+         * not, -1 if a read failed. */
+        s32 RemoteContentIs720(::ams::svc::Handle dbg, u64 base) {
+            auto off = [](u32 x, u32 y) -> u64 {
+                const u32 xb = x * 4;
+                return static_cast<u64>((y / 128) * 120 * 8192 + (xb / 64) * 8192 + ((y % 128) / 8) * 512
+                     + ((xb % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((xb % 32) / 16) * 32 + (y % 2) * 16 + (xb % 16));
+            };
+            alignas(8) u8 px[8];
+            auto black = [&](u32 x, u32 y) -> s32 {
+                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(px), dbg, base + off(x, y), 4))) { return -1; }
+                return (px[0] | px[1] | px[2]) == 0 ? 1 : 0;
+            };
+            for (u32 y = 10; y < 1080; y += 100) {
+                for (u32 x = 1300; x < 1920; x += 100) { const s32 b = black(x, y); if (b <= 0) { return b; } }
+            }
+            for (u32 y = 740; y < 1080; y += 50) {
+                for (u32 x = 10; x < 1280; x += 150) { const s32 b = black(x, y); if (b <= 0) { return b; } }
+            }
+            return 1;
+        }
+
         /* the encode's bitstream length, as M81 sized it */
         u32 NvfBitsLen(const nvenc_pic_stat_s &st) {
             u32 len = st.total_bit_count / 8 + st.bitstream_start_pos + 16;
@@ -5142,13 +5167,29 @@ namespace ams::mitm::applet {
             ON_SCOPE_EXIT { ClockWatchStop(); };
             NvfSession s;
             if (geo != nullptr && !s.SetGeometry(*geo, "nvstream")) { VicStage("ns:geometry"); return StreamEnd::Failed; }
-            if (gop != 0) { s.arena_size = NvpArenaSize; }   /* same base: past both stream stages */
+            /* M93: the first frame decides the size. A 1280x720 picture in the
+             * corner of the 1920x1080 surface (handheld) streams at 720p; full
+             * 1920x1080 content (docked, or a game told it is docked) streams
+             * at native 1080p - M92 Run S measured 10.5 ms of work per 1080p
+             * frame. "cap720" in the arm file keeps the old downscale. */
+            {
+                u64 rn = 0; u32 sg = 0;
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvstream: %s", SlotReadFailure()); return StreamEnd::GameGone; }
+                s.Decide("nvstream");
+            }
+            const bool full1080 = !s.corner && s.mk8_layout && !g_cap720_armed
+                               && g_ind_size >= NvfArenaBase + (gop != 0 ? Layout1080().arena_size_p : Layout1080().arena_size);
+            s.lay = full1080 ? std::addressof(Layout1080()) : nullptr;
+            const NvfLayout &L = s.Lay();
+            s.arena_size = gop != 0 ? L.arena_size_p : L.arena_size;   /* same base: past both stream stages */
+            LogLine("   nvstream: encoding %ux%u%s", L.w, L.h,
+                    full1080 ? " (native 1080p: 1920x1088 coded, SPS-cropped)" : (s.corner ? " (the handheld picture, 1:1)" : " (the VIC scales the picture down)"));
             if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvstream")) { VicStage("ns:open_FAILED"); return g_engine_wedged ? StreamEnd::EngineStall : StreamEnd::Failed; }
             if (gop != 0) {
-                std::memcpy(s.x.a + NvpOffSetupP, nvenc_grc_p::Setup, sizeof(nvenc_grc_p::Setup));
-                s.x.a[NvpOffSetupP + SetupRcQpP] = qp;
-                s.x.a[NvpOffSetupP + SetupRcQpI] = qp;
-                armDCacheFlush(s.x.a + NvpOffSetupP, 0x1000);
+                std::memcpy(s.x.a + L.off_setup_p, L.p_setup, 0x1000);
+                s.x.a[L.off_setup_p + SetupRcQpP] = qp;
+                s.x.a[L.off_setup_p + SetupRcQpI] = qp;
+                armDCacheFlush(s.x.a + L.off_setup_p, 0x1000);
             }
             u32 enc_hz = 0;
             if (!s.EnsureClock("nvstream", std::addressof(enc_hz))) {
@@ -5157,19 +5198,16 @@ namespace ams::mitm::applet {
                 return StreamEnd::Failed;
             }
             s.SetSetupByte(SetupRcQpI, qp);
-            {
-                u64 rn = 0; u32 sg = 0;
-                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvstream: %s", SlotReadFailure()); return StreamEnd::GameGone; }
-                s.Decide("nvstream");
-            }
 
-            constexpr size_t HdrsLen = sizeof(nvenc_grc_hdrs::SpsPps);
-            static_assert(HdrsLen + 0x100000 <= StreamStageSize, "a frame must fit a stage buffer");
-            std::memcpy(g_stream_stage[0], nvenc_grc_hdrs::SpsPps, HdrsLen);
-            std::memcpy(g_stream_stage[1], nvenc_grc_hdrs::SpsPps, HdrsLen);
+            const size_t HdrsLen = L.hdrs_len;
+            const u32 max_frame = static_cast<u32>(StreamStageSize - HdrsLen);   /* what a stage buffer holds */
+            std::memcpy(g_stream_stage[0], L.hdrs, HdrsLen);
+            std::memcpy(g_stream_stage[1], L.hdrs, HdrsLen);
 
-            const u32 refs[2] = { NvfOffRefOut, NvpOffRefB };
-            const u32 mes[2]  = { NvpOffMeA, NvpOffMeB };
+            const u32 refs[2] = { L.off_ref_out, L.off_ref_b };
+            const u32 mes[2]  = { L.off_me_a, L.off_me_b };
+            const bool started_corner = s.corner;
+            u32 size_changes = 0;
             g_vic_quiet = true;
             u32 parity = 0, urb = 0, sent = 0, errs = 0, dropped = 0, done = 0, clock_fixes = 0;
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
@@ -5204,16 +5242,17 @@ namespace ams::mitm::applet {
                 /* this frame's place in the GOP: 0 is an IDR */
                 if (gop == 0 || need_idr || pos >= gop) { pos = 0; }
                 NvfJob j;
+                j.setup = L.off_setup;
                 j.ref_out = refs[pos & 1];
                 if (pos == 0) {
                     s.SetSetupByte(SetupIdrPicId, static_cast<u8>(idrs & 1));
                 } else {
                     const u16 fn = static_cast<u16>(pos % nvenc_grc_p::MaxFrameNum);
                     const u16 poc = static_cast<u16>((2 * pos) % nvenc_grc_p::MaxPocLsb);
-                    std::memcpy(s.x.a + NvpOffSetupP + SetupFrameNum, std::addressof(fn), 2);
-                    std::memcpy(s.x.a + NvpOffSetupP + SetupFrameNum + 2, std::addressof(poc), 2);
-                    armDCacheFlush(s.x.a + NvpOffSetupP + (SetupFrameNum & ~0x3Fu), 0x40);
-                    j.setup  = NvpOffSetupP;
+                    std::memcpy(s.x.a + L.off_setup_p + SetupFrameNum, std::addressof(fn), 2);
+                    std::memcpy(s.x.a + L.off_setup_p + SetupFrameNum + 2, std::addressof(poc), 2);
+                    armDCacheFlush(s.x.a + L.off_setup_p + (SetupFrameNum & ~0x3Fu), 0x40);
+                    j.setup  = L.off_setup_p;
                     j.ref_in = refs[(pos - 1) & 1];
                     j.me_in  = mes[(pos - 1) & 1];
                     j.me_out = mes[pos & 1];
@@ -5226,7 +5265,7 @@ namespace ams::mitm::applet {
                 if (r == 2) { g_vic_quiet = false; s.Stall("nvstream", is_idr ? "stream (IDR)" : "stream (P)"); stalled = true; why = "NVENC stalled"; end = StreamEnd::EngineStall; break; }
                 const u64 t3 = armTicksToNs(armGetSystemTick());
                 const u32 bytes = st.total_bit_count / 8;
-                if (st.ucode_error_status != 0 || bytes == 0 || st.bitstream_start_pos != 0 || bytes > 0x100000) {
+                if (st.ucode_error_status != 0 || bytes == 0 || st.bitstream_start_pos != 0 || bytes > max_frame) {
                     ++errs;
                     need_idr = true;       /* never predict from a frame we did not send */
                     continue;
@@ -5243,8 +5282,8 @@ namespace ams::mitm::applet {
                     pending = false;
                 }
                 const u64 t4 = armTicksToNs(armGetSystemTick());
-                armDCacheFlush(s.x.a + NvfOffBits, bytes);
-                std::memcpy(g_stream_stage[parity] + HdrsLen, s.x.a + NvfOffBits, bytes);
+                armDCacheFlush(s.x.a + L.off_bits, bytes);
+                std::memcpy(g_stream_stage[parity] + HdrsLen, s.x.a + L.off_bits, bytes);
                 const u32 payload = static_cast<u32>(HdrsLen + bytes);
                 const u64 t5 = armTicksToNs(armGetSystemTick());
                 const u64 age = (present_ns != 0 && t5 > present_ns) ? t5 - present_ns : 0;
@@ -5252,7 +5291,7 @@ namespace ams::mitm::applet {
                 h.magic = 0x52544653u;        /* "SFTR" */
                 h.version = 2;
                 h.flags = static_cast<u16>(2 | (is_idr ? 4 : 0));   /* bit 1: H.264 AU; bit 2: IDR */
-                h.width = NvfW; h.height = NvfH;
+                h.width = L.w; h.height = L.h;
                 h.stride = static_cast<u32>(age / 1000);             /* M85: console-side age, us */
                 h.length = payload;
                 h.block_h_log2 = 0;
@@ -5300,6 +5339,21 @@ namespace ams::mitm::applet {
                                 k.frame, static_cast<unsigned long long>(k.at_ms), k.read_us, k.vic_us, k.enc_us, k.usbw_us, k.copy_us);
                     }
                 };
+
+                /* M93: every 120 frames in live mode, has the game switched between
+                 * a 720p and a 1080p picture (docked/undocked, ReverseNX)? A
+                 * handful of 4-byte reads outside the 720p corner, not a frame. */
+                if (live && s.mk8_layout && (i + 1) % 120 == 0) {
+                    const s32 sl = g_queue_slot.load(std::memory_order_relaxed);
+                    const u64 base = slot_base + ((sl >= 0 && static_cast<u32>(sl) < s.nslots) ? s.slot_off[sl] : 0);
+                    const s32 now720 = RemoteContentIs720(dbg, base);
+                    if (now720 >= 0 && (now720 != 0) != started_corner) {
+                        ++size_changes;
+                        why = now720 ? "the game switched to a 720p picture" : "the game switched to a 1080p picture";
+                        end = StreamEnd::Reconfigure;
+                        break;
+                    }
+                }
 
                 /* every ~10 s (~60 s live): the clock (re-ensured if it fell)
                  * and a progress line, so a stream that dies midway says how
@@ -5370,14 +5424,15 @@ namespace ams::mitm::applet {
                         stalls[k].enc_us, stalls[k].usbw_us, stalls[k].copy_us);
             }
             DebugPumpLogStats("nvstream");
+            if (size_changes != 0) { LogLine("   nvstream: ended to restart at the game's new picture size"); }
             /* M85: the drift test's reference - the VIC's picture of the last
              * frame that went out, and which frame that was. Only when that
              * frame is also the last one the VIC converted. */
             if (!live && !stalled && last_sent != ~0u && last_sent == last_vic) {
                 LogLine("   nvstream: last frame sent #%u, %s, %u frame(s) after its IDR", last_sent, last_pos == 0 ? "IDR" : "P", last_pos);
-                armDCacheFlush(s.x.a + NvfOffCur, NvfLuma + NvfChroma);
-                WriteEngineOutputToSd("sdmc:/nvstream-last-y.bin", s.x.a + NvfOffCur, NvfLuma, nullptr);
-                WriteEngineOutputToSd("sdmc:/nvstream-last-uv.bin", s.x.a + NvfOffCurUV, NvfChroma, nullptr);
+                armDCacheFlush(s.x.a + L.off_cur, L.luma + L.chroma);
+                WriteEngineOutputToSd("sdmc:/nvstream-last-y.bin", s.x.a + L.off_cur, L.luma, nullptr);
+                WriteEngineOutputToSd("sdmc:/nvstream-last-uv.bin", s.x.a + L.off_cur_uv, L.chroma, nullptr);
             }
             VicStage(stalled ? "ns:STALLED_left_open" : (sent == nframes ? "ns:DONE" : "ns:stopped"));
             return end;

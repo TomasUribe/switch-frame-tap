@@ -625,7 +625,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm M92: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm M93: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -654,6 +654,7 @@ namespace ams {
         mitm::applet::g_live_armed    = ArmFileContains("live");
         mitm::applet::g_nv1080_armed  = ArmFileContains("nv1080");
         mitm::applet::g_nv1080_n      = ArmFileNumber("nv1080", 120);
+        mitm::applet::g_cap720_armed  = ArmFileContains("cap720");
         /* live is a mode of the H.264 stream: everything nvstream sets up, it needs */
         if (mitm::applet::g_live_armed) { mitm::applet::g_nvstream_armed = true; }
         mitm::applet::g_nvp_armed     = ArmFileContains("nvp");

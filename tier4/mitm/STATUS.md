@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 90 hardware test cycles (through M92 Run S). Current build: **M92** (Run S: native 1080p encodes, P frames without drift, 10.5 ms/frame - 1080p60 fits). Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
+`0100000000000C20`. 90 hardware test cycles (through M92 Run S). Current build: **M93** (live mode streams native 1080p when the game renders it; not yet run). Last run: M92 Run S - native 1080p encodes, 10.5 ms/frame. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,37 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M93: 1080p in live mode (built, not yet run) ***
+
+- **The stream picks its size per session** from the first captured frame:
+  a 1280x720 picture in the surface's corner (handheld) streams at 720p;
+  full 1920x1080 content (docked, or a game told it is docked by
+  ReverseNX-RT) streams at **native 1080p** with `Layout1080()` (1920x1088
+  coded, SPS-cropped; the full 8.8 MB slot is read). `cap720` in the arm
+  file restores the M86-M89 downscale to 720p.
+- `TryNvencStream` now takes every size-dependent value from the layout
+  (setups, references, MEPRED, bitstream, planes, stream headers, header
+  width/height); the largest frame is what a stage buffer holds (~2.1 MB).
+- **It follows the game:** every 120 frames in live mode,
+  `RemoteContentIs720` reads the 140 sample pixels outside the 720p corner
+  straight from the presented slot (140 x 4 B). If the picture size changed
+  (dock/undock, a ReverseNX switch), the stream ends with
+  `StreamEnd::Reconfigure` and live mode restarts at once at the new size;
+  raw-view already rebuilds its texture on a size change.
+- PC: Run S's real 1080p GOP, packetized as the live stream sends it, plays
+  in raw-view: 10/10 frames at 1920x1080, BT.709 limited range.
+
+**SD additions for this test (user's request, 2026-09-29):** SaltyNX 2.0.0
+(sysmodule `0000000000534C56`, `SaltySD/`, `exefs_patches/SaltyNX_Fixes`) and
+the ReverseNX-RT 2.2.1 overlay, from masagrator's GitHub releases. They stay
+on the card; the project's clean-up does not touch them.
+
+Run T (planned): handheld, USB, `vic exec dbg usb nvgop=60 live wait=20`,
+Horizon OC at the stock docked clocks (CPU 1020 / GPU 768 / RAM 1600 MHz),
+MK8 switched to docked mode with ReverseNX-RT mid-stream.
+
+---
 
 ## *** M92: 1080p is 1920x1088 coded, 1080 shown (Run S: 1080p60 fits the budget) ***
 

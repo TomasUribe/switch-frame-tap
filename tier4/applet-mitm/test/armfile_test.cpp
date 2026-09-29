@@ -94,6 +94,10 @@ int main() {
     ExpectContains("vic exec dbg nvframe nv1080 wait=60\n", "usb", false);
     ExpectNumber("vic exec dbg nvframe nv1080 wait=60\n", "nv1080", 120, 120);
     ExpectNumber("vic exec dbg nvframe nv1080 wait=60\n", "wait", 120, 60);
+    /* M93: "cap720" (optional) must not arm anything else */
+    ExpectContains("vic exec dbg usb nvgop=60 live cap720 wait=20\n", "cap720", true);
+    ExpectContains("vic exec dbg usb nvgop=60 live wait=20\n", "cap720", false);
+    ExpectContains("vic exec dbg usb nvgop=60 live cap720 wait=20\n", "live", true);
     ExpectNumber("vic exec dbg usb nvstream=7200 nvqp=24 nvp=15\n", "nvstream", 3600, 7200);
     ExpectNumber("vic exec dbg usb nvstream=7200 nvqp=24 nvp=15\n", "nvqp", 20, 24);
     ExpectNumber("vic exec dbg usb nvstream=7200 nvqp=24 nvp=15\n", "nvp", 30, 15);
