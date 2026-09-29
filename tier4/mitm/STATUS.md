@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 92 hardware test cycles (through M93 Runs T and T2). Current build: **M93** (Run T2: **native 1080p over USB, handheld, via ReverseNX** - 37 fps; the next step is pipelining). Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
+`0100000000000C20`. 92 hardware test cycles (through M93 Runs T and T2). Current build: **M94** (the 1080p stream pipelined; not yet run). Last run: M93 Run T2 - native 1080p over USB, handheld, via ReverseNX, 37 fps. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,37 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M94: pipeline the 1080p stream (built, not yet run) ***
+
+Run T2's 1080p frames cost read 12.4 + VIC 2.2 + NVENC 5.6 ms, one after
+another. NVENC runs in hardware while the thread waits, so M94 keeps one
+encode in flight:
+
+    capture(i) -> VIC(i) into picture[i & 1] -> collect(i-1): wait for its
+    encode, send it -> set up and SUBMIT(i) -> next capture
+
+- `NvfEncode` is split into `NvfSubmit` and `NvfWaitDone` (the wrapper keeps
+  the old behaviour for every probe); `NvfJob` names its input picture;
+  every layout has a second picture (`off_cur2`, `arena_size_pipe`).
+- The next job is only submitted after the previous one is collected: P
+  frames reference the previous frame's reconstruction, the P setup's
+  frame_num is shared, and there is one bitstream buffer.
+- Every way out of the loop waits for the job in flight before the channel
+  can close (M74), and sends it if the stream is still healthy.
+- **Only at 1080p** (`pipe = full1080`): a frame now leaves after the next
+  one is read (+~1 frame of latency). 720p fits 16.7 ms sequentially and
+  keeps the shorter path (submit, then collect at once).
+- The log's NVENC column becomes the time we *waited* for the encoder
+  (beyond the overlap). Expected at 1080p: ~12.4 + 2.2 + ~1.5 ms per frame,
+  i.e. about 60 fps.
+- Heap ladder starts at 40 MB (1080p arena with the second picture: ~17 MB
+  past the 15 MB of stages).
+
+Run U: handheld, USB, Joy-Cons detached, the stock docked clocks; start at
+720p (re-checks the restructured loop), then ReverseNX -> docked.
+
+---
 
 ## *** M93: 1080p in live mode (Run T2: native 1080p streams over USB at 37 fps) ***
 
