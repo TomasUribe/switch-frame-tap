@@ -5078,6 +5078,10 @@ namespace ams::mitm::applet {
             return L;
         }
 
+        /* M92: the VIC writes 1080 rows into planes that are 1088 rows (16-row
+         * blocks); NVENC codes all 1088 (nvenc_1080p.h: 1920x1088 surfaces,
+         * the only 1080p-class size that completes - Run R) and the SPS in
+         * SpsPps crops the bottom 8. */
         const NvfLayout &Layout1080() {
             static const NvfLayout L = MakeLayout(1920, 1080, nvenc_1080p::IdrSetup, nvenc_1080p::PSetup,
                                                   nvenc_1080p::SpsPps, static_cast<u32>(sizeof(nvenc_1080p::SpsPps)));
@@ -5548,13 +5552,6 @@ namespace ams::mitm::applet {
                 armDCacheFlush(const_cast<u8 *>(src), len);
                 WriteSdVerified(path, src, len, g_ind_buf, nullptr);
             };
-            /* the ladder re-converts the SAME captured frame per rung, so its
-             * read-backs go to the (idle) stage buffers, not the capture */
-            auto save_keep = [&](const char *path, const u8 *src, size_t len) {
-                armDCacheFlush(const_cast<u8 *>(src), len);
-                WriteSdVerified(path, src, len, g_stage_buf, nullptr);
-            };
-            static_assert(0x300000 <= 3 * StreamStageSize, "a 1080p plane fits the stage buffers");
             auto bits_len = [&](const nvenc_pic_stat_s &st) -> u32 {
                 u32 len = st.total_bit_count / 8 + st.bitstream_start_pos + 16;
                 return len > L.bits_size ? L.bits_size : len;
@@ -5571,64 +5568,13 @@ namespace ams::mitm::applet {
                 LogLine("   nv1080: DOCKED content - the VIC converts the game's 1920x1080 picture 1:1");
                 WriteSdVerified("sdmc:/nv1080-0-src.bin", g_ind_buf, FbBlockRow, g_stage_buf, nullptr);
             }
-            /* ---- M91: the size ladder ----
-             * Run Q's 1920x1080 IDR never completed, and it changed three
-             * things at once from grc's working 720p job: the level, the
-             * width and the height (not a multiple of 16). Each rung changes
-             * one more thing, safest first, on this same frame; the first
-             * that stalls names the cause and ends engine work for the boot
-             * (M74). Every rung that completes is saved for the PC check. */
-            struct Rung { const char *name; u32 w, h; const u8 *setup; };
-            const Rung rungs[] = {
-                { "720l32",    1280,  720, nvenc_1080p::Ladder_720l32 },    /* grc's job (+ our 2 MB bitstream size) */
-                { "720l42",    1280,  720, nvenc_1080p::Ladder_720l42 },    /* + level 4.2 */
-                { "1920x720",  1920,  720, nvenc_1080p::Ladder_1920x720 },  /* + width */
-                { "1920x1088", 1920, 1088, nvenc_1080p::Ladder_1920x1088 }, /* + height, MB-aligned */
-                { "1080",      1920, 1080, nvenc_1080p::IdrSetup },         /* + the 8-row crop: the target */
-            };
+            /* M91 Run R's size ladder: 1280x720 at level 3.2 and 4.2, 1920x720
+             * and 1920x1088 all encode and decode (42.9-43.7 dB); 1920x1080
+             * never completes. M92 encodes 1920x1088 surfaces (the setups in
+             * nvenc_1080p.h) from a 1080-row VIC picture - the planes are 1088
+             * rows anyway, the last 8 stay zero - and the SPS crops them. */
             u32 pic = NvfPictureIndex + 0x300;
             char path[48];
-            for (const Rung &rg : rungs) {
-                const NvfLayout RL = MakeLayout(rg.w, rg.h, rg.setup, L.p_setup, L.hdrs, L.hdrs_len);
-                s.lay = std::addressof(RL);
-                s.x.lay = std::addressof(RL);
-                std::memcpy(s.x.a + RL.off_setup, rg.setup, 0x1000);
-                armDCacheFlush(s.x.a + RL.off_setup, 0x1000);
-                s.SetSetupByte(SetupRcQpI, 20);
-                g_vic_quiet = true;
-                const bool vok = s.Vic("n1:rung");
-                g_vic_quiet = false;
-                if (!vok) { LogLine("   nv1080 rung %s: VIC did not complete", rg.name); VicStage("n1:rung_vic_FAILED"); return; }
-                NvfJob j;
-                j.setup = RL.off_setup;
-                j.ref_out = RL.off_ref_out;
-                nvenc_pic_stat_s st = {};
-                u64 en = 0;
-                const int r = NvfEncode(s.x, pic++, std::addressof(st), std::addressof(en), j);
-                if (r == 1) { LogLine("   nv1080 rung %s (%ux%u): submit REJECTED", rg.name, rg.w, rg.h); VicStage("n1:rung_rejected"); return; }
-                if (r == 2) {
-                    LogLine("   nv1080 rung %s (%ux%u): *** STALLED *** - the first rung that does not complete", rg.name, rg.w, rg.h);
-                    s.Stall("nv1080", rg.name);
-                    VicStage("n1:rung_STALLED_left_open");
-                    return;
-                }
-                LogLine("   nv1080 rung %-9s (%4ux%4u): %6u B in %4llu us (status: error %u ucode %#x pic_type %u avgQP %u intra %u)",
-                        rg.name, rg.w, rg.h, st.total_bit_count / 8, static_cast<unsigned long long>(en / 1000),
-                        st.error_status, st.ucode_error_status, st.pic_type, st.avgQP, st.intra_mb_count);
-                std::snprintf(path, sizeof(path), "sdmc:/nv1080-r%s-status.bin", rg.name);
-                save_keep(path, s.x.a + RL.off_status, 0x1000);
-                std::snprintf(path, sizeof(path), "sdmc:/nv1080-r%s-bits.bin", rg.name);
-                save_keep(path, s.x.a + RL.off_bits, bits_len(st));
-                std::snprintf(path, sizeof(path), "sdmc:/nv1080-r%s-y.bin", rg.name);
-                save_keep(path, s.x.a + RL.off_cur, RL.luma);
-                std::snprintf(path, sizeof(path), "sdmc:/nv1080-r%s-uv.bin", rg.name);
-                save_keep(path, s.x.a + RL.off_cur_uv, RL.chroma);
-            }
-            LogLine("   nv1080: every rung completed - 1920x1080 encodes; on to the 1080p frame, GOP and timed loop");
-            s.lay = std::addressof(L);
-            s.x.lay = std::addressof(L);
-            std::memcpy(s.x.a + L.off_setup, L.idr_setup, 0x1000);
-            armDCacheFlush(s.x.a + L.off_setup, 0x1000);
 
             g_vic_quiet = false;
             const u64 v0 = armTicksToNs(armGetSystemTick());

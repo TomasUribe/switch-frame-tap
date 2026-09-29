@@ -1,0 +1,57 @@
+== M91 size ladder ==
+
+== rung 720l32 (1280x720, level 3.2) ==
+nv1080-r720l32-y.bin: 921600 B; roughness by layout: block-linear h=1 10.6, block-linear h=4 12.7, block-linear h=2 12.8, block-linear h=3 13.1, block-linear h=0 16.8, pitch 39.9  -> smoothest: block-linear h=1  (as configured)
+   Y mean 143.9 range 16..236; U mean 141.1 range 23..214; V mean 110.6 range 64..235
+   -> logs/m91-runR/nv1080-r720l32-vic.png
+status: picture_index=0x4d383600 error_status=2 ucode_error_status=0x0 233127 B pic_type=3 slices=1 avgQP=20 intra/inter=3600/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 233139 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1280x720; PSNR against the VIC's planes: Y 42.9 dB, U 43.7 dB, V 44.2 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m91-runR/nv1080-r720l32-decoded.png
+
+== rung 720l42 (1280x720, level 4.2) ==
+nv1080-r720l42-y.bin: 921600 B; roughness by layout: block-linear h=1 10.6, block-linear h=4 12.7, block-linear h=2 12.8, block-linear h=3 13.1, block-linear h=0 16.8, pitch 39.9  -> smoothest: block-linear h=1  (as configured)
+   Y mean 143.9 range 16..236; U mean 141.1 range 23..214; V mean 110.6 range 64..235
+   -> logs/m91-runR/nv1080-r720l42-vic.png
+status: picture_index=0x4d383601 error_status=2 ucode_error_status=0x0 233127 B pic_type=3 slices=1 avgQP=20 intra/inter=3600/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 233139 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1280x720; PSNR against the VIC's planes: Y 42.9 dB, U 43.7 dB, V 44.2 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m91-runR/nv1080-r720l42-decoded.png
+
+== rung 1920x720 (1920x720, level 4.2) ==
+nv1080-r1920x720-y.bin: 1382400 B; roughness by layout: block-linear h=1 9.5, block-linear h=2 11.6, block-linear h=4 11.6, block-linear h=3 11.9, block-linear h=0 15.8, pitch 39.9  -> smoothest: block-linear h=1  (as configured)
+   Y mean 143.9 range 16..236; U mean 141.1 range 22..214; V mean 110.6 range 64..236
+   -> logs/m91-runR/nv1080-r1920x720-vic.png
+status: picture_index=0x4d383602 error_status=2 ucode_error_status=0x0 312226 B pic_type=3 slices=1 avgQP=20 intra/inter=5400/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 312238 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1920x720; PSNR against the VIC's planes: Y 43.3 dB, U 43.9 dB, V 44.5 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m91-runR/nv1080-r1920x720-decoded.png
+
+== rung 1920x1088 (1920x1088, level 4.2) ==
+nv1080-r1920x1088-y.bin: 2088960 B; roughness by layout: block-linear h=1 8.2, block-linear h=2 10.2, block-linear h=4 10.4, block-linear h=3 10.5, block-linear h=0 14.5, pitch 39.3  -> smoothest: block-linear h=1  (as configured)
+   Y mean 143.9 range 16..236; U mean 141.1 range 24..214; V mean 110.6 range 64..236
+   -> logs/m91-runR/nv1080-r1920x1088-vic.png
+status: picture_index=0x4d383603 error_status=2 ucode_error_status=0x0 424050 B pic_type=3 slices=1 avgQP=20 intra/inter=8160/0
+  NAL @ 0x00000: type  5 (IDR slice) ref_idc 3 424062 B  first_mb=0 slice_type=2 pps_id=0
+decoded 1920x1088; PSNR against the VIC's planes: Y 43.7 dB, U 44.1 dB, V 44.8 dB -> NVENC ENCODED THE PICTURE THE VIC WROTE
+   -> logs/m91-runR/nv1080-r1920x1088-decoded.png
+
+== rung 1080 (1920x1080, level 4.2): not run ==
+
+== M90 nv1080: 1920x1080, VIC block height h=1, BT.709 ==
+== settings: VIC block height h=1, colour bt709 ==
+
+== frame 0, as the VIC wrote it ==
+nv1080-0-y/uv.bin: missing
+
+== frame 0 at QP 16 ==
+nv1080-q16-bits.bin: missing
+
+== frame 0 at QP 20 ==
+nv1080-q20-bits.bin: missing
+
+== frame 0 at QP 24 ==
+nv1080-q24-bits.bin: missing
+
+== the GOP (IDR + P) ==
+nv1080-gop-index.bin: missing

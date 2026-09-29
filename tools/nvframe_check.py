@@ -304,7 +304,7 @@ W1080, H1080 = 1920, 1080
 
 
 def headers_1080():
-    return nr.headers_from_setup(nr.parse_setup(nr.setups_1080()[0]), vui=True)
+    return nr.headers_1080()
 
 
 def check_gop(d, prefix, w, h, headers, layout=M83_LAYOUT, out=print):
@@ -499,7 +499,7 @@ def selftest():
         (d / "nv1080-gop-last-y.bin").write_bytes(swizzle(yplane, 1, W1080 * lr))
         (d / "nv1080-gop-last-uv.bin").write_bytes(swizzle(uv, 1, W1080 * cr))
         lines = []
-        res = check(d, 1, "bt709", lines.append, W1080, H1080, "nv1080", nr.headers_from_setup(nr.parse_setup(nr.setups_1080()[0]), vui=False), last=False)
+        res = check(d, 1, "bt709", lines.append, W1080, H1080, "nv1080", nr.headers_1080(vui=False), last=False)
         res.append(check_gop(d, "nv1080", W1080, H1080, b"", out=lines.append))
         all_lines += lines
         assert res == [True] * 4, (res, lines)

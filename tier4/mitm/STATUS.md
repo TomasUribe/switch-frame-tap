@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 88 hardware test cycles (through M90 Run Q). Current build: **M91** (the 1080p size ladder; not yet run). Last run: M90 Run Q - 720p refactor verified; the 1920x1080 NVENC job did not complete. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
+`0100000000000C20`. 89 hardware test cycles (through M91 Run R). Current build: **M92** (1080p = 1920x1088 coded, SPS-cropped; not yet run). Last run: M91 Run R - the ladder: 1920x1088 encodes, 1920x1080 does not. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -128,7 +128,45 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M91: a size ladder for the 1080p stall (built, not yet run) ***
+## *** M92: 1080p is 1920x1088 coded, 1080 shown (built, not yet run) ***
+
+### Run R (M91, docked; logs `logs/m91-runR*`): the ladder names the cause
+
+No freeze, no crash report. All 29 files match the console's FNV-1a.
+
+| rung | coded size | level | result |
+|---|---|---|---|
+| 720l32 | 1280x720 | 3.2 | 233,127 B in 3.8 ms; decodes 42.9 dB vs the VIC |
+| 720l42 | 1280x720 | 4.2 | 233,127 B in 3.2 ms; 42.9 dB |
+| 1920x720 | 1920x720 | 4.2 | 312,226 B in 4.3 ms; 43.3 dB |
+| 1920x1088 | 1920x1088 | 4.2 | **424,050 B in 6.2 ms; 43.7 dB** |
+| 1080 | 1920x1080 | 4.2 | **stalled** |
+
+(QP 20, one docked frame of MK8's cup menu, converted by the VIC to each
+size.) The level, the width, the full 1080p macroblock count and the 128 KB
+RC buffer are all fine; **what NVENC does not complete is a surface height
+that is not a whole number of macroblock rows.** At the stall the status
+buffer held our picture index but the syncpoint stayed one short (853 vs
+854): the engine got as far as writing status and never signalled done.
+This is the first native-1080p picture encoded by the Switch's NVENC in this
+project (`logs/m91-runR/nv1080-r1920x1088-decoded.png`).
+
+### The change
+
+The 1080p setups are 1920x**1088** (`resize_setup(..., 1920, 1088, ...)`,
+the Run R rung that completed); `headers_1080()` writes the SPS for 1080
+shown rows, i.e. frame cropping of the bottom 8 - standard for 1080p H.264.
+The VIC still writes the game's 1080 rows into planes that are 1088 rows
+(16-row blocks), the last 8 stay zero, and NVENC codes all 1088. The ladder
+is removed from the probe (its setups are gone from `nvenc_1080p.h`;
+`nvframe_check.check_ladder` stays, for Run R's files).
+
+Run S: same as Run R (docked, `vic exec dbg nvframe nv1080 wait=60`): the
+1080p frame at three QPs, the IDR + 9 P GOP, and the timed loop.
+
+---
+
+## *** M91: a size ladder for the 1080p stall (Run R: 1088 encodes, 1080 does not) ***
 
 ### Run Q (M90, docked; logs `logs/m90-runQ*`)
 
