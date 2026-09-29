@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 87 hardware test cycles (through M89 Run P). Current build: **M89** (Run P: MK8 and BOTW live, 0 stale and 0 torn frames in 6965). Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
+`0100000000000C20`. 87 hardware test cycles (through M89 Run P). Current build: **M90** (1080p on the encoder; not yet run). Last run: M89 Run P - MK8 and BOTW live, 0 stale and 0 torn frames in 6965. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,57 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M90: 1080p on the encoder - the first step to the 1080p60 goal (built, not yet run) ***
+
+The final goal is docked 1080p60. Capture and the VIC already handle 1080p;
+the missing piece is an encoder job, because grc (the system recorder whose
+jobs we replay) only builds 720p ones.
+
+### A 1080p setup, derived rather than guessed
+
+`tools/nvenc_replay.py resize_setup(setup, w, h, level, bits)` rewrites every
+size-dependent field of grc's `nvenc_h264_drv_pic_setup_s` (NVIDIA's struct):
+the three surface configs (width/height/pitches), the reference and
+reconstruction chroma offsets (pitch x height rounded to 16, units of 256),
+the SPS level, `max_slice_size` and the slice's `num_mb` (grc sets both to the
+macroblock count), `hist_buf_size` = MB columns x (MB rows + 1) x 192
+(`HIST_BLOCK_SIZE`), and `bitstream_buf_size`. **Applied at 1280x720 it
+returns grc's own IDR and P setups byte for byte** (selftest), so the formulas
+are grc's. At 1920x1080: 120x68 MBs, level 4.2, history 1,589,760 B, reference
+chroma at 0x1FE0 x 256 = 1920 x 1088; `nvsetup-dump` (NVIDIA's header,
+compiled) decodes it as intended. The SPS gets frame cropping 1088 -> 1080.
+Generated into `nvenc_1080p.h` (IDR setup, P setup, SPS + PPS).
+
+### The module
+
+- **`NvfLayout`**: everything size-dependent about an encode arena (picture,
+  planes, every buffer offset, setups, headers). `Layout720()` is built from
+  the exact constants every 720p run used; `NvfEncode` and `NvfSession` now
+  take offsets from the layout, so the 720p path is unchanged by
+  construction. `Layout1080()`: planes 1920x1088 / 1920x544 (the VIC writes
+  1080 rows, the SPS crops the other 8), 2 MB bitstream, 16x16-tiled
+  references of 3 MB, MEPRED 512 KB each; 14.2 MB with the P buffers, which
+  fits the 29.3 MB capture region.
+- **`nv1080[=N]`** (`TryNvenc1080`): frame 0 through the VIC to 1080p and IDR
+  at QP 16/20/24 (all saved as `nv1080-*`, plus the game's top rows when
+  docked, for the colour check); an IDR + 9 P GOP saved for the drift test;
+  then N timed frames (IDR every 60) logging read, VIC and NVENC per frame
+  and our rate against the game's. Handheld content is scaled UP by the VIC
+  (a real 1080p encode, not a native picture); the log says which.
+- **PC:** `nvframe_check.py 1080 DIR` runs the frame-0 checks at 1920x1080
+  and the GOP decode + drift test; both have synthetic selftests.
+
+### Run Q (planned)
+
+**Docked**, no USB needed (everything is saved to the SD). Arm file
+`vic exec dbg nvframe nv1080 wait=60`: nvframe re-checks the refactored 720p
+path (on docked content, so also the VIC's downscale), then nv1080 runs on
+native 1080p frames. Pass: the 1080p IDRs decode and match the VIC's planes,
+the GOP decodes without drift, and the timed loop says whether read + VIC +
+NVENC at 1080p fit 16.7 ms.
+
+---
 
 ## *** M89: take the slot and its fence together (Run P: clean) ***
 

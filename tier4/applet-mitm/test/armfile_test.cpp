@@ -84,6 +84,16 @@ int main() {
     ExpectContains("vic exec dbg usb nvgop=60 live wait=20\n", "usb", true);
     ExpectNumber("vic exec dbg usb nvgop=60 live wait=20\n", "nvgop", 0, 60);
     ExpectNumber("vic exec dbg usb nvgop=60 live wait=20\n", "wait", 120, 20);
+    /* M90: Run Q's exact arm file (docked: no usb). nvframe re-checks the
+     * refactored 720p path on docked content; "nv1080" is new. */
+    ExpectContains("vic exec dbg nvframe nv1080 wait=60\n", "nv1080", true);
+    ExpectContains("vic exec dbg nvframe nv1080 wait=60\n", "grc", false);
+    ExpectContains("vic exec dbg nvframe nv1080 wait=60\n", "nvframe", true);
+    ExpectNumber("vic exec dbg nvframe nv1080 wait=60\n", "nvframe", 120, 120);
+    ExpectContains("vic exec dbg nvframe nv1080 wait=60\n", "live", false);
+    ExpectContains("vic exec dbg nvframe nv1080 wait=60\n", "usb", false);
+    ExpectNumber("vic exec dbg nvframe nv1080 wait=60\n", "nv1080", 120, 120);
+    ExpectNumber("vic exec dbg nvframe nv1080 wait=60\n", "wait", 120, 60);
     ExpectNumber("vic exec dbg usb nvstream=7200 nvqp=24 nvp=15\n", "nvstream", 3600, 7200);
     ExpectNumber("vic exec dbg usb nvstream=7200 nvqp=24 nvp=15\n", "nvqp", 20, 24);
     ExpectNumber("vic exec dbg usb nvstream=7200 nvqp=24 nvp=15\n", "nvp", 30, 15);

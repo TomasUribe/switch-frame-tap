@@ -93,6 +93,8 @@ namespace ams::mitm::applet {
     extern u32  g_nvstream_n, g_nvstream_qp;
     extern u32  g_nvstream_gop;   /* M85: 0 = IDR-only; N = an IDR every N frames, P frames between */
     extern bool g_live_armed;     /* M86: stream whenever a viewer and a game are there */
+    extern bool g_nv1080_armed;   /* M90: 1080p encoder probe (frame 0, GOP, timed) */
+    extern u32  g_nv1080_n;
     extern bool g_nvp_armed;      /* M83: IDR + P frames probe */
     extern u32  g_nvp_n;
     extern u32  g_matrix_mode;

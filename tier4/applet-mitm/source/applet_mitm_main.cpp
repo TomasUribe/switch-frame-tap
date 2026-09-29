@@ -625,7 +625,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm M89: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm M90: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -652,6 +652,8 @@ namespace ams {
         mitm::applet::g_nvstream_qp   = ArmFileNumber("nvqp", 20);
         mitm::applet::g_nvstream_gop  = ArmFileNumber("nvgop", 0);
         mitm::applet::g_live_armed    = ArmFileContains("live");
+        mitm::applet::g_nv1080_armed  = ArmFileContains("nv1080");
+        mitm::applet::g_nv1080_n      = ArmFileNumber("nv1080", 120);
         /* live is a mode of the H.264 stream: everything nvstream sets up, it needs */
         if (mitm::applet::g_live_armed) { mitm::applet::g_nvstream_armed = true; }
         mitm::applet::g_nvp_armed     = ArmFileContains("nvp");
@@ -667,7 +669,7 @@ namespace ams {
         mitm::applet::g_stream_frames = ArmFileNumber("sframes", 600);
         mitm::applet::g_probe_delay_s = ArmFileNumber("wait", 120);
         mitm::applet::LogLine("ARMED FLAGS: vic=%d exec=%d dbg=%d dump=%d usb=%d bench=%d nvenc=%d "
-                              "jpg=%d sweep=%d mtx=%d stream=%d grc=%d grcscan=%d clk=%d jpgdec=%d nvgrc=%d csc=%d nvframe=%d(%u) nvstream=%d(%u, qp %u, gop %u) nvp=%d(%u) live=%d wait=%u",
+                              "jpg=%d sweep=%d mtx=%d stream=%d grc=%d grcscan=%d clk=%d jpgdec=%d nvgrc=%d csc=%d nvframe=%d(%u) nvstream=%d(%u, qp %u, gop %u) nvp=%d(%u) live=%d nv1080=%d(%u) wait=%u",
                               mitm::applet::g_vic_armed, mitm::applet::g_vic_execute,
                               mitm::applet::g_dbg_armed, mitm::applet::g_dump_armed,
                               g_usb_armed, mitm::applet::g_bench_armed,
@@ -681,13 +683,14 @@ namespace ams {
                               mitm::applet::g_nvstream_gop,
                               mitm::applet::g_nvp_armed, mitm::applet::g_nvp_n,
                               mitm::applet::g_live_armed,
+                              mitm::applet::g_nv1080_armed, mitm::applet::g_nv1080_n,
                               mitm::applet::g_probe_delay_s);
         if ((mitm::applet::g_jpgdec_armed || mitm::applet::g_nvgrc_armed ||
              mitm::applet::g_csc_armed || mitm::applet::g_nvframe_armed || mitm::applet::g_nvstream_armed ||
              mitm::applet::g_nvp_armed) && !mitm::applet::g_vic_armed) {
             mitm::applet::LogLine("jpgdec/nvgrc/csc/nvframe/nvstream armed without vic: they run inside the VIC worker, so they will NOT run");
         }
-        if ((mitm::applet::g_nvframe_armed || mitm::applet::g_nvstream_armed || mitm::applet::g_nvp_armed) && !mitm::applet::g_dbg_armed) {
+        if ((mitm::applet::g_nvframe_armed || mitm::applet::g_nvstream_armed || mitm::applet::g_nvp_armed || mitm::applet::g_nv1080_armed) && !mitm::applet::g_dbg_armed) {
             mitm::applet::LogLine("nvframe/nvstream/nvp armed without dbg: they run inside the debug capture, so they will NOT run");
         }
         if ((mitm::applet::g_csc_armed || mitm::applet::g_nvframe_armed || mitm::applet::g_nvstream_armed ||
