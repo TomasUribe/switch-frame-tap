@@ -347,15 +347,36 @@ def check_gop(d, prefix, w, h, headers, layout=M83_LAYOUT, out=print):
     return ok
 
 
+def check_ladder(d, out=print):
+    """M91: the size ladder - each rung's IDR decoded with the SPS/PPS of its
+    own setup and compared with the VIC's planes at that size. Returns
+    {rung: True/False/None (not run)}."""
+    res = {}
+    for name, w, h, lv in nr.LADDER:
+        if not (Path(d) / f"nv1080-r{name}-bits.bin").exists():
+            out(f"\n== rung {name} ({w}x{h}, level {lv / 10}): not run ==")
+            res[name] = None
+            continue
+        out(f"\n== rung {name} ({w}x{h}, level {lv / 10}) ==")
+        hdrs = nr.headers_from_setup(nr.parse_setup(nr.ladder_setup(w, h, lv)))
+        run = Run(d, M83_LAYOUT, "bt709", out, w, h, "nv1080", hdrs)
+        r = run.vic_planes(f"r{name}")
+        ref, raw = (r if r else (None, None))
+        res[name] = run.encode_check(f"r{name}", ref, raw)
+    return res
+
+
 def check_1080(d, out=print):
-    """M90's nv1080 probe: frame 0 at three QPs (and the colour, docked), then
-    the GOP's drift test. The timed loop's numbers are in the log."""
+    """M90/M91's nv1080 probe: the size ladder, frame 0 at three QPs (and the
+    colour, docked), then the GOP's drift test. The timed loop is in the log."""
     hdrs = headers_1080()
-    out("== M90 nv1080: 1920x1080, VIC block height h=1, BT.709 ==")
+    out("== M91 size ladder ==")
+    ladder = check_ladder(d, out)
+    out("\n== M90 nv1080: 1920x1080, VIC block height h=1, BT.709 ==")
     res = check(d, M83_LAYOUT, "bt709", out, W1080, H1080, "nv1080", hdrs, last=False)
     out("\n== the GOP (IDR + P) ==")
     res.append(check_gop(d, "nv1080", W1080, H1080, hdrs, out=out))
-    return res
+    return ladder, res
 
 
 # ------------------------------------------------------------------ selftest
@@ -484,6 +505,13 @@ def selftest():
         assert res == [True] * 4, (res, lines)
         assert any("THE VIC WRITES REAL BT709 YUV" in ln for ln in lines)
         assert any("decoded 10 of 10 frames at 1920x1080: IPPPPPPPPP" in ln for ln in lines), lines
+        # M91: a ladder rung as the console writes it (x264 standing in for
+        # NVENC, so its own SPS/PPS ride in the bits); absent rungs read "not run"
+        synth_run(d, 1, "bt709", 1, x264_bits, 1920, 720, "nv1080")
+        for f in ("y", "uv", "bits", "status"):
+            (d / f"nv1080-r1920x720-{f}.bin").write_bytes((d / f"nv1080-{'0' if f in ('y', 'uv') else 'q20'}-{f}.bin").read_bytes())
+        lad = check_ladder(d, lines.append)
+        assert lad == {"720l32": None, "720l42": None, "1920x720": True, "1920x1088": None, "1080": None}, lad
     print("\n".join(all_lines))
     print("selftest OK")
 

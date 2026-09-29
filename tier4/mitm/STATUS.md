@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 87 hardware test cycles (through M89 Run P). Current build: **M90** (1080p on the encoder; not yet run). Last run: M89 Run P - MK8 and BOTW live, 0 stale and 0 torn frames in 6965. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
+`0100000000000C20`. 88 hardware test cycles (through M90 Run Q). Current build: **M91** (the 1080p size ladder; not yet run). Last run: M90 Run Q - 720p refactor verified; the 1920x1080 NVENC job did not complete. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -128,7 +128,45 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M90: 1080p on the encoder - the first step to the 1080p60 goal (built, not yet run) ***
+## *** M91: a size ladder for the 1080p stall (built, not yet run) ***
+
+### Run Q (M90, docked; logs `logs/m90-runQ*`)
+
+No freeze, no crash report; the game kept presenting throughout.
+
+- **The 720p refactor is sound on hardware:** nvframe ran through
+  `Layout720()` on docked content (the VIC downscaling 1920x1080 to 720p):
+  4/4 encodes decode and match the VIC's planes at 46.4-52.0 dB; all 13 files'
+  FNV-1a match the log. Docked, reading the full slot costs ~10 ms (46 fps in
+  that loop; handheld reads only the 720p corner).
+- **The VIC converts a native 1080p frame to 1920x1080 NV12** (OP_DONE).
+- **NVENC did not complete the 1920x1080 IDR:** "no status from our job in
+  1 s", channel left open per M74, no further engine work that boot. Which
+  half failed (syncpoint or status write) was not logged.
+
+### The ladder
+
+The 1080p job changed three things at once from grc's working 720p job - the
+level (3.2 -> 4.2), the width and the height (1080 is not a multiple of 16) -
+and it gave the rate-control scratch buffer 16 KB where grc gives it 128 KB
+(Run E: grc's RC buffer is 0x20000 below its bitstream buffer). M91:
+
+- `MakeLayout(w, h, ...)` builds any size's arena with a **128 KB RC buffer**
+  (`Layout720()` is untouched).
+- `nv1080` first runs **five rungs on one captured frame**, each changing one
+  thing, safest first: 720p level 3.2 (grc's setup + our 2 MB bitstream size)
+  -> 720p level 4.2 -> 1920x720 -> 1920x1088 -> 1920x1080. The first rung
+  that stalls names the cause; every rung that completes is saved
+  (`nv1080-r<name>-*`) and checked on the PC (`nvframe_check.py 1080`).
+  If all complete, the 1080p frame, GOP and timed loop follow as in M90.
+- A stall now logs the syncpoint value, the fence, and whether the engine
+  wrote its status at all.
+
+Run R: same as Run Q (docked, `vic exec dbg nvframe nv1080 wait=60`).
+
+---
+
+## *** M90: 1080p on the encoder - the first step to the 1080p60 goal (Run Q: 720p verified, 1080p stalled) ***
 
 The final goal is docked 1080p60. Capture and the VIC already handle 1080p;
 the missing piece is an encoder job, because grc (the system recorder whose
