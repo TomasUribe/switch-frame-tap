@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 92 hardware test cycles (through M93 Runs T and T2). Current build: **M94** (the 1080p stream pipelined; not yet run). Last run: M93 Run T2 - native 1080p over USB, handheld, via ReverseNX, 37 fps. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
+`0100000000000C20`. 93 hardware test cycles (through M94 Run U). Current build: **M95** (send during the GPU wait; per-window timings; not yet run). Last run: M94 Run U - 1080p pipelined, 43.4 fps, NVENC fully hidden. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -128,7 +128,44 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M94: pipeline the 1080p stream (built, not yet run) ***
+## *** M95: use the GPU wait; find what bounds the read (built, not yet run) ***
+
+### Run U (M94; logs `logs/m94-runU*`): the pipeline hides NVENC
+
+User: "worked as intended", 1080p "still doesn't feel as smooth but it is
+playable". No crash report. Heap 40 MB granted (capture region 37,504 KB).
+
+| | 720p (sequential) | 1080p (pipelined) |
+|---|---|---|
+| sent / game | 53.3 / 59.3 fps | **43.4** / 58.5 fps (Run T2: 37.4) |
+| read + flush | 4.8 ms | 12.2 ms |
+| VIC | 1.0 ms | 2.3 ms |
+| NVENC (waited) | 2.5 ms | **0.08 ms** (Run T2: 5.6) |
+| copy + USB | 1.3 ms | 2.1 ms |
+| GPU fence wait | 1.8 ms | 4.7 ms |
+| size | 68 KB/frame, 28 Mbps | 274 KB/frame, **95 Mbps** |
+
+The encode is gone from the critical path. What remains per 1080p frame is
+the GPU fence wait (4.7 ms, idle), the read (12.2 ms, of which the cache
+flush is unknown), the VIC (2.3) and the send (2.1): ~21 ms.
+
+### The changes
+
+- `NvfPollDone`: one syncpoint read and one status look, no waiting.
+- `WaitPresentFence` takes an idle hook; the 1080p stream uses it to
+  **collect and send the previous frame while the GPU finishes the next** -
+  the send moves off the critical path when the encode is done in time.
+  (The logged fence wait now includes that send time.)
+- The read and the cache flush are timed separately (`last_flush_ns`).
+- Live progress every 1200 frames (~20 s) with **per-window** averages:
+  fps sent, read (and flush), VIC, NVENC wait, GPU fence - so a clock change
+  mid-run shows up. Run V raises the CPU clock mid-race: if the read speeds
+  up, it is bound by the CPU copy (and can be split across cores); if not,
+  by memory bandwidth shared with the game's 1080p rendering.
+
+---
+
+## *** M94: pipeline the 1080p stream (Run U: NVENC hidden, 43.4 fps) ***
 
 Run T2's 1080p frames cost read 12.4 + VIC 2.2 + NVENC 5.6 ms, one after
 another. NVENC runs in hardware while the thread waits, so M94 keeps one

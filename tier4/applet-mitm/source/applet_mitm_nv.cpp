@@ -4591,6 +4591,22 @@ namespace ams::mitm::applet {
             return (fence_done && ours) ? 0 : 2;
         }
 
+        /* M95: has a submitted job finished? One syncpoint read, one status look,
+         * no waiting - for use inside another wait. */
+        bool NvfPollDone(const NvfCtx &x, u32 pic_index, u32 fence_val) {
+            const u32 cfd = CtrlFd();
+            if (cfd == 0) { return false; }
+            struct { u32 id; u32 value; } r = { x.esyncpt, 0 };
+            u32 e2 = 0;
+            NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
+            if (static_cast<s32>(r.value - fence_val) < 0) { return false; }
+            const NvfLayout &L = x.lay != nullptr ? *x.lay : Layout720();
+            armDCacheFlush(x.a + L.off_status, 0x80);
+            u32 pi = 0;
+            std::memcpy(std::addressof(pi), x.a + L.off_status, 4);
+            return pi == pic_index;
+        }
+
         int NvfEncode(const NvfCtx &x, u32 pic_index, nvenc_pic_stat_s *st, u64 *enc_ns, const NvfJob &j = NvfJob{}) {
             u32 fence = 0;
             u64 t0 = 0;
@@ -4771,6 +4787,12 @@ namespace ams::mitm::applet {
              * met the slot's previous contents, and whole "old frames" (the
              * slot as it was 2-3 presents ago). Wait for every syncpoint in
              * the fence, polling nvhost-ctrl, at most 30 ms. */
+            /* M95: something to do while the GPU finishes (collecting the
+             * previous encode); called between polls until it returns true */
+            bool (*idle_fn)(void *) = nullptr;
+            void *idle_ctx = nullptr;
+            u64 last_flush_ns = 0;
+
             void WaitPresentFence(u32 n, const u64 fence[4]) {
                 if (n == 0 || n > 4) { ++fence_unknown; return; }
                 const u32 cfd = CtrlFd();
@@ -4787,6 +4809,7 @@ namespace ams::mitm::applet {
                         if (R_FAILED(NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e))) || e != 0) { break; }
                         if (static_cast<s32>(r.value - want) >= 0) { break; }
                         if (armTicksToNs(armGetSystemTick()) - t0 > UINT64_C(30000000)) { timed_out = true; break; }
+                        if (idle_fn != nullptr && idle_fn(idle_ctx)) { idle_fn = nullptr; continue; }
                         os::SleepThread(TimeSpan::FromMicroSeconds(250));
                     }
                 }
@@ -4840,7 +4863,9 @@ namespace ams::mitm::applet {
                     if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, base, buf_bytes))) {
                         return false;
                     }
+                    const u64 tf = armTicksToNs(armGetSystemTick());
                     armDCacheFlush(g_ind_buf, buf_bytes);
+                    last_flush_ns = armTicksToNs(armGetSystemTick()) - tf;
                 }
                 u32 h = 0;
                 for (u32 k = 0; k < 8192; k += 8) { h = h * 31u + g_ind_buf[k]; }
@@ -5169,7 +5194,9 @@ namespace ams::mitm::applet {
             VicStage("ns:1");
             /* M86: live mode streams until the viewer or the game goes away */
             const u32 nframes = live ? ~0u : (g_nvstream_n > 36000 ? 36000 : g_nvstream_n);
-            const u32 progress_every = live ? 3600 : 600;
+            /* M95: live progress every ~20 s, with per-window timings, so a
+             * mid-run change (a clock, a scene) shows up in the log */
+            const u32 progress_every = live ? 1200 : 600;
             const u8 qp = static_cast<u8>(g_nvstream_qp < 10 ? 10 : (g_nvstream_qp > 40 ? 40 : g_nvstream_qp));
             u32 gop = g_nvstream_gop > 250 ? 250 : g_nvstream_gop;   /* frame_num and POC lsb wrap at 256 */
             if (gop == 1) { gop = 0; }
@@ -5264,7 +5291,10 @@ namespace ams::mitm::applet {
             u64 t_window = loop_t0;
             /* One encode "in flight": submitted, not yet collected. Collecting
              * it waits for NVENC, then sends the frame exactly as before. */
-            struct InFlight { bool active; u32 i; u32 pic; u32 fence; u64 t_submit; bool is_idr; u32 pos; u64 present_ns, rn, vic_ns, t0, t1; };
+            struct InFlight { bool active; u32 i; u32 pic; u32 fence; u64 t_submit; bool is_idr; u32 pos; u64 present_ns, rn, vic_ns, t0, t1, flush_ns; };
+            u64 w_read = 0, w_flush = 0, w_vic = 0, w_enc = 0, w_fence0 = 0;
+            u32 w_n = 0, w_sent0 = 0, w_fwait0 = 0;
+            u64 w_t0 = armTicksToNs(armGetSystemTick());
             InFlight fl = {};
             const u32 curs[2]    = { L.off_cur, L.off_cur2 };
             const u32 curs_uv[2] = { L.off_cur_uv, L.off_cur2_uv };
@@ -5333,6 +5363,7 @@ namespace ams::mitm::applet {
                 if ((t4 - t3) > UINT64_C(500000000) || (t6 - t5) > UINT64_C(500000000)) { need_idr = true; ++viewer_gaps; }
 
                 ++done;
+                ++w_n; w_read += f.rn; w_flush += f.flush_ns; w_vic += f.vic_ns; w_enc += enc_wait;
                 s_read += f.rn; s_vic += f.vic_ns; s_enc += enc_wait; s_copy += t5 - t4; s_usb += (t4 - t3) + (t6 - t5);
                 s_bytes += bytes;
                 if (f.is_idr) { s_bytes_i += bytes; ++n_i; } else { s_bytes_p += bytes; ++n_p; }
@@ -5357,10 +5388,26 @@ namespace ams::mitm::applet {
                 return false;
             };
 
+            /* M95: while Capture waits for the GPU to finish the next frame,
+             * collect and send the previous one as soon as its encode is done
+             * (Run U: fences avg 4.7 ms of otherwise idle waiting) */
+            bool hook_stop = false;
+            auto hook = [&]() -> bool {
+                if (!fl.active || !NvfPollDone(s.x, fl.pic, fl.fence)) { return false; }
+                if (collect(fl)) { hook_stop = true; }
+                return true;
+            };
             for (u32 i = 0; i < nframes; ++i) {
                 u64 rn = 0; u32 sg = 0;
                 const u64 t0 = armTicksToNs(armGetSystemTick());
-                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped))) { why = SlotReadFailure(); end = StreamEnd::GameGone; break; }
+                if (pipe && fl.active) {
+                    s.idle_fn = [](void *p) -> bool { return (*static_cast<decltype(hook) *>(p))(); };
+                    s.idle_ctx = std::addressof(hook);
+                }
+                const bool got = s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped));
+                s.idle_fn = nullptr;
+                if (hook_stop) { break; }
+                if (!got) { why = SlotReadFailure(); end = StreamEnd::GameGone; break; }
                 const u64 present_ns = armTicksToNs(s.present_tick);
                 const u64 t1 = armTicksToNs(armGetSystemTick());
                 /* pipelined, frame i goes to the picture frame i-1 is NOT being encoded from */
@@ -5392,7 +5439,7 @@ namespace ams::mitm::applet {
                     j.me_in  = mes[(pos - 1) & 1];
                     j.me_out = mes[pos & 1];
                 }
-                fl = InFlight{ true, i, pic++, 0, 0, pos == 0, pos, present_ns, rn, t2 - t1, t0, t1 };
+                fl = InFlight{ true, i, pic++, 0, 0, pos == 0, pos, present_ns, rn, t2 - t1, t0, t1, s.last_flush_ns };
                 if (NvfSubmit(s.x, fl.pic, j, std::addressof(fl.fence), std::addressof(fl.t_submit)) != 0) {
                     fl.active = false; why = "NVENC submit rejected"; end = StreamEnd::Failed; break;
                 }
@@ -5418,6 +5465,19 @@ namespace ams::mitm::applet {
                  * far it got */
                 if ((i + 1) % progress_every == 0) {
                     log_stalls();
+                    {
+                        const u64 wn = armTicksToNs(armGetSystemTick());
+                        const u32 wd = w_n ? w_n : 1;
+                        const u32 fw = s.fence_waits - w_fwait0;
+                        const u64 wfps = wn > w_t0 ? static_cast<u64>(sent - w_sent0) * UINT64_C(10000000000) / (wn - w_t0) : 0;
+                        LogLine("   nvstream window: %llu.%llu fps sent; per frame avg us: read %llu (flush %llu of it)  VIC %llu  NVENC wait %llu  GPU fence %llu",
+                                static_cast<unsigned long long>(wfps / 10), static_cast<unsigned long long>(wfps % 10),
+                                static_cast<unsigned long long>(w_read / wd / 1000), static_cast<unsigned long long>(w_flush / wd / 1000),
+                                static_cast<unsigned long long>(w_vic / wd / 1000), static_cast<unsigned long long>(w_enc / wd / 1000),
+                                static_cast<unsigned long long>(fw ? (s.fence_wait_sum - w_fence0) / fw / 1000 : 0));
+                        w_n = 0; w_read = w_flush = w_vic = w_enc = 0; w_t0 = wn; w_sent0 = sent;
+                        w_fwait0 = s.fence_waits; w_fence0 = s.fence_wait_sum;
+                    }
                     u32 hz = 0;
                     if (!ClockRateOf(PcvModule_NVENC, std::addressof(hz)) || hz < 400000000u) {
                         ++clock_fixes;
