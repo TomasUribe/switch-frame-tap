@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 90 hardware test cycles (through M92 Run S). Current build: **M93** (live mode streams native 1080p when the game renders it; not yet run). Last run: M92 Run S - native 1080p encodes, 10.5 ms/frame. Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
+`0100000000000C20`. 92 hardware test cycles (through M93 Runs T and T2). Current build: **M93** (Run T2: **native 1080p over USB, handheld, via ReverseNX** - 37 fps; the next step is pipelining). Last run: M85 Run K, a playable 720p60 IDR+P stream, ~31 ms measured latency.
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -128,7 +128,41 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
-## *** M93: 1080p in live mode (built, not yet run) ***
+## *** M93: 1080p in live mode (Run T2: native 1080p streams over USB at 37 fps) ***
+
+### Run T (logs `logs/m93-runT*`): the switch is detected; MK8 crashes
+
+Handheld, Joy-Cons attached, Horizon OC at CPU 1020 / GPU 768 / RAM 1600,
+ReverseNX-RT switched to docked mid-game. Twice the stream logged "the game
+switched to a 1080p picture" ~2 s after the switch and restarted - and both
+times **MK8 aborted** (`logs/m93-runT/crash/`): `ControllerAppletThread` ->
+`hid::ShowControllerSupport` -> `la::StartLibraryAppletEasy` -> assertion
+failure (result 0xCA8, 2168-0006). In docked mode, Joy-Cons attached to the
+console are not an allowed style, so MK8 opens the controller applet, which
+fails to start on a console that is really handheld. **Not the module:** in
+Run T2's step A the same crash happened with no viewer, i.e. with nothing of
+ours attached. SaltyNX's log shows ReverseNX injected normally.
+
+### Run T2 (logs `logs/m93-runT2*`): 1080p over USB, handheld
+
+Joy-Cons detached (wireless), then ReverseNX -> docked: no crash, and the
+stream restarted at **1920x1080** (raw-view: "stream: 1920x1080 H.264"),
+0 lost, 0 undecodable. The 1080p session (106 s):
+
+- **the game held 59.5 fps** (docked rendering at the stock docked clocks);
+- **the stream sent 37.4 fps** (2345 presents skipped); per frame avg:
+  read+flush **12.4 ms**, VIC 2.2, NVENC **5.6**, copy 0.3, USB 1.5 -
+  ~22 ms of work against 16.7;
+- 67 IDR avg 353 KB, 3896 P avg 178 KB: 54 Mbps at 37 fps (~88 at 60),
+  well inside USB 2.0; latency console 31 ms + PC ~30 ms;
+- fences avg 3.5 ms; 39 frames over 50 ms of work (bursts, reads to 300 ms).
+
+Run S's 10.5 ms per 1080p frame was measured in the menus. Racing at 1080p,
+the read (an 8.8 MB copy out of the game) and NVENC each take about twice as
+long - most likely memory-bandwidth contention with the game's own 1080p
+rendering. **The stages run one after another; NVENC works in hardware
+while our thread waits.** The next build overlaps them.
+
 
 - **The stream picks its size per session** from the first captured frame:
   a 1280x720 picture in the surface's corner (handheld) streams at 720p;

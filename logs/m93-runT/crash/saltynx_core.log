@@ -1,0 +1,123 @@
+SaltyNX Core 2.0.0: restoring code...
+SaltyNX Core: Found svcSetHeapSize at address: 0x140d4fe41c!
+SaltyNX Core: Found svcGetInfo at address: 0x140d4fe5ec!
+SaltyNX Core Patcher: Searching patches in dir '/'...
+SaltyNX CorePatcher: Searching patches in dir '/0100152000022000'...
+SaltyNX Core: Searching plugin dir `'...
+SaltyNX Core: Searching plugin dir `0100152000022000/'...
+SaltyNX Core: Plugins not detected...
+SaltySD_CheckIfSharedMemoryAvailable ret: 0x0
+SaltyNX Core: got SharedMemory handle 201fd
+NX-FPS: alive
+NX-FPS: found main at: 0x140BA04000
+NX-FPS: ret: 0x0
+NX-FPS: MemoryOffset: 4
+SaltyNX Core: 24910 nvnBootstrapLoader to 0x140b8012b0, 12f4c60 0x140ccf8c60
+SaltyNX Core: 5b4f nvnBootstrapLoader to 0x140b8012b0, 5b9db0 0x140d320db0
+SaltyNX Core: 246a8 _ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE to 0x140b800570, 12f3920 0x140ccf7920
+SaltyNX Core: 69e2 _ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE to 0x140b800570, 98e9e8 0x140dddb9e8
+SaltyNX Core: 5c75 _ZN2nn2fs6detail12FileAccessor4ReadEPmlPvmRKNS0_10ReadOptionE to 0x140b8004d0, 987e80 0x140ddd4e80
+SaltyNX Core: BID: FE941ED5BA14BE5D
+NX-FPS: BID: FE941ED5BA14BE5D
+NX-FPS: FPSLocker: File not found: sdmc:/SaltySD/plugins/FPSLocker/patches/0100152000022000/FE941ED5BA14BE5D.bin
+NX-FPS: injection finished
+ReverseNX: alive
+ReverseNX: SharedMemory ret: 0x0
+ReverseNX: SharedMemory MemoryOffset: 316
+ReverseNX: Couldn't load save from sdmc:/SaltySD/plugins/ReverseNX-RT/0100152000022000.dat! Errno: 0. Using default settings.
+SaltyNX Core: 24809 _ZN2nn2oe22PopNotificationMessageEv to 0x140b803b60, 12f4428 0x140ccf8428
+SaltyNX Core: 2480c _ZN2nn2oe18GetPerformanceModeEv to 0x140b8037e0, 12f4440 0x140ccf8440
+SaltyNX Core: 2480b _ZN2nn2oe16GetOperationModeEv to 0x140b803850, 12f4438 0x140ccf8438
+SaltyNX Core: 24690 _ZN2nn2os18TryWaitSystemEventEPNS0_15SystemEventTypeE to 0x140b803bb0, 12f3860 0x140ccf7860
+SaltyNX Core: 5ef2 _ZN2nn2os18TryWaitSystemEventEPNS0_15SystemEventTypeE to 0x140b803bb0, 989268 0x140ddd6268
+SaltyNX Core: 24710 _ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE to 0x140b803d60, 12f3c60 0x140ccf7c60
+SaltyNX Core: 54a4 _ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE to 0x140b803d60, 5b6858 0x140d31d858
+SaltyNX Core: 5ef1 _ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE to 0x140b803d60, 989260 0x140ddd6260
+SaltyNX Core: 5ef8 _ZN2nn2os25InitializeMultiWaitHolderEPNS0_19MultiWaitHolderTypeEPNS0_15SystemEventTypeE to 0x140b803aa0, 989298 0x140ddd6298
+SaltyNX Core: 2465f _ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE to 0x140b803b00, 12f36d8 0x140ccf76d8
+SaltyNX Core: 5f16 _ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE to 0x140b803b00, 989388 0x140ddd6388
+SaltyNX Core: 24661 _ZN2nn2os7WaitAnyEPNS0_13MultiWaitTypeE to 0x140b803ce0, 12f36e8 0x140ccf76e8
+SaltyNX Core: 5f12 _ZN2nn2os7WaitAnyEPNS0_13MultiWaitTypeE to 0x140b803ce0, 989368 0x140ddd6368
+ReverseNX: injection finished
+SaltyNX Core 2.0.0: restoring code...
+SaltyNX Core: Found svcSetHeapSize at address: 0x66b30fe41c!
+SaltyNX Core: Found svcGetInfo at address: 0x66b30fe5ec!
+SaltyNX Core Patcher: Searching patches in dir '/'...
+SaltyNX CorePatcher: Searching patches in dir '/0100152000022000'...
+SaltyNX Core: Searching plugin dir `'...
+SaltyNX Core: Searching plugin dir `0100152000022000/'...
+SaltyNX Core: Plugins not detected...
+SaltySD_CheckIfSharedMemoryAvailable ret: 0x0
+SaltyNX Core: got SharedMemory handle 201fd
+NX-FPS: alive
+NX-FPS: found main at: 0x66B1604000
+NX-FPS: ret: 0x0
+NX-FPS: MemoryOffset: 4
+SaltyNX Core: 24910 nvnBootstrapLoader to 0x66b14012b0, 12f4c60 0x66b28f8c60
+SaltyNX Core: 5b4f nvnBootstrapLoader to 0x66b14012b0, 5b9db0 0x66b2f20db0
+SaltyNX Core: 246a8 _ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE to 0x66b1400570, 12f3920 0x66b28f7920
+SaltyNX Core: 69e2 _ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE to 0x66b1400570, 98e9e8 0x66b39db9e8
+SaltyNX Core: 5c75 _ZN2nn2fs6detail12FileAccessor4ReadEPmlPvmRKNS0_10ReadOptionE to 0x66b14004d0, 987e80 0x66b39d4e80
+SaltyNX Core: BID: FE941ED5BA14BE5D
+NX-FPS: BID: FE941ED5BA14BE5D
+NX-FPS: FPSLocker: File not found: sdmc:/SaltySD/plugins/FPSLocker/patches/0100152000022000/FE941ED5BA14BE5D.bin
+NX-FPS: injection finished
+ReverseNX: alive
+ReverseNX: SharedMemory ret: 0x0
+ReverseNX: SharedMemory MemoryOffset: 316
+ReverseNX: Couldn't load save from sdmc:/SaltySD/plugins/ReverseNX-RT/0100152000022000.dat! Errno: 0. Using default settings.
+SaltyNX Core: 24809 _ZN2nn2oe22PopNotificationMessageEv to 0x66b1403b60, 12f4428 0x66b28f8428
+SaltyNX Core: 2480c _ZN2nn2oe18GetPerformanceModeEv to 0x66b14037e0, 12f4440 0x66b28f8440
+SaltyNX Core: 2480b _ZN2nn2oe16GetOperationModeEv to 0x66b1403850, 12f4438 0x66b28f8438
+SaltyNX Core: 24690 _ZN2nn2os18TryWaitSystemEventEPNS0_15SystemEventTypeE to 0x66b1403bb0, 12f3860 0x66b28f7860
+SaltyNX Core: 5ef2 _ZN2nn2os18TryWaitSystemEventEPNS0_15SystemEventTypeE to 0x66b1403bb0, 989268 0x66b39d6268
+SaltyNX Core: 24710 _ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE to 0x66b1403d60, 12f3c60 0x66b28f7c60
+SaltyNX Core: 54a4 _ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE to 0x66b1403d60, 5b6858 0x66b2f1d858
+SaltyNX Core: 5ef1 _ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE to 0x66b1403d60, 989260 0x66b39d6260
+SaltyNX Core: 5ef8 _ZN2nn2os25InitializeMultiWaitHolderEPNS0_19MultiWaitHolderTypeEPNS0_15SystemEventTypeE to 0x66b1403aa0, 989298 0x66b39d6298
+SaltyNX Core: 2465f _ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE to 0x66b1403b00, 12f36d8 0x66b28f76d8
+SaltyNX Core: 5f16 _ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE to 0x66b1403b00, 989388 0x66b39d6388
+SaltyNX Core: 24661 _ZN2nn2os7WaitAnyEPNS0_13MultiWaitTypeE to 0x66b1403ce0, 12f36e8 0x66b28f76e8
+SaltyNX Core: 5f12 _ZN2nn2os7WaitAnyEPNS0_13MultiWaitTypeE to 0x66b1403ce0, 989368 0x66b39d6368
+ReverseNX: injection finished
+SaltyNX Core 2.0.0: restoring code...
+SaltyNX Core: Found svcSetHeapSize at address: 0x21238fe41c!
+SaltyNX Core: Found svcGetInfo at address: 0x21238fe5ec!
+SaltyNX Core Patcher: Searching patches in dir '/'...
+SaltyNX CorePatcher: Searching patches in dir '/0100152000022000'...
+SaltyNX Core: Searching plugin dir `'...
+SaltyNX Core: Searching plugin dir `0100152000022000/'...
+SaltyNX Core: Plugins not detected...
+SaltySD_CheckIfSharedMemoryAvailable ret: 0x0
+SaltyNX Core: got SharedMemory handle 201fd
+NX-FPS: alive
+NX-FPS: found main at: 0x2121E04000
+NX-FPS: ret: 0x0
+NX-FPS: MemoryOffset: 4
+SaltyNX Core: 24910 nvnBootstrapLoader to 0x2121c012b0, 12f4c60 0x21230f8c60
+SaltyNX Core: 5b4f nvnBootstrapLoader to 0x2121c012b0, 5b9db0 0x2123720db0
+SaltyNX Core: 246a8 _ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE to 0x2121c00570, 12f3920 0x21230f7920
+SaltyNX Core: 69e2 _ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE to 0x2121c00570, 98e9e8 0x21241db9e8
+SaltyNX Core: 5c75 _ZN2nn2fs6detail12FileAccessor4ReadEPmlPvmRKNS0_10ReadOptionE to 0x2121c004d0, 987e80 0x21241d4e80
+SaltyNX Core: BID: FE941ED5BA14BE5D
+NX-FPS: BID: FE941ED5BA14BE5D
+NX-FPS: FPSLocker: File not found: sdmc:/SaltySD/plugins/FPSLocker/patches/0100152000022000/FE941ED5BA14BE5D.bin
+NX-FPS: injection finished
+ReverseNX: alive
+ReverseNX: SharedMemory ret: 0x0
+ReverseNX: SharedMemory MemoryOffset: 316
+ReverseNX: Couldn't load save from sdmc:/SaltySD/plugins/ReverseNX-RT/0100152000022000.dat! Errno: 0. Using default settings.
+SaltyNX Core: 24809 _ZN2nn2oe22PopNotificationMessageEv to 0x2121c03b60, 12f4428 0x21230f8428
+SaltyNX Core: 2480c _ZN2nn2oe18GetPerformanceModeEv to 0x2121c037e0, 12f4440 0x21230f8440
+SaltyNX Core: 2480b _ZN2nn2oe16GetOperationModeEv to 0x2121c03850, 12f4438 0x21230f8438
+SaltyNX Core: 24690 _ZN2nn2os18TryWaitSystemEventEPNS0_15SystemEventTypeE to 0x2121c03bb0, 12f3860 0x21230f7860
+SaltyNX Core: 5ef2 _ZN2nn2os18TryWaitSystemEventEPNS0_15SystemEventTypeE to 0x2121c03bb0, 989268 0x21241d6268
+SaltyNX Core: 24710 _ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE to 0x2121c03d60, 12f3c60 0x21230f7c60
+SaltyNX Core: 54a4 _ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE to 0x2121c03d60, 5b6858 0x212371d858
+SaltyNX Core: 5ef1 _ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE to 0x2121c03d60, 989260 0x21241d6260
+SaltyNX Core: 5ef8 _ZN2nn2os25InitializeMultiWaitHolderEPNS0_19MultiWaitHolderTypeEPNS0_15SystemEventTypeE to 0x2121c03aa0, 989298 0x21241d6298
+SaltyNX Core: 2465f _ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE to 0x2121c03b00, 12f36d8 0x21230f76d8
+SaltyNX Core: 5f16 _ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE to 0x2121c03b00, 989388 0x21241d6388
+SaltyNX Core: 24661 _ZN2nn2os7WaitAnyEPNS0_13MultiWaitTypeE to 0x2121c03ce0, 12f36e8 0x21230f76e8
+SaltyNX Core: 5f12 _ZN2nn2os7WaitAnyEPNS0_13MultiWaitTypeE to 0x2121c03ce0, 989368 0x21241d6368
+ReverseNX: injection finished

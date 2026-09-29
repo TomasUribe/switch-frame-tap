@@ -1,0 +1,841 @@
+SaltyNX 2.0.0: got SD card.
+SaltyNX: PID 139 is not allowing debugging, error 0xfa01, aborting...
+[00:00:00] SaltyNX: PID 140 is not allowing debugging, error 0xfa01, aborting...
+SaltyNX: accepting service calls
+[00:00:00] SaltyNX: session 803f3 being handled
+[00:00:00] SaltyNX: [serviceGetSharedMemoryHandle] 
+[00:00:00] SaltyNX: [serviceEndSession] 
+[00:00:00] SaltyNX: done accepting service calls
+[00:00:01] SaltyNX: PID 141 is not allowing debugging, error 0xfa01, aborting...
+[00:00:09] SaltyNX: PID 142 is not allowing debugging, error 0xfa01, aborting...
+[00:00:13] SaltyNX: found valid CreateProcess event:
+[00:00:13] 		 tid 0100152000022000 pid 143
+[00:00:13] 		 name Application
+[00:00:13] 		 isA64 1 addrSpace 3 enableDebug 1
+[00:00:13] 		 enableAslr 1 poolPartition 0
+[00:00:13] 		 exception 0x0000005217cd5000
+[00:00:13] SaltyNX: debug event 4, passing...
+[00:00:13] SaltyNX: PID 143 svcGetDebugevent: end of events...
+.text to 140ba04000, .data to 140cbab000
+[00:00:13] SaltyNX: BID: FE941ED5BA14BE5D
+[00:00:12] SaltyNX: accepting service calls
+[00:00:12] SaltyNX: session 983f3 being handled
+[00:00:12] SaltyNX: [serviceLoadELF] proc handle a03f2, heap 2738c00000, path saltynx_core.elf
+[00:00:12] SaltyNX: [serviceLoadELF] loading sdmc:/SaltySD/saltynx_core.elf, size 0x25920
+[00:00:00] SaltyNX: load_elf_proc query mapping 0x2738e00000, addr: 0x2738c00000, Perm: 3, size: 0x400000
+[00:00:00] SaltyNX: load_elf_proc loaded ELF to buffer.
+[00:00:00] SaltyNX: Found free address space at 140b800000, size 38000
+[00:00:12] SaltyNX: [serviceLoadELF] new_addr to 140b800000, 0
+[00:00:12] SaltyNX: [serviceEndSession] 
+[00:00:12] SaltyNX: done accepting service calls
+[00:00:12] SaltyNX: accepting service calls
+[00:00:12] SaltyNX: session b03f3 being handled
+[00:00:12] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x5851f42d.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x40b18ccf.
+[00:00:13] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 38 B.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceRestoreBootstrapCode] 
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x4bb5f646.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x47033129.
+[00:00:13] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 61 B.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x30705b04.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x20fd5db4.
+[00:00:13] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 57 B.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceMemcpy] memcpy(140d4fe41c, 140b823550, 10)
+[00:00:13] SaltyNX: [serviceMemcpy] memcpy(140d4fe5ec, 140b823550, 10)
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x1a8b7f78.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x502959d8.
+[00:00:13] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 54 B.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardOpendir] Opened dir: sdmc:/SaltySD/patches/, DirId: 0x2b894868
+[00:00:13] SaltyNX: [serviceSdcardReaddir] DirId: 0x1740443700, errno: 0
+[00:00:13] SaltyNX: [serviceSdcardClosedir] DirId: 0x1740443700, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x6c0356a7.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x8cdb7ff.
+[00:00:13] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 69 B.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardOpendir] Bad dir: sdmc:/SaltySD/patches/0100152000022000/, errno: 2.
+[00:00:13] SaltyNX: [serviceException] 
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x3477d43f.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x70a3a52b.
+[00:00:13] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 41 B.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardOpendir] Opened dir: sdmc:/SaltySD/plugins/, DirId: 0x28e4baf1
+[00:00:13] SaltyNX: [serviceSdcardReaddir] DirId: 0x1740443700, no error
+[00:00:13] SaltyNX: [serviceSdcardReaddir] DirId: 0x1740443700, errno: 0
+[00:00:13] SaltyNX: [serviceSdcardClosedir] DirId: 0x1740443700, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x7d8341fc.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0xae16fd9.
+[00:00:13] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 58 B.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardOpendir] Bad dir: sdmc:/SaltySD/plugins/0100152000022000/, errno: 2.
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x742d2f7a.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0xd1f0796.
+[00:00:13] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 38 B.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceCheckIfSharedMemoryAvailable] size: 1
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x76035e09.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x40f7702c.
+[00:00:13] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 46 B.
+[00:00:13] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:13] SaltyNX: [serviceGetSharedMemoryHandle] 
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x6fa72ca5.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x2aa84157.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 44 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x58a0df74.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x474a0364.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 14 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x2e533cc4.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x4185faf.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 36 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceCheckIfSharedMemoryAvailable] size: 310
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x6de3b115.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0xcab8628.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 17 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x7043bfa4.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x398150e9.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 24 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x37521657.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x4d9a2fdb.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 77 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceMemcpy] memcpy(140c8c39c8, 1b51ba48d8, 18)
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x76c3625e.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x55075020.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 75 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceMemcpy] memcpy(140d0faf80, 1b51ba48d8, 18)
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x329b54fb.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x381fc038.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 115 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceMemcpy] memcpy(140c8c0008, 1b51ba48d8, 18)
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x5378d5a8.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x76e5004e.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 113 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceMemcpy] memcpy(140d8fad40, 1b51ba48d8, 18)
+[00:00:14] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/flags/blockfilestats.flag, errno: 2.
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x797d87a6.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x2756c714.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 118 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceMemcpy] memcpy(140d8e6b08, 1b51ba48d8, 18)
+[00:00:14] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/flags/blockfilestats.flag, errno: 2.
+[00:00:14] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/flags/nvncounters.flag, errno: 2.
+[00:00:14] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/plugins/FPSLocker/0100152000022000.dat, errno: 2.
+[00:00:14] SaltyNX: [serviceGetBID] PID: 143
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x4c598d93.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x643bd725.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 36 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x2b449456.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:14] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x67128624.
+[00:00:14] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 30 B.
+[00:00:14] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/plugins/FPSLocker/patches/0100152000022000/FE941ED5BA14BE5D.bin, errno: 2.
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x7899e644.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x88232df.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 113 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x6db50559.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7d157d8d.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 27 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x71dfed43.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x45cb977b.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 17 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceCheckIfSharedMemoryAvailable] size: 7
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x6ea3bbbe.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x3a984b90.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 33 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x666d9716.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x6fd59589.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 42 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/plugins/ReverseNX-RT/0100152000022000.dat, errno: 2.
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x6931589d.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x17c5e07e.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 126 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0xb0abb77.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x51af16c6.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 94 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceMemcpy] memcpy(140c8c2120, 1b51ba4cd8, 18)
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x1dee132f.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x3b3a7726.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 90 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceMemcpy] memcpy(140c8c2168, 1b51ba4cd8, 18)
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0xf32298.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x51480688.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 88 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceMemcpy] memcpy(140c8c2150, 1b51ba4cd8, 18)
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x35eb8df5.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7a1179b4.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 112 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceMemcpy] memcpy(140c8bfdc8, 1b51ba4cd8, 18)
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x1ae53a30.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7c418dd4.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 110 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceMemcpy] memcpy(140d8ea6c0, 1b51ba4cd8, 18)
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x2170b934.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x6db4489d.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 109 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceMemcpy] memcpy(140c8c09c8, 1b51ba4cd8, 18)
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x4a691c3a.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x5a89680d.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 107 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceMemcpy] memcpy(140d0f0f78, 1b51ba4cd8, 18)
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x249ad60f.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x28bae6bd.
+[00:00:15] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 107 B.
+[00:00:15] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:15] SaltyNX: [serviceMemcpy] memcpy(140d8ea6a8, 1b51ba4cd8, 18)
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x526d022f.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x6de3eda1.
+[00:00:16] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 144 B.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceMemcpy] memcpy(140d8ea750, 1b51ba4cd8, 18)
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x559e2ff7.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x38b9210f.
+[00:00:16] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 138 B.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceMemcpy] memcpy(140c8bf930, 1b51ba4cd8, 18)
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x72790d9.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x63839168.
+[00:00:16] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 136 B.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceMemcpy] memcpy(140d8eaa20, 1b51ba4cd8, 18)
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x4c1ee2f4.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0xd1102d9.
+[00:00:16] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 98 B.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceMemcpy] memcpy(140c8bf960, 1b51ba4cd8, 18)
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x2657c93c.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x79b12ba8.
+[00:00:16] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 96 B.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceMemcpy] memcpy(140d8ea9c0, 1b51ba4cd8, 18)
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x55365135.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x794f06e5.
+[00:00:16] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 30 B.
+[00:00:16] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:00:16] SaltyNX: [serviceEndSession] 
+[00:00:16] SaltyNX: done accepting service calls
+[00:03:15] SaltyNX: accepting service calls
+[00:03:15] SaltyNX: session 1683f3 being handled
+[00:03:15] SaltyNX: [serviceGetSharedMemoryHandle] 
+[00:03:15] SaltyNX: [serviceEndSession] 
+[00:03:15] SaltyNX: done accepting service calls
+[00:03:30] SaltyNX: PID 144 is not allowing debugging, error 0xfa01, aborting...
+[00:03:30] SaltyNX: PID 145 is not allowing debugging, error 0xfa01, aborting...
+[00:03:38] SaltyNX: PID 146 is not allowing debugging, error 0xfa01, aborting...
+[00:03:53] SaltyNX: PID 147 is not allowing debugging, error 0xfa01, aborting...
+[00:03:56] SaltyNX: found valid CreateProcess event:
+[00:03:56] 		 tid 0100152000022000 pid 148
+[00:03:56] 		 name Application
+[00:03:56] 		 isA64 1 addrSpace 3 enableDebug 1
+[00:03:56] 		 enableAslr 1 poolPartition 0
+[00:03:56] 		 exception 0x0000004ee386d000
+[00:03:56] SaltyNX: debug event 4, passing...
+[00:03:56] SaltyNX: PID 148 svcGetDebugevent: end of events...
+[00:03:43] .text to 66b1604000, .data to 66b27ab000
+[00:03:56] SaltyNX: BID: FE941ED5BA14BE5D
+[00:03:55] SaltyNX: accepting service calls
+[00:03:55] SaltyNX: session 1803f3 being handled
+[00:03:55] SaltyNX: [serviceLoadELF] proc handle 1883f2, heap 3a39a00000, path saltynx_core.elf
+[00:03:55] SaltyNX: [serviceLoadELF] loading sdmc:/SaltySD/saltynx_core.elf, size 0x25920
+[00:03:43] SaltyNX: load_elf_proc query mapping 0x3a39c00000, addr: 0x3a39a00000, Perm: 3, size: 0x400000
+[00:03:43] SaltyNX: load_elf_proc loaded ELF to buffer.
+[00:03:43] SaltyNX: Found free address space at 66b1400000, size 38000
+[00:03:55] SaltyNX: [serviceLoadELF] new_addr to 66b1400000, 0
+[00:03:55] SaltyNX: [serviceEndSession] 
+[00:03:55] SaltyNX: done accepting service calls
+[00:03:55] SaltyNX: accepting service calls
+[00:03:55] SaltyNX: session 1983f3 being handled
+[00:03:55] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x7091758f.
+[00:03:55] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:55] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x59b5fe2a.
+[00:03:55] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 38 B.
+[00:03:55] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:55] SaltyNX: [serviceRestoreBootstrapCode] 
+[00:03:55] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x302059cd.
+[00:03:55] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:55] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x4e8694c2.
+[00:03:55] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 61 B.
+[00:03:55] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:55] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x6e7b6440.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x116e0fc1.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 57 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceMemcpy] memcpy(66b30fe41c, 66b1423550, 10)
+[00:03:56] SaltyNX: [serviceMemcpy] memcpy(66b30fe5ec, 66b1423550, 10)
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x38479acf.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x23252c52.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 54 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardOpendir] Opened dir: sdmc:/SaltySD/patches/, DirId: 0x17e96171
+[00:03:56] SaltyNX: [serviceSdcardReaddir] DirId: 0x1740443700, errno: 0
+[00:03:56] SaltyNX: [serviceSdcardClosedir] DirId: 0x1740443700, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x40c9fe6a.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x49067a72.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 69 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardOpendir] Bad dir: sdmc:/SaltySD/patches/0100152000022000/, errno: 2.
+[00:03:56] SaltyNX: [serviceException] 
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x561f3b29.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x4fd30023.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 41 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardOpendir] Opened dir: sdmc:/SaltySD/plugins/, DirId: 0x7d89db0
+[00:03:56] SaltyNX: [serviceSdcardReaddir] DirId: 0x1740443700, no error
+[00:03:56] SaltyNX: [serviceSdcardReaddir] DirId: 0x1740443700, errno: 0
+[00:03:56] SaltyNX: [serviceSdcardClosedir] DirId: 0x1740443700, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x46755a5b.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x482fa51b.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 58 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardOpendir] Bad dir: sdmc:/SaltySD/plugins/0100152000022000/, errno: 2.
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x44aeb1a3.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0xd57872a.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 38 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceCheckIfSharedMemoryAvailable] size: 1
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x4cbd7e82.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x235e9488.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 46 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceGetSharedMemoryHandle] 
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x2bd25b44.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x5ec1cc19.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 44 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x7b5f2b0e.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x27de5630.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 14 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x302d71f2.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x47a3556b.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 36 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceCheckIfSharedMemoryAvailable] size: 310
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x3c7f6aa3.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7c55d8ae.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 17 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x512b300f.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x2d5e8a84.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 24 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x2fbe7dcd.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x2b847f49.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 77 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceMemcpy] memcpy(66b24c39c8, 28b1a2c8d8, 18)
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x57b6d6.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x5df6e283.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 75 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceMemcpy] memcpy(66b2cfaf80, 28b1a2c8d8, 18)
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x4b941d42.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x4cc54c17.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 115 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceMemcpy] memcpy(66b24c0008, 28b1a2c8d8, 18)
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x7044ffe7.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x274a1fa3.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 113 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceMemcpy] memcpy(66b34fad40, 28b1a2c8d8, 18)
+[00:03:56] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/flags/blockfilestats.flag, errno: 2.
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x1b18039.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7fdf0c93.
+[00:03:56] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 118 B.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:56] SaltyNX: [serviceMemcpy] memcpy(66b34e6b08, 28b1a2c8d8, 18)
+[00:03:56] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/flags/blockfilestats.flag, errno: 2.
+[00:03:56] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/flags/nvncounters.flag, errno: 2.
+[00:03:56] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/plugins/FPSLocker/0100152000022000.dat, errno: 2.
+[00:03:56] SaltyNX: [serviceGetBID] PID: 148
+[00:03:56] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x446d8073.
+[00:03:56] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x6a50abc6.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 36 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x76e04ee6.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x611ef1.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 30 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/plugins/FPSLocker/patches/0100152000022000/FE941ED5BA14BE5D.bin, errno: 2.
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x39b7048a.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x5cfaa8fe.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 113 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x26faac21.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x77e1241b.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 27 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0xe63c119.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x29ae8b7e.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 17 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceCheckIfSharedMemoryAvailable] size: 7
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0xf90f8e4.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x755b6b75.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 33 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x70c23c8e.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x72f7fcc6.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 42 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/plugins/ReverseNX-RT/0100152000022000.dat, errno: 2.
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x205c9587.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x43af2085.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 126 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x7abebc58.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x1f1b54dd.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 94 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b24c2120, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x340c3024.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7b7620e6.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 90 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b24c2168, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x75214e9d.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x5aec5e5d.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 88 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b24c2150, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0xcad3244.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x587f6040.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 112 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b24bfdc8, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x6e6aa68b.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x1fd3905a.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 110 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b34ea6c0, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x22c4f223.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7c06ba5e.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 109 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b24c09c8, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0xcf05da9.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x36745def.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 107 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b2cf0f78, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x7325d2ec.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x775cfe3f.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 107 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b34ea6a8, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0xe223791.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7502199c.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 144 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b34ea750, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x312fab7a.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x6559aa41.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 138 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b24bf930, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0xbbadf17.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x2a16db18.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 136 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b34eaa20, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x985972.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x75c9aeeb.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 98 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b24bf960, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x4ea0c606.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x1a637bf2.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 96 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceMemcpy] memcpy(66b34ea9c0, 28b1a2ccd8, 18)
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0xdd45f91.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x227b64ee.
+[00:03:57] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 30 B.
+[00:03:57] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:03:57] SaltyNX: [serviceEndSession] 
+[00:03:57] SaltyNX: done accepting service calls
+[00:05:23] SaltyNX: accepting service calls
+[00:05:23] SaltyNX: session 2503f3 being handled
+[00:05:23] SaltyNX: [serviceGetSharedMemoryHandle] 
+[00:05:23] SaltyNX: [serviceEndSession] 
+[00:05:23] SaltyNX: done accepting service calls
+[00:05:34] SaltyNX: PID 149 is not allowing debugging, error 0xfa01, aborting...
+[00:05:34] SaltyNX: PID 150 is not allowing debugging, error 0xfa01, aborting...
+[00:05:48] SaltyNX: PID 151 is not allowing debugging, error 0xfa01, aborting...
+[00:06:00] SaltyNX: PID 152 is not allowing debugging, error 0xfa01, aborting...
+[00:06:03] SaltyNX: found valid CreateProcess event:
+[00:06:03] 		 tid 0100152000022000 pid 153
+[00:06:03] 		 name Application
+[00:06:03] 		 isA64 1 addrSpace 3 enableDebug 1
+[00:06:03] 		 enableAslr 1 poolPartition 0
+[00:06:03] 		 exception 0x00000036e0795000
+[00:06:03] SaltyNX: debug event 4, passing...
+[00:06:03] SaltyNX: PID 153 svcGetDebugevent: end of events...
+[00:05:50] .text to 2121e04000, .data to 2122fab000
+[00:06:04] SaltyNX: BID: FE941ED5BA14BE5D
+[00:06:03] SaltyNX: accepting service calls
+[00:06:03] SaltyNX: session 2683f3 being handled
+[00:06:03] SaltyNX: [serviceLoadELF] proc handle 2703f2, heap 4ddac00000, path saltynx_core.elf
+[00:06:03] SaltyNX: [serviceLoadELF] loading sdmc:/SaltySD/saltynx_core.elf, size 0x25920
+[00:05:50] SaltyNX: load_elf_proc query mapping 0x4ddae00000, addr: 0x4ddac00000, Perm: 3, size: 0x400000
+[00:05:50] SaltyNX: load_elf_proc loaded ELF to buffer.
+[00:05:50] SaltyNX: Found free address space at 2121c00000, size 38000
+[00:06:03] SaltyNX: [serviceLoadELF] new_addr to 2121c00000, 0
+[00:06:03] SaltyNX: [serviceEndSession] 
+[00:06:03] SaltyNX: done accepting service calls
+[00:06:03] SaltyNX: accepting service calls
+[00:06:03] SaltyNX: session 2803f3 being handled
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x121412b8.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x42967a6c.
+[00:06:03] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 38 B.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceRestoreBootstrapCode] 
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x4bb1e6be.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x1c2099d9.
+[00:06:03] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 61 B.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x500f7b34.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7e0d3df7.
+[00:06:03] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 57 B.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceMemcpy] memcpy(21238fe41c, 2121c23550, 10)
+[00:06:03] SaltyNX: [serviceMemcpy] memcpy(21238fe5ec, 2121c23550, 10)
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x44ac5234.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x142fef23.
+[00:06:03] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 54 B.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardOpendir] Opened dir: sdmc:/SaltySD/patches/, DirId: 0x690ae306
+[00:06:03] SaltyNX: [serviceSdcardReaddir] DirId: 0x1740443700, errno: 0
+[00:06:03] SaltyNX: [serviceSdcardClosedir] DirId: 0x1740443700, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x6849ed7a.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x25d23d33.
+[00:06:03] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 69 B.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardOpendir] Bad dir: sdmc:/SaltySD/patches/0100152000022000/, errno: 2.
+[00:06:03] SaltyNX: [serviceException] 
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x426b1e70.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x40e4297.
+[00:06:03] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 41 B.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardOpendir] Opened dir: sdmc:/SaltySD/plugins/, DirId: 0x2e03d8d7
+[00:06:03] SaltyNX: [serviceSdcardReaddir] DirId: 0x1740443700, no error
+[00:06:03] SaltyNX: [serviceSdcardReaddir] DirId: 0x1740443700, errno: 0
+[00:06:03] SaltyNX: [serviceSdcardClosedir] DirId: 0x1740443700, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x274ee452.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x346c612.
+[00:06:03] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 58 B.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardOpendir] Bad dir: sdmc:/SaltySD/plugins/0100152000022000/, errno: 2.
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x5e36b2f5.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x74a7347e.
+[00:06:03] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 38 B.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceCheckIfSharedMemoryAvailable] size: 1
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x742072d2.
+[00:06:03] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:03] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x20f8ff94.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 46 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceGetSharedMemoryHandle] 
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x3d044295.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0xc75db66.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 44 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x22fefe06.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x63d6e123.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 14 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x6c52f559.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x13de80f2.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 36 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceCheckIfSharedMemoryAvailable] size: 310
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x46ac426f.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x6a4677fa.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 17 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x1203eee7.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x767bb4ec.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 24 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x22e2e0a9.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x467c6ee6.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 77 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceMemcpy] memcpy(2122cc39c8, 225993f8d8, 18)
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x3e0e58ab.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x665297aa.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 75 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceMemcpy] memcpy(21234faf80, 225993f8d8, 18)
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x3a5839.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x773336bf.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 115 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceMemcpy] memcpy(2122cc0008, 225993f8d8, 18)
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x5df1fba.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0xd20d75f.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 113 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceMemcpy] memcpy(2123cfad40, 225993f8d8, 18)
+[00:06:04] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/flags/blockfilestats.flag, errno: 2.
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x5f6694a5.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x2c86c8b1.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 118 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceMemcpy] memcpy(2123ce6b08, 225993f8d8, 18)
+[00:06:04] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/flags/blockfilestats.flag, errno: 2.
+[00:06:04] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/flags/nvncounters.flag, errno: 2.
+[00:06:04] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/plugins/FPSLocker/0100152000022000.dat, errno: 2.
+[00:06:04] SaltyNX: [serviceGetBID] PID: 153
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x5de2d8ae.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7fdd8124.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 36 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x2ad45a81.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x14cc3961.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 30 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/plugins/FPSLocker/patches/0100152000022000/FE941ED5BA14BE5D.bin, errno: 2.
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x7dc30b8a.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x521b4c78.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 113 B.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x11305745.
+[00:06:04] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:04] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x4817e9e4.
+[00:06:04] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 27 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x17e9263c.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x9effe47.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 17 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceCheckIfSharedMemoryAvailable] size: 7
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x4cbe2c78.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7756e639.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 33 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x35f58c47.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x14b17cc7.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 42 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Bad file: sdmc:/SaltySD/plugins/ReverseNX-RT/0100152000022000.dat, errno: 2.
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x37b9759d.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x455e81d9.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 126 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x476e8c4a.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7b6797af.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 94 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceMemcpy] memcpy(2122cc2120, 225993fcd8, 18)
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x3bcbfd61.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0xc2cb017.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 90 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceMemcpy] memcpy(2122cc2168, 225993fcd8, 18)
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x268fbb3b.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x4681c3bd.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 88 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceMemcpy] memcpy(2122cc2150, 225993fcd8, 18)
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0xc7fe26a.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x80778f5.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 112 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceMemcpy] memcpy(2122cbfdc8, 225993fcd8, 18)
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x2fcbc7d0.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x13544.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 110 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceMemcpy] memcpy(2123cea6c0, 225993fcd8, 18)
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x1e63235b.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x4272e991.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 109 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceMemcpy] memcpy(2122cc09c8, 225993fcd8, 18)
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x2930a9cd.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x78ab7f5f.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 107 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceMemcpy] memcpy(21234f0f78, 225993fcd8, 18)
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x24308d75.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x1b5a7b5f.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 107 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceMemcpy] memcpy(2123cea6a8, 225993fcd8, 18)
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x49202f41.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x2103fbb8.
+[00:06:05] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 144 B.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceMemcpy] memcpy(2123cea750, 225993fcd8, 18)
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x713585d5.
+[00:06:05] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:05] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0xd94438.
+[00:06:06] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 138 B.
+[00:06:06] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:06] SaltyNX: [serviceMemcpy] memcpy(2122cbf930, 225993fcd8, 18)
+[00:06:06] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x30d8d007.
+[00:06:06] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:06] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x289c95fe.
+[00:06:06] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 136 B.
+[00:06:06] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:06] SaltyNX: [serviceMemcpy] memcpy(2123ceaa20, 225993fcd8, 18)
+[00:06:06] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x48d313d8.
+[00:06:06] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:06] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x25a5cd5a.
+[00:06:06] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 98 B.
+[00:06:06] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:06] SaltyNX: [serviceMemcpy] memcpy(2122cbf960, 225993fcd8, 18)
+[00:06:06] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x391204b1.
+[00:06:06] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:06] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x4170b52f.
+[00:06:06] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 96 B.
+[00:06:06] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:06] SaltyNX: [serviceMemcpy] memcpy(2123cea9c0, 225993fcd8, 18)
+[00:06:06] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/flags/log.flag, FileId: 0x1de77846.
+[00:06:06] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:06] SaltyNX: [serviceSdcardFopen] Opened file: sdmc:/SaltySD/saltynx_core.log, FileId: 0x7f31c5bc.
+[00:06:06] SaltyNX: [serviceSdcardFwrite] FileId: 0x17404423a8, written: 30 B.
+[00:06:06] SaltyNX: [serviceSdcardFclose] FileId: 0x17404423a8, res: 0
+[00:06:06] SaltyNX: [serviceEndSession] 
+[00:06:06] SaltyNX: done accepting service calls
