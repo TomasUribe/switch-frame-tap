@@ -95,6 +95,7 @@ namespace ams::mitm::applet {
     extern bool g_live_armed;     /* M86: stream whenever a viewer and a game are there */
     extern bool g_nv1080_armed;   /* M90: 1080p encoder probe (frame 0, GOP, timed) */
     extern u32  g_nv1080_n;
+    extern bool g_anyfw_armed;    /* M98: capture on firmware this build was not tested on */
     extern bool g_cap720_armed;   /* M93: stream 1080p content scaled to 720p (the M86-M89 behaviour) */
     extern bool g_nvp_armed;      /* M83: IDR + P frames probe */
     extern u32  g_nvp_n;
@@ -127,6 +128,25 @@ namespace ams::mitm::applet {
     };
     constexpr u32 PresentRingSize = 8;
     extern PresentRec g_present_ring[PresentRingSize];
+
+    /* M97: the overlay's view of live mode (sftap service). g_stream_enabled
+     * is the overlay's switch: off, live mode ends any session, detaches from
+     * the game and stops probing USB until it is turned on again. */
+    enum LiveState : u32 {
+        LiveState_Starting   = 0,   /* module up; live mode not entered yet (wait=, first game) */
+        LiveState_Off        = 1,   /* turned off from the overlay */
+        LiveState_WaitViewer = 2,
+        LiveState_WaitGame   = 3,
+        LiveState_Streaming  = 4,
+        LiveState_Wedged     = 5,   /* an engine stalled: no streaming until reboot */
+        LiveState_NotArmed   = 6,   /* "live" is not in the arm file */
+        LiveState_Unsupported = 7,  /* M98: untested firmware; allow_untested_firmware=1 overrides */
+    };
+    extern std::atomic<bool> g_stream_enabled;
+    /* M98: new settings arrived (ReloadConfig): end the session, restart with them */
+    extern std::atomic<bool> g_reconfig_request;
+    extern std::atomic<u32>  g_live_state;
+    extern std::atomic<u32>  g_live_w, g_live_h, g_live_fps_x10, g_live_game_fps_x10, g_live_sessions;
 
     /* Spawn the worker. The VIC probe MUST NOT run on the binder dispatch
      * thread: doing so blocks the game's queueBuffer, which wedges vi, which

@@ -23,6 +23,12 @@ static void ExpectNumber(const char *file, const char *key, unsigned def, unsign
     if (got != want) { std::printf("FAIL Number(\"%s\", \"%s\", %u) = %u, want %u\n", file, key, def, got, want); ++g_fail; }
 }
 
+static void ExpectRelease(const char *ini, const char *want) {
+    char out[256];
+    const size_t n = af::BuildReleaseArm(ini, std::strlen(ini), out, sizeof(out));
+    if (n == 0 || std::strcmp(out, want) != 0) { std::printf("FAIL BuildReleaseArm(\"%s\") = \"%s\", want \"%s\"\n", ini, n ? out : "", want); ++g_fail; }
+}
+
 int main() {
     /* M75's failure, and its whole class */
     ExpectContains("vic grcscan wait=90", "grc", false);
@@ -128,6 +134,22 @@ int main() {
         if (af::Contains(buf, sizeof(buf), "clk")) { std::printf("FAIL: token after NUL was parsed\n"); ++g_fail; }
         if (!af::Contains(buf, sizeof(buf), "vic")) { std::printf("FAIL: token before NUL missed\n"); ++g_fail; }
     }
+
+    /* M98: the release config */
+    ExpectRelease("", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
+    ExpectRelease("# comment\nquality = medium\n", "vic exec dbg usb live nvqp=24 nvgop=60 wait=20");
+    ExpectRelease("[stream]\r\nquality=low\r\nkeyframe_interval = 30\r\nmax_resolution = 720\r\n", "vic exec dbg usb live nvqp=28 nvgop=30 wait=20 cap720");
+    ExpectRelease("quality=high\nqp=22\nstart_delay=5\n", "vic exec dbg usb live nvqp=22 nvgop=60 wait=5");
+    ExpectRelease("qp=99\nkeyframe_interval=0\nstart_delay=-3\nmax_resolution=4k\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
+    ExpectRelease("; quality=low\n#qp=30\nallow_untested_firmware = 1", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 anyfw");
+    ExpectRelease("myquality=low\nquality_x=low\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
+    /* M99: screenshots */
+    ExpectRelease("screenshot = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0");
+    ExpectRelease("screenshot = 1\nscreenshot_buttons = 2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=2");
+    ExpectRelease("screenshot = 0\nscreenshot_buttons = 2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
+    ExpectRelease("screenshot = 1\nscreenshot_buttons = 9\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0");
+    /* a comment word must not arm a flag the way an arm-file token would */
+    ExpectRelease("# grc dump nvp\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
 
     std::printf("%s (%d failure%s)\n", g_fail == 0 ? "OK" : "FAILED", g_fail, g_fail == 1 ? "" : "s");
     return g_fail == 0 ? 0 : 1;

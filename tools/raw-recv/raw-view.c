@@ -22,6 +22,10 @@
  *   ./raw-view --low-latency   # one decode thread, frames out immediately
  *   ./raw-view --threads 2     # N frame threads: N-1 frames of decoder delay (default 2;
  *                              # 0 = one per core, which cost ~250 ms in M84 Run J)
+ *   ./raw-view --app           # M97: the desktop launcher's mode - the window opens at
+ *                              # once, waits for the Switch, reconnects whenever it comes
+ *                              # back, and only closes when you close it. F11 or a
+ *                              # double-click toggles fullscreen.
  *
  * Decoding: an IDR-only 720p60 stream at QP 20 is ~150-170 Mbps of CABAC,
  * which one core may not keep up with (a 4-vCPU cloud box: 32 ms/frame on one
@@ -58,6 +62,8 @@ typedef struct {
 #pragma pack(pop)
 
 static volatile sig_atomic_t g_quit = 0;
+static int g_app = 0;               /* --app: survive the console leaving the bus */
+static int g_lost = 0;              /* --app: the console left; wait for it again */
 static void on_sigint(int s) { (void)s; g_quit = 1; }
 static libusb_device_handle *g_usb = NULL;
 static FILE *g_in = NULL;           /* --file */
@@ -83,7 +89,7 @@ static int read_exact(uint8_t *dst, size_t n, int ms)
         }
         /* NO_DEVICE means the console left the bus (powered off, rebooted):
          * exit cleanly instead of spinning on errors */
-        if (rc == LIBUSB_ERROR_NO_DEVICE) { g_quit = 1; return -3; }
+        if (rc == LIBUSB_ERROR_NO_DEVICE) { if (g_app) g_lost = 1; else g_quit = 1; return -3; }
         fprintf(stderr, "bulk read: %s\n", libusb_error_name(rc));
         return -1;
     }
@@ -135,6 +141,50 @@ static void h264_close(h264_t *d)
 }
 #endif
 
+/* --app: window events while there is nothing to draw (and between frames) */
+static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
+{
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) {
+        if (e.type == SDL_QUIT) g_quit = 1;
+        else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) {
+            /* leave fullscreen first; Esc in a window closes it */
+            if (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) SDL_SetWindowFullscreen(win, 0);
+            else g_quit = 1;
+        } else if ((e.type == SDL_KEYDOWN && (e.key.keysym.sym == SDLK_F11 || e.key.keysym.sym == SDLK_f)) ||
+                   (e.type == SDL_MOUSEBUTTONDOWN && e.button.clicks == 2)) {
+            const int fs = (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+            SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+        } else if (e.type == SDL_WINDOWEVENT) {
+            /* resized or uncovered with no new frame: draw the last one again */
+            SDL_RenderClear(ren);
+            if (tex) SDL_RenderCopy(ren, tex, NULL, NULL);
+            SDL_RenderPresent(ren);
+        }
+    }
+}
+
+/* --app: open and claim the console, keeping the window alive meanwhile */
+static libusb_device_handle *app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
+{
+    SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)");
+    for (;;) {
+        app_events(win, ren, tex);
+        if (g_quit) return NULL;
+        libusb_device_handle *h = libusb_open_device_with_vid_pid(ctx, SFT_VID, SFT_PID);
+        if (h) {
+            libusb_set_auto_detach_kernel_driver(h, 1);
+            if (libusb_claim_interface(h, SFT_IFACE) == 0) {
+                SDL_SetWindowTitle(win, "Switch Frame Tap - connected, waiting for the picture");
+                return h;
+            }
+            libusb_close(h);
+            SDL_SetWindowTitle(win, "Switch Frame Tap - the Switch is connected but cannot be opened (udev rule installed?)");
+        }
+        SDL_Delay(250);
+    }
+}
+
 int main(int argc, char **argv)
 {
     int swap_rb = 0, scale = 1, headless = 0, low_latency = 0, threads = 2;
@@ -150,6 +200,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--headless")) headless = 1;
         else if (!strcmp(argv[i], "--low-latency")) low_latency = 1;
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc) threads = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--app")) g_app = 1;
         else { fprintf(stderr, "unknown option %s (see the comment at the top of raw-view.c)\n", argv[i]); return 2; }
     }
     if (scale < 1) scale = 1;
@@ -157,7 +208,24 @@ int main(int argc, char **argv)
     signal(SIGINT, on_sigint);
 
     libusb_context *ctx = NULL;
-    if (file) {
+    SDL_Window *win = NULL; SDL_Renderer *ren = NULL; SDL_Texture *tex = NULL;
+    if (g_app && !file) {
+        headless = 0;
+        if (libusb_init(&ctx) != 0) { fprintf(stderr, "libusb_init failed\n"); return 1; }
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+        SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
+        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+        win = SDL_CreateWindow("Switch Frame Tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                               1280, 720, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+        ren = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED) : NULL;
+        if (!ren) { fprintf(stderr, "SDL window: %s\n", SDL_GetError()); return 1; }
+        SDL_RenderSetLogicalSize(ren, 1280, 720);
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+        SDL_RenderClear(ren);
+        SDL_RenderPresent(ren);
+        g_usb = app_wait_device(ctx, win, ren, NULL);
+        if (!g_usb) { SDL_Quit(); libusb_exit(ctx); return 0; }
+    } else if (file) {
         g_in = fopen(file, "rb");
         if (!g_in) { perror(file); return 1; }
     } else {
@@ -191,7 +259,6 @@ int main(int argc, char **argv)
     if (!dec_ok) fprintf(stderr, "libavcodec H.264 decoder unavailable - H.264 packets will be skipped\n");
 #endif
 
-    SDL_Window *win = NULL; SDL_Renderer *ren = NULL; SDL_Texture *tex = NULL;
     uint32_t W = 0, H = 0, fmt = 0;
     uint8_t *payload = NULL; size_t cap = 0;
     uint8_t *rgb = NULL; size_t rgbcap = 0;   /* unpacked RGB24 for packed420 */
@@ -209,7 +276,20 @@ int main(int argc, char **argv)
     int64_t out_kind = -1;
 
     while (!g_quit && (max_frames == 0 || packets < max_frames)) {
-        if (!headless && win) {
+        if (g_app && g_lost) {
+            /* the Switch left the bus (rebooted, cable out): keep the window */
+            libusb_release_interface(g_usb, SFT_IFACE);
+            libusb_close(g_usb);
+            g_usb = NULL; g_lost = 0;
+            fprintf(stderr, "\nthe Switch disconnected - waiting for it\n");
+            g_usb = app_wait_device(ctx, win, ren, tex);
+            if (!g_usb) break;
+            have_kind = 0;
+            continue;
+        }
+        if (g_app) {
+            app_events(win, ren, tex);
+        } else if (!headless && win) {
             SDL_Event e;
             while (SDL_PollEvent(&e)) {
                 if (e.type == SDL_QUIT) g_quit = 1;
@@ -218,7 +298,7 @@ int main(int argc, char **argv)
         }
 
         sft_hdr_t hdr;
-        int r = read_exact((uint8_t *)&hdr, sizeof(hdr), 1000);
+        int r = read_exact((uint8_t *)&hdr, sizeof(hdr), g_app ? 100 : 1000);
         if (r <= 0) continue;
         const Uint64 t_hdr = SDL_GetPerformanceCounter();
         if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); continue; }
@@ -284,6 +364,7 @@ int main(int argc, char **argv)
             continue;
         }
 
+        if (g_app && frames == 1) { t_first = SDL_GetPerformanceCounter(); t_prev = t_first; }
         const uint32_t want_fmt = is_h264 ? SDL_PIXELFORMAT_IYUV
                                 : packed420 ? SDL_PIXELFORMAT_RGB24
                                 : (swap_rb ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_ABGR8888);
@@ -353,7 +434,7 @@ int main(int argc, char **argv)
         if ((frames % 30) == 0) {
             double secs = (double)(now - t_first) / (double)freq;
             char title[200];
-            snprintf(title, sizeof(title), "switch-frame-tap  %ux%u  %.1f fps  %.0f Mbps  (worst gap %.1f ms, %ld lost)  pc %.1f ms  console %.1f ms",
+            snprintf(title, sizeof(title), "Switch Frame Tap  %ux%u  %.1f fps  %.0f Mbps  (worst gap %.1f ms, %ld lost)  pc %.1f ms  console %.1f ms",
                      W, H, frames / secs, (double)bytes * 8.0 / 1e6 / secs, worst_gap, lost,
                      lat_n ? lat_sum / lat_n : 0.0, age_n ? age_sum / age_n : 0.0);
             SDL_SetWindowTitle(win, title);

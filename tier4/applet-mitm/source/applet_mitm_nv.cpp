@@ -42,6 +42,7 @@
 #include "nvenc_grc_p.h"
 #include "nvenc_1080p.h"
 #include "applet_mitm_dbgpump.hpp"
+#include "applet_mitm_shot.hpp"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -77,6 +78,7 @@ namespace ams::mitm::applet {
     constinit bool g_live_armed    = false;
     constinit bool g_nv1080_armed  = false;
     constinit bool g_cap720_armed  = false;
+    constinit bool g_anyfw_armed   = false;
     constinit u32  g_nv1080_n      = 120;
     constinit bool g_nvp_armed     = false;
     constinit u32  g_nvp_n         = 30;
@@ -857,7 +859,9 @@ namespace ams::mitm::applet {
         void TryNvencRealFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                                 u32 cmd_handle, u32 vsyncpt, u32 cfg_addr);
         /* M86: why a stream ended - live mode decides what to wait for next */
-        enum class StreamEnd { Done, GameGone, ViewerGone, EngineStall, Failed, Reconfigure };
+        enum class StreamEnd { Done, GameGone, ViewerGone, EngineStall, Failed, Reconfigure, Disabled };
+        /* M99: attach, read one finished frame, write it as a PNG, detach */
+        bool ShotStandalone();
         StreamEnd TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                                  u32 cmd_handle, u32 vsyncpt, u32 cfg_addr, bool live = false,
                                  const GameSurface *geo = nullptr);
@@ -1270,6 +1274,10 @@ namespace ams::mitm::applet {
     constinit std::atomic<u64> g_queue_fence[4] = {};
     constinit std::atomic<u32> g_queue_seq{0};
     constinit PresentRec g_present_ring[PresentRingSize] = {};
+    constinit std::atomic<bool> g_stream_enabled{true};
+    constinit std::atomic<bool> g_reconfig_request{false};
+    constinit std::atomic<u32>  g_live_state{LiveState_Starting};
+    constinit std::atomic<u32>  g_live_w{0}, g_live_h{0}, g_live_fps_x10{0}, g_live_game_fps_x10{0}, g_live_sessions{0};
 
     void CaptureGameSurface(const NvGraphicBufferRaw *gb, s32 slot_arg) {
         if (gb == nullptr || gb->num_planes == 0) { return; }
@@ -2342,16 +2350,41 @@ namespace ams::mitm::applet {
 
         [[noreturn]] void RunLive(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr) {
             LogLine("   ==== LIVE MODE (M86): streaming whenever a viewer is reading and a game is running ====");
+            /* M98: a release install captures only on the firmware it was
+             * tested on (22.x); the debug reads and engine jobs assume it */
+            {
+                const u32 v = hosversionGet();
+                if (g_release_mode && !g_anyfw_armed && HOSVER_MAJOR(v) != 22) {
+                    g_live_state.store(LiveState_Unsupported, std::memory_order_relaxed);
+                    LogLine("   live: firmware %u.%u.%u is untested (this build: 22.x) - not streaming. allow_untested_firmware = 1 in config.ini overrides.",
+                            HOSVER_MAJOR(v), HOSVER_MINOR(v), HOSVER_MICRO(v));
+                    VicStage("live:untested_fw");
+                    for (;;) { os::SleepThread(TimeSpan::FromSeconds(3600)); }
+                }
+            }
             u64 skip_pid = 0;          /* a game whose swapchain was not found: wait for another */
             bool said_wait_viewer = false, said_wait_game = false;
             u32 sessions = 0;
+            bool said_off = false;
             for (;;) {
                 if (g_engine_wedged) {
+                    g_live_state.store(LiveState_Wedged, std::memory_order_relaxed);
                     VicStage("live:engine_wedged");
                     LogLine("   live: the engine is wedged - no more streaming this boot");
                     for (;;) { os::SleepThread(TimeSpan::FromSeconds(3600)); }
                 }
+                /* M99: a screenshot while not streaming: attach just for it */
+                if (TakeShotRequest()) { static_cast<void>(ShotStandalone()); }
+                /* M97: switched off from the overlay - not even a USB probe */
+                if (!g_stream_enabled.load(std::memory_order_relaxed)) {
+                    g_live_state.store(LiveState_Off, std::memory_order_relaxed);
+                    if (!said_off) { LogLine("   live: turned off (overlay)"); VicStage("live:off"); said_off = true; }
+                    os::SleepThread(TimeSpan::FromMilliSeconds(250));
+                    continue;
+                }
+                if (said_off) { LogLine("   live: turned on (overlay)"); said_off = false; said_wait_viewer = said_wait_game = false; }
                 if (!UsbViewerPresent(300)) {
+                    g_live_state.store(LiveState_WaitViewer, std::memory_order_relaxed);
                     if (!said_wait_viewer) { LogLine("   live: waiting for a viewer (raw-view) to read the stream"); VicStage("live:no_viewer"); said_wait_viewer = true; }
                     os::SleepThread(TimeSpan::FromMilliSeconds(700));
                     continue;
@@ -2367,6 +2400,7 @@ namespace ams::mitm::applet {
                 }
                 const bool presenting = g_queue_count.load(std::memory_order_relaxed) != q_before;
                 if (!have_app || pid.value == skip_pid || !presenting) {
+                    g_live_state.store(LiveState_WaitGame, std::memory_order_relaxed);
                     if (!said_wait_game) {
                         LogLine("   live: viewer present; waiting for a game (%s)",
                                 !have_app ? "no application" : (pid.value == skip_pid ? "this game's swapchain was not found" : "not presenting"));
@@ -2379,6 +2413,7 @@ namespace ams::mitm::applet {
                 said_wait_game = false;
 
                 ++sessions;
+                g_live_sessions.store(sessions, std::memory_order_relaxed);
                 ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
                 const Result ra = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value);
                 if (R_FAILED(ra)) {
@@ -2427,15 +2462,18 @@ namespace ams::mitm::applet {
                     continue;
                 }
                 DebugPumpStart(dbg);
+                g_reconfig_request.store(false, std::memory_order_relaxed);   /* this session starts with the current settings */
                 const StreamEnd end = TryNvencStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true,
                                                      (geo.num_slots != 0 && geo.buf_size != 0) ? std::addressof(geo) : nullptr);
                 DebugPumpStop();
                 ::ams::svc::CloseHandle(dbg);
+                g_live_fps_x10.store(0, std::memory_order_relaxed);
+                g_live_game_fps_x10.store(0, std::memory_order_relaxed);
                 static const char *const names[] = { "done", "the game went away", "the viewer went away", "NVENC stalled", "failed",
-                                                     "the picture size changed - restarting at the new size" };
+                                                     "the picture size changed - restarting at the new size", "turned off from the overlay" };
                 LogLine("   live[%u]: session ended - %s; detached", sessions, names[static_cast<int>(end)]);
                 if (end == StreamEnd::Failed) { os::SleepThread(TimeSpan::FromSeconds(5)); }
-                else if (end != StreamEnd::Reconfigure) { os::SleepThread(TimeSpan::FromSeconds(1)); }
+                else if (end != StreamEnd::Reconfigure && end != StreamEnd::Disabled) { os::SleepThread(TimeSpan::FromSeconds(1)); }
             }
         }
 
@@ -5256,6 +5294,64 @@ namespace ams::mitm::applet {
             return L;
         }
 
+        /* ---- M99: screenshots ----------------------------------------------- */
+
+        /* what the session just read into g_ind_buf: the handheld corner, or
+         * the whole surface */
+        bool ShotFromSession(const NvfSession &s) {
+            const u32 w = s.corner ? NvfW : s.src.w, h = s.corner ? NvfH : s.src.h;
+            const size_t n = s.corner ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
+            return WriteShot(g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2);
+        }
+
+        bool ShotStandalone() {
+            ::ams::os::ProcessId pid{};
+            if (g_pmdmnt_rc != 0 || R_FAILED(::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid)))) {
+                ++g_shot_fail; LogLine("shot: no game is running"); return false;
+            }
+            GameSurface geo;
+            for (u32 tries = 0; tries < 10; ++tries) {
+                const u32 gen = g_game_surface.generation;
+                geo = g_game_surface;
+                if (gen == g_game_surface.generation) { break; }
+            }
+            if (geo.num_slots == 0 || geo.buf_size == 0) { ++g_shot_fail; LogLine("shot: this game's swapchain has not been seen"); return false; }
+            u32 top = 0;
+            for (u32 k = 0; k < geo.num_slots && k < 8; ++k) { if (geo.slot_offset[k] > top) { top = geo.slot_offset[k]; } }
+            const u64 want = static_cast<u64>(top) + geo.buf_size;
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            if (R_FAILED(::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value))) { ++g_shot_fail; LogLine("shot: could not attach to the game"); return false; }
+            u64 slot_base = 0;
+            const bool found = FindSwapchainBySize(dbg, want, std::addressof(slot_base));
+            ::ams::svc::DebugEventInfo ev;
+            for (u32 nev = 0; nev < 256 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg)); ++nev) { }
+            static_cast<void>(::ams::svc::ContinueDebugEvent(dbg, ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll, nullptr, 0));
+            bool ok = false;
+            if (!found) {
+                ++g_shot_fail; LogLine("shot: the swapchain was not found in the game's memory");
+            } else {
+                NvfSession s;
+                if (s.SetGeometry(geo, "shot")) {
+                    s.seen = g_queue_count.load(std::memory_order_acquire) - 1;   /* the latest present counts as new */
+                    u64 rn = 0; u32 sg = 0;
+                    if (s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) {
+                        /* M99b: the frame is in g_ind_buf - let go of the game
+                         * BEFORE the seconds of SD writing (Run AB held it) */
+                        ::ams::svc::CloseHandle(dbg);
+                        dbg = ::ams::svc::InvalidHandle;
+                        s.Decide("shot");
+                        ok = ShotFromSession(s);
+                    } else {
+                        ++g_shot_fail; LogLine("shot: %s", SlotReadFailure());
+                    }
+                } else {
+                    ++g_shot_fail;
+                }
+            }
+            if (dbg != ::ams::svc::InvalidHandle) { ::ams::svc::CloseHandle(dbg); }
+            return ok;
+        }
+
         /* ---- M83: the stream; M85: P frames in it ---------------------------
          *
          * game frame -> VIC (BT.709 NV12) -> NVENC -> USB bulk -> PC.
@@ -5337,6 +5433,11 @@ namespace ams::mitm::applet {
                     full1080 ? " (native 1080p: 1920x1088 coded, SPS-cropped)" : (s.corner ? " (the handheld picture, 1:1)" : " (the VIC scales the picture down)"),
                     pipe ? "; pipelined: the next frame is read while this one encodes" : "");
             if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvstream")) { VicStage("ns:open_FAILED"); return g_engine_wedged ? StreamEnd::EngineStall : StreamEnd::Failed; }
+            if (live) {
+                g_live_w.store(L.w, std::memory_order_relaxed);
+                g_live_h.store(L.h, std::memory_order_relaxed);
+                g_live_state.store(LiveState_Streaming, std::memory_order_relaxed);
+            }
             if (gop != 0) {
                 std::memcpy(s.x.a + L.off_setup_p, L.p_setup, 0x1000);
                 s.x.a[L.off_setup_p + SetupRcQpP] = qp;
@@ -5489,9 +5590,20 @@ namespace ams::mitm::applet {
                 if (collect(fl)) { hook_stop = true; }
                 return true;
             };
+            /* M97: the overlay's fps readout, refreshed about once a second */
+            u64 o_t0 = loop_t0;
+            u32 o_sent0 = 0, o_q0 = q0;
             for (u32 i = 0; i < nframes; ++i) {
                 u64 rn = 0; u32 sg = 0;
                 const u64 t0 = armTicksToNs(armGetSystemTick());
+                if (live && !g_stream_enabled.load(std::memory_order_relaxed)) { why = "turned off from the overlay"; end = StreamEnd::Disabled; break; }
+                if (live && g_reconfig_request.exchange(false, std::memory_order_relaxed)) { why = "new settings from the manager app"; end = StreamEnd::Reconfigure; break; }
+                if (live && t0 - o_t0 >= UINT64_C(1000000000)) {
+                    const u32 qn = g_queue_count.load(std::memory_order_relaxed);
+                    g_live_fps_x10.store(static_cast<u32>(static_cast<u64>(sent - o_sent0) * UINT64_C(10000000000) / (t0 - o_t0)), std::memory_order_relaxed);
+                    g_live_game_fps_x10.store(static_cast<u32>(static_cast<u64>(qn - o_q0) * UINT64_C(10000000000) / (t0 - o_t0)), std::memory_order_relaxed);
+                    o_t0 = t0; o_sent0 = sent; o_q0 = qn;
+                }
                 if (pipe && fl.active) {
                     s.idle_fn = [](void *p) -> bool { return (*static_cast<decltype(hook) *>(p))(); };
                     s.idle_ctx = std::addressof(hook);
@@ -5506,6 +5618,9 @@ namespace ams::mitm::applet {
                 const u32 k = pipe ? (i & 1) : 0;
                 if (!s.Vic("ns:vic", curs[k])) { why = "VIC did not complete"; end = StreamEnd::Failed; break; }
                 last_vic = i;
+                /* M99: a screenshot from the frame just read (the stream
+                 * pauses while the PNG is written, ~0.5 s) */
+                if (live && TakeShotRequest()) { static_cast<void>(ShotFromSession(s)); }
                 const u64 t2 = armTicksToNs(armGetSystemTick());
 
                 /* collect frame i-1 before touching the setups or the bitstream */
@@ -5600,7 +5715,7 @@ namespace ams::mitm::applet {
             /* never leave the channel with a job in flight (M74): collect it,
              * and send it too if the stream is still healthy */
             if (fl.active) {
-                if (end == StreamEnd::Done || end == StreamEnd::Reconfigure || end == StreamEnd::GameGone) {
+                if (end == StreamEnd::Done || end == StreamEnd::Reconfigure || end == StreamEnd::GameGone || end == StreamEnd::Disabled) {
                     static_cast<void>(collect(fl));
                 } else {
                     nvenc_pic_stat_s st = {};

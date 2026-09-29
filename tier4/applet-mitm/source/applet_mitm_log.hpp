@@ -27,6 +27,11 @@ namespace ams::mitm::applet {
     extern Stats g_stats;
 
     void LogInit();
+    /* M98: true when there is no test arm file (sdmc:/applet-mitm.armed):
+     * settings come from sdmc:/config/switch-frame-tap/config.ini and the log
+     * is sdmc:/config/switch-frame-tap/log.txt (capped) */
+    extern bool g_release_mode;
+    extern u32 g_arm_probe_rc;    /* GetEntryType(applet-mitm.armed) at boot */
     void LogLine(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
     /* breadcrumb: overwrite sdmc:/applet-mitm.last, then LogLine("-> what") */

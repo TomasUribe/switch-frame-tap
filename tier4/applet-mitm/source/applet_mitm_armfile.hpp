@@ -13,6 +13,7 @@
 #pragma once
 #include <cstddef>
 #include <cstring>
+#include <cstdio>
 
 namespace ams::mitm::applet::armfile {
 
@@ -59,6 +60,89 @@ namespace ams::mitm::applet::armfile {
             out = out * 10 + static_cast<unsigned>(v[i] - '0');
         }
         return out;
+    }
+
+
+    /* ---- M98: the release config -------------------------------------------
+     *
+     * A release install has no arm file; the module reads
+     * sdmc:/config/switch-frame-tap/config.ini instead - "key = value" lines,
+     * '#' or ';' comments, written by the manager app or by hand - and turns
+     * it into the same flag tokens the arm file uses, so everything after
+     * this point is shared with test runs:
+     *
+     *   quality           = high | medium | low     -> nvqp=20 | 24 | 28
+     *   qp                = 10..40                   (advanced; beats quality)
+     *   keyframe_interval = frames between IDRs      -> nvgop= (default 60)
+     *   max_resolution    = 1080 | 720               -> cap720 at 720
+     *   start_delay       = seconds after boot       -> wait= (default 20)
+     *   allow_untested_firmware = 1                  -> anyfw
+ *   screenshot        = 1                        -> shot     (M99)
+ *   screenshot_buttons = 0..3                    -> shotkey= (the combo preset)
+     *
+     * Unknown keys and malformed values are ignored: a bad config file must
+     * leave the defaults, never arm something else. */
+    inline bool IniValue(const char *ini, size_t n, const char *key, char *out, size_t cap) {
+        const size_t klen = std::strlen(key);
+        for (size_t i = 0; i < n; ) {
+            size_t e = i;
+            while (e < n && ini[e] != '\n' && ini[e] != '\0') { ++e; }
+            size_t a = i;
+            while (a < e && IsSpace(ini[a])) { ++a; }
+            if (a < e && ini[a] != '#' && ini[a] != ';' && ini[a] != '[') {
+                size_t eq = a;
+                while (eq < e && ini[eq] != '=') { ++eq; }
+                size_t kend = eq;
+                while (kend > a && IsSpace(ini[kend - 1])) { --kend; }
+                if (eq < e && kend - a == klen && std::memcmp(ini + a, key, klen) == 0) {
+                    size_t v = eq + 1, ve = e;
+                    while (v < ve && IsSpace(ini[v])) { ++v; }
+                    while (ve > v && IsSpace(ini[ve - 1])) { --ve; }
+                    if (ve - v >= cap) { return false; }
+                    std::memcpy(out, ini + v, ve - v);
+                    out[ve - v] = '\0';
+                    return true;
+                }
+            }
+            if (e < n && ini[e] == '\0') { break; }
+            i = e + 1;
+        }
+        return false;
+    }
+
+    inline bool ParseUnsigned(const char *s, unsigned *out) {
+        if (*s == '\0') { return false; }
+        unsigned v = 0;
+        for (; *s != '\0'; ++s) {
+            if (*s < '0' || *s > '9' || v > 100000u) { return false; }
+            v = v * 10 + static_cast<unsigned>(*s - '0');
+        }
+        *out = v;
+        return true;
+    }
+
+    /* the arm tokens for a release install; returns the length written */
+    inline size_t BuildReleaseArm(const char *ini, size_t n, char *out, size_t cap) {
+        unsigned qp = 20, gop = 60, wait = 20, u = 0;
+        unsigned shotkey = 0;
+        bool cap720 = false, anyfw = false, shot = false;
+        char v[32];
+        if (IniValue(ini, n, "quality", v, sizeof(v))) {
+            if (std::strcmp(v, "medium") == 0) { qp = 24; }
+            else if (std::strcmp(v, "low") == 0) { qp = 28; }
+        }
+        if (IniValue(ini, n, "qp", v, sizeof(v)) && ParseUnsigned(v, &u) && u >= 10 && u <= 40) { qp = u; }
+        if (IniValue(ini, n, "keyframe_interval", v, sizeof(v)) && ParseUnsigned(v, &u) && u >= 1 && u <= 250) { gop = u; }
+        if (IniValue(ini, n, "max_resolution", v, sizeof(v)) && std::strcmp(v, "720") == 0) { cap720 = true; }
+        if (IniValue(ini, n, "start_delay", v, sizeof(v)) && ParseUnsigned(v, &u) && u <= 600) { wait = u; }
+        if (IniValue(ini, n, "allow_untested_firmware", v, sizeof(v)) && std::strcmp(v, "1") == 0) { anyfw = true; }
+        if (IniValue(ini, n, "screenshot", v, sizeof(v)) && std::strcmp(v, "1") == 0) { shot = true; }
+        if (IniValue(ini, n, "screenshot_buttons", v, sizeof(v)) && ParseUnsigned(v, &u) && u <= 3) { shotkey = u; }
+        char shotbuf[24] = "";
+        if (shot) { std::snprintf(shotbuf, sizeof(shotbuf), " shot shotkey=%u", shotkey); }
+        const int w = std::snprintf(out, cap, "vic exec dbg usb live nvqp=%u nvgop=%u wait=%u%s%s%s",
+                                    qp, gop, wait, cap720 ? " cap720" : "", anyfw ? " anyfw" : "", shotbuf);
+        return (w < 0 || static_cast<size_t>(w) >= cap) ? 0 : static_cast<size_t>(w);
     }
 
 }

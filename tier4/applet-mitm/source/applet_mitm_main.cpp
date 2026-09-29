@@ -19,6 +19,8 @@
 #include "applet_mitm_nvjpg.hpp"
 #include "applet_mitm_armfile.hpp"
 #include "applet_mitm_clk.hpp"
+#include "applet_mitm_control.hpp"
+#include "applet_mitm_shot.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -186,9 +188,9 @@ namespace ams {
          * Nothing touches nvdrv/VIC unless sdmc:/applet-mitm.armed exists and
          * contains "vic". Default is a pure observer, i.e. M7d behaviour. */
         /* Called once per flag at boot; the file is a single short line. */
-        size_t ReadArmFile(char *buf, size_t cap) {
+        size_t ReadFileText(const char *path, char *buf, size_t cap) {
             fs::FileHandle f;
-            if (R_FAILED(fs::OpenFile(std::addressof(f), "sdmc:/applet-mitm.armed", fs::OpenMode_Read))) {
+            if (R_FAILED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Read))) {
                 return 0;
             }
             s64 fsz = 0;
@@ -215,19 +217,46 @@ namespace ams {
          * M76: ArmFileNumber still used `strstr` and carried the same bug:
          * "sweep stream sw=768" read `sw` out of "sweep" and fell back to 0.
          * Both now share applet_mitm_armfile.hpp, which has a host test. */
+        /* M98: read once. A test install has sdmc:/applet-mitm.armed; a
+         * release install has sdmc:/config/switch-frame-tap/config.ini (or
+         * nothing: the defaults), turned into the same tokens. */
+        constinit char g_arm_buf[512] = {};
+        constinit size_t g_arm_len = 0;
+        constinit bool g_arm_loaded = false;
+
+        void LoadArm() {
+            if (g_arm_loaded) { return; }
+            g_arm_loaded = true;
+            if (!mitm::applet::g_release_mode) {
+                g_arm_len = ReadFileText("sdmc:/applet-mitm.armed", g_arm_buf, sizeof(g_arm_buf));
+                return;
+            }
+            static char ini[4096];
+            const size_t n = ReadFileText("sdmc:/config/switch-frame-tap/config.ini", ini, sizeof(ini));
+            g_arm_len = mitm::applet::armfile::BuildReleaseArm(ini, n, g_arm_buf, sizeof(g_arm_buf));
+        }
+
         bool ArmFileContains(const char *keyword) {
-            char buf[256] = {};
-            const size_t n = ReadArmFile(buf, sizeof(buf));
-            return mitm::applet::armfile::Contains(buf, n, keyword);
+            LoadArm();
+            return mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, keyword);
+        }
+
+        /* the per-session settings, from the (re)loaded tokens */
+        void ApplySessionSettings() {
+            mitm::applet::g_nvstream_qp   = mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "nvqp", 20);
+            mitm::applet::g_nvstream_gop  = mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "nvgop", 0);
+            mitm::applet::g_cap720_armed  = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "cap720");
+            mitm::applet::g_anyfw_armed   = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "anyfw");
+            mitm::applet::g_shot_enabled.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "shot"));
+            mitm::applet::g_shot_combo.store(mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "shotkey", 0) & 3);
         }
 
         /* Numeric option out of the arm file: "wait=180" delays the probe so
          * there is time to actually get into a race before it fires. M39 probed
          * at ~50 s, which is still the title screen. */
         u32 ArmFileNumber(const char *key, u32 def) {
-            char buf[256] = {};
-            const size_t n = ReadArmFile(buf, sizeof(buf));
-            return mitm::applet::armfile::Number(buf, n, key, def);
+            LoadArm();
+            return mitm::applet::armfile::Number(g_arm_buf, g_arm_len, key, def);
         }
 
         /* Ask the kernel how big each physical memory pool is, rather than
@@ -625,7 +654,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm M96: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm M99c: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -655,8 +684,17 @@ namespace ams {
         mitm::applet::g_nv1080_armed  = ArmFileContains("nv1080");
         mitm::applet::g_nv1080_n      = ArmFileNumber("nv1080", 120);
         mitm::applet::g_cap720_armed  = ArmFileContains("cap720");
+        mitm::applet::g_anyfw_armed   = ArmFileContains("anyfw");
+        mitm::applet::g_shot_enabled.store(ArmFileContains("shot"));
+        mitm::applet::g_shot_combo.store(ArmFileNumber("shotkey", 0) & 3);
+        mitm::applet::LogLine("install type from GetEntryType(sdmc:/applet-mitm.armed) rc=0x%x", mitm::applet::g_arm_probe_rc);
+        mitm::applet::LogLine("%s: %.*s", mitm::applet::g_release_mode ? "release install, sdmc:/config/switch-frame-tap/config.ini ->" : "TEST install, sdmc:/applet-mitm.armed",
+                              static_cast<int>(g_arm_len), g_arm_buf);
         /* live is a mode of the H.264 stream: everything nvstream sets up, it needs */
         if (mitm::applet::g_live_armed) { mitm::applet::g_nvstream_armed = true; }
+        /* M97: the overlay's on/off switch, remembered on the SD */
+        mitm::applet::LoadStreamEnabled();
+        if (!mitm::applet::g_live_armed) { mitm::applet::g_live_state.store(mitm::applet::LiveState_NotArmed); }
         mitm::applet::g_nvp_armed     = ArmFileContains("nvp");
         mitm::applet::g_nvp_n         = ArmFileNumber("nvp", 30);
         mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);
@@ -733,6 +771,8 @@ namespace ams {
         os::StartThread(std::addressof(g_hb_thread));
         mitm::applet::LogMark("main:heartbeat_started");
 
+        mitm::applet::StartControlService();
+        mitm::applet::StartShotInput();   /* idle, and hid untouched, until screenshots are on */
         mitm::applet::StartVicWorker();
         /* M76: its own thread, so an mm:u or clkrst call that blocks can never
          * hold up vi:u registration below. Holds the clocks past the survey
@@ -767,6 +807,19 @@ namespace ams {
  * usb_session.cpp:250,256-258): PostBufferAsync -> wait CompletionEvent ->
  * eventClear -> GetReportData -> ParseReportData. */
 namespace ams::mitm::applet {
+
+    /* M98: sftap ReloadConfig. A release install only: a test install's arm
+     * file is read once at boot, as it always was. The stream thread reads
+     * these globals at the start of a session; the request makes it end the
+     * current one (StreamEnd::Reconfigure) so the next starts with them. */
+    void ReloadReleaseConfig() {
+        if (!g_release_mode) { LogLine("sftap: ReloadConfig ignored - test install (arm file)"); return; }
+        ::ams::g_arm_loaded = false;
+        ::ams::LoadArm();
+        ::ams::ApplySessionSettings();
+        LogLine("sftap: config reloaded -> %.*s", static_cast<int>(::ams::g_arm_len), ::ams::g_arm_buf);
+        g_reconfig_request.store(true, std::memory_order_relaxed);
+    }
 
     /* M71: the negotiated link speed, asked of the kernel rather than
      * assumed. The stream picks its resolution from this: SuperSpeed lifts

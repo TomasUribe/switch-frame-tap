@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 95 hardware test cycles (through M96 Run W). Current build: **M96**. Last run: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 96 hardware test cycles (through M96 Run X). Current build: **M99c = release v0.1.0** (2026-09-29). Previous: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,206 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** M99: native-resolution screenshots on a button combo (built, not yet run) ***
+
+Run AA (M98, release install, logs `logs/m98-runAA*`): "everything worked" -
+defaults streamed, the manager's settings applied live, Start with the console
+off/on. The log also closes Run Z's question: `stream OFF at boot
+(stream-off: rc=0x0)` after the reboot and `delete stream-off rc=0x0` on ON -
+the setting persists; the leftover file was a timestamp misreading.
+
+The user asked for an option in the manager to take a native-resolution
+screenshot with a keybind.
+
+- **Input** (`applet_mitm_shot.cpp`): a thread that initializes hid (aruid 0),
+  hid:sys `EnableAppletToGetInput(true, 0)` and time only when screenshots are
+  first turned on - exactly what libtesla/nx-ovlloader do to read the combo
+  next to the game. Presets: 0 L3+R3 (default), 1 L+R+Down, 2 ZL+ZR+Down,
+  3 Minus+Down; the press edge sets a request (dropped if > 3 s old).
+- **Capture**: while streaming, from the frame the stream just read
+  (`ShotFromSession`, after the VIC: the handheld corner or the whole
+  surface); otherwise `ShotStandalone` attaches for one read (the M96 picker:
+  the newest finished present), `Decide`s corner vs full, writes, detaches.
+- **PNG** (`applet_mitm_png.hpp`, host test `png_test.cpp` with zlib): the
+  block-linear GOB layout of `tools/nvframe_check.py` de-swizzled a row at a
+  time into 8-bit RGB, stored deflate blocks (one per row) - 6.2 MB at 1080p,
+  2.8 MB at 720p, no picture buffer, 128 KB of write buffer. Files:
+  `sdmc:/switch/switch-frame-tap/screenshots/YYYY-MM-DD_HH-MM-SS.png`.
+- **Config**: `screenshot = 1`, `screenshot_buttons = 0..3` -> tokens `shot`,
+  `shotkey=`; live via ReloadConfig. StreamStatus version 2 (48 bytes): shot
+  enabled, shots taken, failures. NPDM: `hid`, `hid:sys`, `time:u`.
+- **Manager**: a Screenshots section - Screenshot button, Buttons, Taken this
+  boot.
+
+### Run AB (M99, logs `logs/m99-runAB*`): shots work; a HOME-menu crash; a stutter
+
+Two standalone shots (viewer closed), 1920x1080, both pixel-perfect on the PC
+(the MK8 title screen). But: each took **2.6 s and 5.0 s**, with the debug
+handle held throughout (the user felt a stutter per shot); and later the
+**HOME menu (0100000000001000) crashed, 2144-0001 (0x290), opening the
+controller settings** in handheld after ReverseNX. No crash report was
+written; our log shows only the input thread polling at the time.
+
+### M99b
+
+- **Input is read-only.** M99 called `padConfigureInput` and hid:sys
+  `EnableAppletToGetInput(true, 0)` - both change aruid 0's controller
+  configuration (M99's style set also lacked NpadSystemExt, which libtesla
+  sets). Now only `hidInitialize` (maps aruid 0's shared memory) and
+  `padUpdate` (reads it). `hid:sys` removed from the NPDM. Not proven to be
+  the cause - ReverseNX has crashed the controller applet before (Run T) -
+  but it was the only new thing touching controllers.
+- **Detach before writing**: `ShotStandalone` closes the debug handle as soon
+  as the frame is in g_ind_buf.
+- **The PNG is created at its final size** (`png::PngSize`, host-tested equal
+  to the written size) and opened without append: one allocation instead of
+  ~48 extensions.
+
+### Run AC (M99b, logs `logs/m99b-runAC*`): no crash, no game stutter
+
+User: no stutter on the Switch's screen; a small one in the viewer; the
+controller-menu crash is gone (read-only input). 1080p shots now take
+**0.37-0.50 s** (was 2.6-5.0 s: the pre-sized file); the first shot of the
+boot 2.4 s. One press was dropped as stale (3.5 s) while the stream was
+waiting out a viewer that had just closed.
+
+### M99c: a toast, and a gallery
+
+- **Toast** (the user: "an overlay notification in the top left"): through
+  Ultrahand, which the user runs (`config/ultrahand/notifications` exists).
+  `Notify()` writes `SwitchFrameTap-<ms>.tmp`, renames it to `.notify`
+  (`{"title","text","duration":3000}`, the fields libultrahand's tesla.hpp
+  reads); Ultrahand shows it in its top-left toast and deletes the file.
+  Nothing happens without Ultrahand. "Screenshot saved (WxH)" / "Screenshot
+  failed - is the SD card full?".
+- **Gallery in the manager** ("View screenshots"): the PNGs newest first, a
+  preview loaded when the selection rests (SDL2_image), A full screen with
+  Left/Right or L/R, Y twice to delete, touch throughout.
+
+### Run AD (M99c, logs `logs/m99c-runAD*`): "fantastic work" - released as v0.1.0
+
+The toast and the gallery work; shots 0.38-0.69 s. The user noticed that
+**homebrew apps do not stream**: the log shows why - after MK8 closed, live
+mode sat at "waiting for a game (no application)" and no new vi:u session
+arrived. Homebrew from the homebrew menu runs as an applet (hbloader in the
+album applet's slot): it is not pm:dmnt's application, and applets present
+through vi:s, which this does not mitm. v0.2: a vi:s mitm that accepts only
+the homebrew loader's program id (never qlaunch or the overlay applet), and
+live mode taking that process when no application runs.
+
+**v0.1.0** (tag `v0.1.0`): `switch-frame-tap-0.1.0-switch.zip` (sysmodule,
+manager NRO, overlay; `tools/make_release.sh`) and
+`switch-frame-tap-0.1.0-linux-viewer.tar.gz` (viewer source + x86_64 binary,
+udev rule, desktop installer - its `make` now builds only raw-view, found by
+installing the tarball into a scratch HOME). Windows viewer and homebrew apps
+are v0.2.
+
+---
+
+## *** M98: the first release's Switch side (Run AA: works) ***
+
+Run Z (M97 + the sm fix): the user: "that worked fantastically" - the overlay
+toggle, the docked switch and the double-click viewer. (Log not collected: the
+card went back into the console.)
+
+The first release (v0.1.0) the user asked for: the Switch software with the
+overlay, a manager app in the homebrew menu "like the sysdvr manager"
+(graphical), and a click-and-run Windows client. Switch side first.
+
+- **Release mode** (`g_release_mode`): no `sdmc:/applet-mitm.armed` on the
+  card. Settings come from `sdmc:/config/switch-frame-tap/config.ini`
+  (`quality`, `qp`, `keyframe_interval`, `max_resolution`, `start_delay`,
+  `allow_untested_firmware`), turned by `armfile::BuildReleaseArm` into the
+  same tokens a test run's arm file has (host-tested: comments, CRLF,
+  sections, out-of-range values, look-alike keys, comment words). The log is
+  `config/switch-frame-tap/log.txt` (+ `last.txt`), capped at 4 MB. A test
+  install (arm file present) behaves exactly as before.
+- **Firmware gate**: a release install streams only on HOS 22.x unless
+  `allow_untested_firmware = 1` (state 7, "Firmware not tested").
+- **sftap 2 ReloadConfig**: re-reads config.ini; a running stream ends with
+  `Reconfigure` and restarts with the new QP / keyframe interval / 720p cap.
+- **Manager app** (`manager/`, SDL2 + SDL2_ttf with the console's shared
+  fonts, libnx pad + touch): Status (stream state and fps, firmware,
+  Atmosphere), Stream to PC, Start with the console (boot2.flag), Quality,
+  Keyframes, Maximum resolution, Start delay, Allow untested firmware, a setup
+  check (sysmodule, overlay, nx-ovlloader, SaltyNX, ReverseNX-RT, test vs
+  release install) and About/recovery. Every change is saved and sent to the
+  module at once. It only asks sm for sftap once the module's process exists
+  (pm:dmnt), so it cannot hang on a missing module.
+- **`tools/make_release.sh VERSION`** builds all three and packs
+  `dist/switch-frame-tap-VERSION-switch.zip` (SD root: the module + boot2.flag
+  + toolbox.json, the overlay, the manager NRO; no config.ini, no arm file).
+
+Run AA (planned): install the zip as a user would, delete the test arm file:
+the release defaults stream (1080p via the overlay's Docked); the manager's
+settings apply live (Quality Low mid-race: bitrate falls); Start with the
+console off -> reboot -> not running; on again.
+
+---
+
+## *** M97: an overlay - stream on/off, handheld/docked (Run Z: works) ***
+
+### Run X (M96, logs `logs/m96-runX*`): stock clocks and BOTW
+
+User: "It works on stock clocks but the fps drop a little and the stream won't
+look as smooth. still playable. I also tried running BOTW overclocked and it
+looked fine but fps wouldn't get up to 60." No crash report; 12,137 frames at
+the viewer, 0 lost, 0 undecoded; every size switch (720p -> 1080p via
+ReverseNX-RT) restarted the stream at the new size by itself.
+
+- **MK8 1080p, clocks changed during the run**: windows from 27 to 58 fps;
+  reads 7.9-23.8 ms. Session 42.8 fps sent vs the game's 57.6. At stock CPU
+  the read (10-24 ms here) plus the VIC does not fit 16.7 ms every frame.
+- **BOTW 1080p: 29.4 fps sent, the game presented 29.1** - BOTW itself runs at
+  30 fps on the Switch, so the stream is at the game's full rate (0-5 presents
+  skipped per window). 60 is not possible for a 30 fps game.
+
+### The change: the Switch Frame Tap overlay
+
+The user asked for an overlay to turn the stream on and off, and to switch
+handheld/docked from the same place using ReverseNX-RT.
+
+- **Sysmodule: `sftap` control service** (`applet_mitm_control.cpp`), on its
+  own server thread (never vi:u's). `0 GetStatus -> StreamStatus` (state,
+  enabled, size, fps sent and the game's fps over the last second, sessions);
+  `1 SetEnabled(u8)`. NPDM: `sftap` added to `service_host`.
+- **Off means off**: live mode checks `g_stream_enabled` before each viewer
+  probe and the stream loop checks it every frame; turning it off ends the
+  session (`StreamEnd::Disabled`), detaches from the game, and stops USB
+  probing. Remembered across boots: `sdmc:/config/switch-frame-tap/stream-off`.
+- **Overlay** (`overlay/`, libtesla, `switch-frame-tap.ovl`): a Stream toggle,
+  a status line ("Streaming 1920x1080, 59.8 fps", "Waiting for the PC viewer",
+  ...), and Game default / Handheld (720p) / Docked (1080p). The mode switch
+  does exactly what ReverseNX-RT's own overlay does (MIT): SaltyNX's "SaltySD"
+  port, command 7 for the shared-memory handle, find the "NXRT" block, write
+  `def`/`isDocked`. It says so when SaltyNX is missing or the game does not
+  use ReverseNX-RT. The overlay never blocks without the sysmodule: it checks
+  that `sftap` is registered before asking sm for it.
+
+### Run Y (M97, logs `logs/m97-runY*`): the mode switch works, the toggle did not
+
+User: "the on off button does nothing, the switch to docked works fine."
+The log agrees: `sftap: control service rc=0x0`, but no SetEnabled ever
+arrived. Cause: libtesla opens an sm session only around start-up
+(`doWithSmSession`), so the overlay's `smRegisterService`/`smGetService` from
+the GUI failed and it never connected. (The ReverseNX-RT path uses a named
+port and pm:dmnt, which libtesla keeps open.) Fix: the sftap lookup runs in
+`tsl::hlp::doWithSmSession`. 11,484 + 1,164 frames at the viewer, 0 lost;
+Handheld -> Docked from the overlay restarted the stream at 1080p by itself.
+
+### A double-click viewer
+
+`raw-view --app`: the window opens at once (status in the title), waits for
+the Switch, reconnects when it leaves the bus and comes back instead of
+exiting, and closes only on window close / Esc. F11, F or a double-click
+toggles fullscreen. `tools/raw-recv/install-launcher.sh` installs it as
+`~/.local/bin/switch-frame-tap-viewer` with a desktop and menu launcher.
+
+Run Z (planned): the fixed overlay - toggle off/on mid-game, reboot with the
+stream off; the viewer started from the desktop icon.
+
+---
 
 ## *** M96: capture the newest FINISHED present (Run W: 1080p60) ***
 

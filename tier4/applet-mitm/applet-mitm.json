@@ -28,11 +28,14 @@
         "pm:dmnt",
         "usb:ds",
         "mm:u",
-        "clkrst"
+        "clkrst",
+        "hid",
+        "time:u"
     ],
     "service_host": [
         "vi:u",
-        "nvdrv:s"
+        "nvdrv:s",
+        "sftap"
     ],
     "kernel_capabilities": [
         {

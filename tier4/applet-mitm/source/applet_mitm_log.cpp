@@ -8,8 +8,12 @@ namespace ams::mitm::applet {
 
     namespace {
 
-        constexpr const char *LogPath  = "sdmc:/applet-mitm.log";
-        constexpr const char *LastPath = "sdmc:/applet-mitm.last";
+        const char *LogPath  = "sdmc:/applet-mitm.log";
+        const char *LastPath = "sdmc:/applet-mitm.last";
+        /* M98: a release install logs into its config folder, and stops at
+         * 4 MB - a test run's log is read the same day; a user's can run
+         * for weeks of boots without anyone looking */
+        constexpr s64 ReleaseLogCap = 4 * 1024 * 1024;
         constinit os::SdkMutex g_lock;
         constinit bool g_ready = false;
 
@@ -24,10 +28,26 @@ namespace ams::mitm::applet {
 
     }
 
+    constinit bool g_release_mode = false;
+    constinit u32 g_arm_probe_rc = 0;
+
     void LogInit() {
         std::scoped_lock lk(g_lock);
         if (R_FAILED(fs::MountSdCard("sdmc"))) {
             return;
+        }
+        {
+            /* logged by Main (LogLine here would take g_lock twice) */
+            fs::DirectoryEntryType t;
+            const Result r = fs::GetEntryType(std::addressof(t), "sdmc:/applet-mitm.armed");
+            g_arm_probe_rc = r.GetValue();
+            g_release_mode = R_FAILED(r);
+        }
+        if (g_release_mode) {
+            static_cast<void>(fs::CreateDirectory("sdmc:/config"));
+            static_cast<void>(fs::CreateDirectory("sdmc:/config/switch-frame-tap"));
+            LogPath  = "sdmc:/config/switch-frame-tap/log.txt";
+            LastPath = "sdmc:/config/switch-frame-tap/last.txt";
         }
         /* truncate */
         fs::DeleteFile(LogPath);
@@ -75,6 +95,7 @@ namespace ams::mitm::applet {
         }
         s64 size = 0;
         static_cast<void>(fs::GetFileSize(std::addressof(size), f));
+        if (g_release_mode && size > ReleaseLogCap) { fs::CloseFile(f); return; }
         static_cast<void>(fs::WriteFile(f, size, line, n, fs::WriteOption::Flush));
         fs::CloseFile(f);
     }

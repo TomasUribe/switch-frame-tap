@@ -1,0 +1,60 @@
+[    10.989] grc IPC interceptor: off
+[    11.006] applet-mitm M98: up (grc IPC interceptor off)
+[    11.019] install type from GetEntryType(sdmc:/applet-mitm.armed) rc=0x202
+[    11.031] release install, sdmc:/config/switch-frame-tap/config.ini ->: vic exec dbg usb live nvqp=20 nvgop=60 wait=20
+[    11.052] sftap: stream OFF at boot (stream-off: rc=0x0) - turn it on from the overlay or the manager
+[    11.063] ARMED FLAGS: vic=1 exec=1 dbg=1 dump=0 usb=1 bench=0 nvenc=0 jpg=0 sweep=0 mtx=0 stream=0 grc=0 grcscan=0 clk=0 jpgdec=0 nvgrc=0 csc=0 nvframe=0(120) nvstream=1(3600, qp 20, gop 60) nvp=0(30) live=1 nv1080=0(120) wait=20
+[    11.068] arm file (sdmc:/applet-mitm.armed): vic=ARMED exec=PhaseB-full-blit
+[    11.074] ---- physical memory pools (svcGetSystemInfo) ----
+[    11.080]    pool 0 Application  total= 3363840 KB  used=       0 KB  free=  3363840 KB   rc=0/0
+[    11.086]    pool 1 Applet       total=  512000 KB  used=    3480 KB  free=   508520 KB   rc=0/0
+[    11.092]    pool 2 System       total=  237728 KB  used=  222644 KB  free=    15084 KB   rc=0/0
+[    11.104]    pool 3 SystemUnsafe total=   45184 KB  used=   43180 KB  free=     2004 KB   rc=0/0
+[    11.113]    THIS PROCESS (pool_partition 1 = Applet, at boot): total=511936 KB used=3416 KB free=508520 KB
+[    11.122]    for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB
+[    11.142] ---- USB device enumeration (usb:ds) ----
+[    11.154]    usbDsInitialize rc=0x0 
+[    11.179]    string descriptors rc=0x0
+[    11.196]    device descriptors (Full+High+Super) rc=0x0
+[    11.205]    usbDsSetBinaryObjectStore rc=0x0
+[    11.231]    usbDsRegisterInterface rc=0x0
+[    11.248]    configuration descriptors (Full+High+Super) rc=0x0
+[    11.263]    endpoints IN=0x81 OUT=0x01 rc=0x0
+[    11.271]    EnableInterface rc=0x0
+[    11.379]    usbDsEnable rc=0x0
+[    11.913]    usb state high-water = 5 (Configured)
+[    11.922]    *** NEGOTIATED SPEED = 3 (High(480Mbps)) *** rc=0x0
+[    11.926]    not SuperSpeed - check the CABLE is USB 3.0, and that the PC port is blue/SS
+[    11.930]    *** HOST CONFIGURED US - we own the bus, expect 1209:5f1e in lsusb ***
+[    11.933] probe fires at t=20 s; frame dump to SD: off
+[    11.937] debug-capture route: ARMED   pmdmntInitialize rc=0x0
+[    11.961] -> main:heartbeat_started
+[    11.968] sftap: control service rc=0x0
+[    11.979] VIC worker started (execute=PhaseB-full-blit)
+[    11.990] registered mitm server for vi:u
+[    12.029] -> main:LoopProcess
+[    14.966] -> hb:1 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    19.487] -> hb:2 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    22.529] -> hb:3 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    25.560] -> hb:4 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    28.588] -> hb:5 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    31.618] -> hb:6 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    34.655] -> hb:7 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    37.704] -> hb:8 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    40.733] -> hb:9 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    43.759] -> hb:10 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    46.796] -> hb:11 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    49.839] -> hb:12 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    52.868] -> hb:13 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    55.897] -> hb:14 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    58.922] -> hb:15 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    61.959] -> hb:16 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    64.985] -> hb:17 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    68.011] -> hb:18 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    68.295] sftap: stream turned ON (delete stream-off rc=0x0)
+[    71.327] -> hb:19 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    74.427] -> hb:20 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    77.528] -> hb:21 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    80.598] -> hb:22 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    83.631] -> hb:23 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    86.689] -> hb:24 sess=0 getdisp=0 relay=0 txn=0 vic=waiting

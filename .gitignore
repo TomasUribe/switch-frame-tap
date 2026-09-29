@@ -17,3 +17,7 @@ tools/nvsetup-dump
 
 # host-side tool bytecode
 __pycache__/
+*.ovl
+*.nacp
+dist/
+*.nro
