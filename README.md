@@ -87,11 +87,32 @@ through `vi:m`, for the running application only), reads the
 finished frame with the same debug SVCs Atmosphère's cheat engine uses, and
 drives the VIC and NVENC engines itself over raw `nvdrv` ioctls.
 
+## What you need
+
+**Required** - enough to stream at 720p60, take screenshots and use the
+manager app:
+
+| | |
+|---|---|
+| A Switch running **Atmosphère** custom firmware | [Atmosphère releases](https://github.com/Atmosphere-NX/Atmosphere/releases) - tested with 1.11.2 on firmware 22.5.0 (Mariko). New to custom firmware: the [NH Switch Guide](https://switch.hacks.guide/). Keep a NAND backup. |
+| The **homebrew menu** | Comes with Atmosphère (`hbmenu.nro`); also [nx-hbmenu releases](https://github.com/switchbrew/nx-hbmenu/releases). It opens the manager app. |
+| A **Linux PC** with the viewer's libraries | `libusb`, `SDL2`, `libavcodec` - one `apt install` line, [below](#install-v011). A Windows viewer is planned. |
+| A **USB-C cable** | USB 2.0 is plenty; the Switch stays in handheld (the dock owns the port). |
+
+**Optional** - one per feature:
+
+| for | install | notes |
+|---|---|---|
+| **The overlay** (stream on/off, "Stream this app" and handheld/docked from inside a game) | an overlay menu: [Ultrahand Overlay](https://github.com/ppkantorski/Ultrahand-Overlay/releases) (its `sdout.zip` includes the loader, nx-ovlloader), **or** [Tesla Menu](https://github.com/WerWolv/Tesla-Menu/releases) with [nx-ovlloader](https://github.com/WerWolv/nx-ovlloader/releases) | Without one, everything is still in the manager app except handheld/docked. |
+| **1080p** over USB | [SaltyNX](https://github.com/masagrator/SaltyNX/releases) and [ReverseNX-RT](https://github.com/masagrator/ReverseNX-RT/releases) (tested: SaltyNX 2.0.0) | ReverseNX-RT makes the game render its docked (1080p) picture in handheld; it needs an overlay menu too. Official games only. |
+| **1080p at a full 60 fps** | a clock tool: [sys-clk](https://github.com/retronx-team/sys-clk/releases) or [Horizon OC](https://github.com/Horizon-OC/Horizon-OC) | CPU 1785 MHz (Nintendo's boost clock). At the stock clock 1080p runs a little below 60. |
+| **Screenshot notifications** | [Ultrahand Overlay](https://github.com/ppkantorski/Ultrahand-Overlay/releases) | Screenshots work without it; Ultrahand only shows the "Screenshot saved" toast. |
+
+Nothing else: no other sysmodule, no sigpatches, no capture card.
+
 ## Install (v0.1.1)
 
-**You need:** a Switch running Atmosphère (tested: Mariko, firmware 22.5.0,
-Atmosphère 1.11.2), a Linux PC, a USB-C cable, and a NAND backup. This drives
-hardware engines directly; a bug can freeze the console (see
+This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
 **1. The Switch.** Download `switch-frame-tap-0.1.1-switch.zip` from the
