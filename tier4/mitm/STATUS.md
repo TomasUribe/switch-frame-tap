@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 105 hardware test cycles (through Run AI). Current build: **v0.4.0** (webcam mode; works - Run AI). Released: v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 106 hardware test cycles (through Run AJ). Current build: **v0.4.1** (upside-down games fixed - Run AJ). Released: v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,31 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.4.1: games that draw upside down (Run AJ: fixed) ***
+
+Kirby and the Forgotten Land streamed upside down with mirrored text (the
+user), and a GBAtemp user reported the same for Kirby's Return to Dream Land
+Deluxe (masagrator and proconsule54 guessed Vulkan's flipped Y). Cause: the
+game draws the picture upside down and asks the compositor to flip it -
+queueBuffer's `transform` (BqBufferInput +32, NATIVE_WINDOW_TRANSFORM_*:
+1 flip H, 2 flip V, 4 rot 90), which the binder parser had always skipped.
+
+- The binder thread reads transform (and crop, for the log) with the fence,
+  stores it in the present ring (`PresentRec::transform`) and in
+  `g_queue_transform`; the log names every change.
+- The capture keeps the chosen present's flips (`present_flip`); the VIC job
+  sets `OutputFlipX/Y` from them - the flip costs nothing, the conversion
+  was already running. Screenshots read rows bottom-up for flip V and mirror
+  rows (`png::MirrorRowRgb`, unit-tested) for flip H.
+- Rotation (bit 2) is logged, not handled: none seen.
+
+### Run AJ (`logs/v041-runAJ`): fixed
+
+Kirby and the Forgotten Land: `present transform 0x2 flip-V, crop
+(0,0)-(1280,720)`; the picture upright in the viewer at 720p and at 1080p
+(ReverseNX-RT switching both ways mid-game); two screenshots upright (menu
+text readable). Mario Kart 8 Deluxe: `present transform 0x0`, unchanged.
 
 ## *** v0.4.0: webcam mode (Run AH: refused; Run AI: works) ***
 

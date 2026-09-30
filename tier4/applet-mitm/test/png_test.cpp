@@ -75,12 +75,22 @@ static void RunCase(uint32_t sw, uint32_t sh, uint32_t bh, uint32_t w, uint32_t 
     if (out_path) { if (FILE *f = std::fopen(out_path, "wb")) { std::fwrite(file.data(), 1, file.size(), f); std::fclose(f); } }
 }
 
+/* v0.4.1: a mirrored row, odd and even widths */
+static void MirrorCase(uint32_t w) {
+    std::vector<uint8_t> row(w * 3), want(w * 3);
+    for (uint32_t x = 0; x < w; ++x) { for (int k = 0; k < 3; ++k) { row[x * 3 + k] = uint8_t(x * 7 + k); want[(w - 1 - x) * 3 + k] = uint8_t(x * 7 + k); } }
+    png::MirrorRowRgb(row.data(), w);
+    if (row != want) { std::printf("FAIL MirrorRowRgb(%u)\n", w); ++g_fail; return; }
+    std::printf("ok   mirrored row, %u px\n", w);
+}
+
 int main(int argc, char **argv) {
     RunCase(1920, 1080, 4, 1920, 1080, argc > 1 ? argv[1] : nullptr);   /* MK8 docked / ReverseNX */
     RunCase(1920, 1080, 4, 1280, 720, nullptr);                        /* the handheld corner */
     RunCase(1280, 720, 4, 1280, 720, nullptr);                         /* a 720p swapchain */
     RunCase(100, 37, 2, 100, 37, nullptr);                             /* odd sizes, another block height */
     RunCase(1920, 1080, 5, 1920, 1080, nullptr, true);                 /* v0.1.1b: 32-row blocks, B,G,R,A (Run AE's 1080p app) */
+    MirrorCase(1920); MirrorCase(101); MirrorCase(1);
     std::printf("%s (%d failure%s)\n", g_fail ? "FAILED" : "OK", g_fail, g_fail == 1 ? "" : "s");
     return g_fail ? 1 : 0;
 }

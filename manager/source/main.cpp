@@ -29,7 +29,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.4.0";
+    constexpr const char *AppVersion  = "0.4.1";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";

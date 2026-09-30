@@ -120,12 +120,12 @@ manager app:
 
 Nothing else: no other sysmodule, no sigpatches, no capture card.
 
-## Install (v0.4.0)
+## Install (v0.4.1)
 
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.4.0-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.4.1-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -139,7 +139,7 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.4.0-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.4.1-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -158,7 +158,7 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.4.0-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.4.1-linux-viewer.tar.gz` with the same files.
 
 On both, the viewer opens a window, waits for the Switch, reconnects on its
 own and closes only when you close it (F11 or a double-click: fullscreen). It
@@ -263,7 +263,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.4.0       # -> dist/switch-frame-tap-0.4.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.4.1       # -> dist/switch-frame-tap-0.4.1-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -291,9 +291,12 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   protection (TiCo) cannot be streamed; exclude them. Homebrew cannot be
   forced into docked mode.
 - **A handful of games tested:** Mario Kart 8 Deluxe, Zelda: Breath of the
-  Wild, Ocarina of Time (Nintendo Switch Online) and several homebrew apps.
-  Others should work if their swapchain is block-linear RGBA or BGRA, at most
-  1920x1088 and 10.5 MB a buffer; the log says so if not.
+  Wild, Ocarina of Time (Nintendo Switch Online), Kirby and the Forgotten Land
+  and several homebrew apps. Others should work if their swapchain is
+  block-linear RGBA or BGRA, at most 1920x1088 and 10.5 MB a buffer; the log
+  says so if not. Games that draw upside down and have the system flip the
+  picture (Kirby: v0.4.1) are flipped back the same way; a 90-degree rotation
+  is not handled (none seen yet - the log would say "rot-90").
 - **Game audio** comes from the console's own video recorder (as with SysDVR):
   games that turn video capture off have no sound in the stream.
 - **Webcam mode:** picture only, higher latency in OBS than the viewer, not

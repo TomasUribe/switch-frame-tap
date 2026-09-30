@@ -109,6 +109,10 @@ namespace ams::mitm::applet {
     /* M88: the latest queueBuffer's acquire fence - the GPU is done drawing
      * the slot once every syncpoint (id << 32 | value) has reached its value */
     extern std::atomic<u32> g_queue_fence_n;
+    /* v0.4.1: the latest queueBuffer's NATIVE_WINDOW_TRANSFORM_* - some games
+     * (Kirby's Return to Dream Land Deluxe, Kirby and the Forgotten Land)
+     * render upside down and have the compositor flip the picture */
+    extern std::atomic<u32> g_queue_transform;
     extern std::atomic<u64> g_queue_fence[4];
     /* M89: a seqlock over slot + fence: odd while the binder thread writes */
     extern std::atomic<u32> g_queue_seq;
@@ -125,6 +129,7 @@ namespace ams::mitm::applet {
         std::atomic<u32> fence_n;
         std::atomic<u64> fence[4];
         std::atomic<u64> tick;
+        std::atomic<u32> transform;   /* v0.4.1: queueBuffer's transform (bit 0 flip H, bit 1 flip V) */
     };
     constexpr u32 PresentRingSize = 8;
     extern PresentRec g_present_ring[PresentRingSize];

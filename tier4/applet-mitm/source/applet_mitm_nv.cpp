@@ -642,6 +642,9 @@ namespace ams::mitm::applet {
 
         constexpr OutDesc StripOut { 480, 32, 512, vic::PIXFMT_A8B8G8R8 };
         constinit OutDesc g_strip_out = StripOut;   /* set per variant */
+        /* v0.4.1: the present's flips, applied on the VIC's output - what the
+         * compositor does for a game that renders upside down */
+        constinit u32 g_strip_flip = 0;
         constexpr u32 StripOutSize = StripOut.stride_px * 4 * StripOut.h;
         static_assert(StripOutSize <= DstSize);
 
@@ -984,7 +987,11 @@ namespace ams::mitm::applet {
                 case VicJob::Fill:     FillClearConfig(cfg);            break;
                 case VicJob::BlitSelf:  FillBlitConfig(cfg, SelfSrc,   SelfOut);  break;
                 case VicJob::BlitGame:  FillBlitConfig(cfg, c.game_src, SelfOut); break;
-                case VicJob::BlitStrip: FillBlitConfig(cfg, g_strip_src, g_strip_out); break;
+                case VicJob::BlitStrip:
+                    FillBlitConfig(cfg, g_strip_src, g_strip_out);
+                    cfg->outputConfig.OutputFlipX = (g_strip_flip & 1) ? 1 : 0;
+                    cfg->outputConfig.OutputFlipY = (g_strip_flip & 2) ? 1 : 0;
+                    break;
             }
             if (g_csc_override != nullptr && g_csc_override->where != 0) {
                 const CscProbe &p = *g_csc_override;
@@ -1276,6 +1283,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<s32> g_queue_slot{-1};
     constinit std::atomic<u64> g_queue_tick{0};
     constinit std::atomic<u32> g_queue_fence_n{0};
+    constinit std::atomic<u32> g_queue_transform{0};
     constinit std::atomic<u64> g_queue_fence[4] = {};
     constinit std::atomic<u32> g_queue_seq{0};
     constinit PresentRec g_present_ring[PresentRingSize] = {};
@@ -4746,6 +4754,7 @@ namespace ams::mitm::applet {
             bool corner = false;       /* handheld: read and convert the 1280x720 corner 1:1 */
             u32 seen = 0;              /* g_queue_count at the last capture */
             u64 present_tick = 0;      /* M85: g_queue_tick of the present the last capture took */
+            u32 present_flip = 0;      /* v0.4.1: its transform: bit 0 flip H, bit 1 flip V */
             /* M88: waits on the present's acquire fence before reading */
             u32 fence_waits = 0, fence_timeouts = 0, fence_unknown = 0;
             u64 fence_wait_sum = 0, fence_wait_max = 0;
@@ -4913,7 +4922,7 @@ namespace ams::mitm::applet {
                 return 1;
             }
 
-            struct PresentSnap { u32 count; s32 slot; u32 fence_n; u64 fence[4]; u64 tick; };
+            struct PresentSnap { u32 count; s32 slot; u32 fence_n; u64 fence[4]; u64 tick; u32 transform; };
 
             /* present c from the ring; false if it was overwritten (8+ behind) */
             static bool ReadPresent(u32 c, PresentSnap *out) {
@@ -4926,6 +4935,7 @@ namespace ams::mitm::applet {
                     out->fence_n = r.fence_n.load(std::memory_order_relaxed);
                     for (u32 k = 0; k < 4; ++k) { out->fence[k] = r.fence[k].load(std::memory_order_relaxed); }
                     out->tick    = r.tick.load(std::memory_order_relaxed);
+                    out->transform = r.transform.load(std::memory_order_relaxed);
                     std::atomic_thread_fence(std::memory_order_acquire);
                     if (r.seq.load(std::memory_order_relaxed) == s1) { return out->count == c; }
                 }
@@ -4982,6 +4992,7 @@ namespace ams::mitm::applet {
                         if (dropped != nullptr && pick.count - seen > 1) { *dropped += pick.count - seen - 1; }
                         seen = pick.count;
                         present_tick = pick.tick;
+                        present_flip = pick.transform & 3;
                         const s32 slot = pick.slot;
                         return this->ReadSlot(dbg, slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0), read_ns, sig);
                     }
@@ -5004,6 +5015,7 @@ namespace ams::mitm::applet {
                     fn   = g_queue_fence_n.load(std::memory_order_relaxed);
                     for (u32 k = 0; k < 4; ++k) { fence[k] = g_queue_fence[k].load(std::memory_order_relaxed); }
                     present_tick = g_queue_tick.load(std::memory_order_relaxed);
+                    present_flip = g_queue_transform.load(std::memory_order_relaxed) & 3;
                     std::atomic_thread_fence(std::memory_order_acquire);
                     if (g_queue_seq.load(std::memory_order_relaxed) == s1) { break; }
                 }
@@ -5060,6 +5072,8 @@ namespace ams::mitm::applet {
             bool Vic(const char *stage, u32 cur = 0) {
                 g_strip_src = src;
                 g_strip_out = Lay().out;
+                g_strip_flip = present_flip;
+                ON_SCOPE_EXIT { g_strip_flip = 0; };
                 JobCtx vc{ vfd, cmd_handle, vsyncpt, cfg_addr, arena_vic + (cur != 0 ? cur : Lay().off_cur), slot_vic, 0, 0, 0, 0, SelfSrc };
                 vc.out_is_dst_buf = false;
                 g_csc_override = std::addressof(NvfBt709);
@@ -5338,7 +5352,7 @@ namespace ams::mitm::applet {
         bool ShotFromSession(const NvfSession &s) {
             const u32 w = s.corner ? NvfW : s.src.w, h = s.corner ? NvfH : s.src.h;
             const size_t n = s.corner ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
-            return WriteShot(g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.pixfmt == vic::PIXFMT_A8B8G8R8);
+            return WriteShot(g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.pixfmt == vic::PIXFMT_A8B8G8R8, s.present_flip);
         }
 
         bool ShotStandalone() {

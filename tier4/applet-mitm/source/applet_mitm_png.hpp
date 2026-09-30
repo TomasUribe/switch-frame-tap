@@ -37,6 +37,13 @@ namespace ams::mitm::applet::png {
     /* one row of RGBA (block-linear, `stride_bytes` wide) -> w pixels of RGB.
      * 16-byte runs (4 pixels) are contiguous in a GOB, so it copies by run. */
     /* bgra: the surface is B, G, R, A in memory (NvColorFormat A8R8G8B8) */
+    /* v0.4.1: a row mirrored in place (a present with a horizontal flip) */
+    inline void MirrorRowRgb(uint8_t *rgb, uint32_t w) {
+        for (uint32_t a = 0, b = w - 1; a < b; ++a, --b) {
+            for (int k = 0; k < 3; ++k) { const uint8_t t = rgb[a * 3 + k]; rgb[a * 3 + k] = rgb[b * 3 + k]; rgb[b * 3 + k] = t; }
+        }
+    }
+
     inline void DeswizzleRowRgb(const uint8_t *src, size_t src_size, uint32_t y, uint32_t w,
                                 uint32_t stride_bytes, uint32_t bh_log2, uint8_t *rgb, bool bgra = false) {
         const int r = bgra ? 2 : 0, b = bgra ? 0 : 2;

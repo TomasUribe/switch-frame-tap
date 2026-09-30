@@ -50,7 +50,7 @@ namespace ams::mitm::applet {
          * s32 scalingMode; u32 transform, stickyTransform, unk, swapInterval;
          * NvMultiFence fence } - the fence at +48: u32 count, then up to four
          * { u32 syncpt id; u32 value }. */
-        bool ParseQueueBufferFence(const u8 *p, size_t sz, u32 *n, u64 out[4]) {
+        bool ParseQueueBufferFence(const u8 *p, size_t sz, u32 *n, u64 out[4], u32 *transform, s32 crop[4]) {
             if (p == nullptr || sz < 24) { return false; }
             u32 data_off = 0, len = 0;
             std::memcpy(std::addressof(data_off), p + 4, sizeof(data_off));
@@ -65,6 +65,10 @@ namespace ams::mitm::applet {
             std::memcpy(std::addressof(flen), p + off, sizeof(flen));
             if (flen < 84 || flen > 0x100) { return false; }
             const u8 *in = p + off + 8;
+            /* v0.4.1: the transform the compositor applies (+32) and the
+             * crop rectangle (+12: left, top, right, bottom) */
+            std::memcpy(transform, in + 32, 4);
+            std::memcpy(crop, in + 12, 16);
             u32 cnt = 0;
             std::memcpy(std::addressof(cnt), in + 48, sizeof(cnt));
             if (cnt > 4) { return false; }
@@ -154,9 +158,22 @@ namespace ams::mitm::applet {
          * has been presented and which slot holds it. */
         if (code == 7) {
             const s32 qs = ParseQueueBufferSlot(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize());
-            u32 fn = 0;
+            u32 fn = 0, xf = 0;
             u64 fv[4] = {};
-            const bool have_fence = ParseQueueBufferFence(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize(), std::addressof(fn), fv);
+            s32 crop[4] = {};
+            const bool have_fence = ParseQueueBufferFence(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize(), std::addressof(fn), fv, std::addressof(xf), crop);
+            if (!have_fence) { xf = 0; }
+            /* v0.4.1: say when a game's transform changes (rare: once per swapchain) */
+            {
+                static constinit u32 s_last_xf = ~0u;
+                if (xf != s_last_xf) {
+                    s_last_xf = xf;
+                    LogLine("   present transform 0x%x%s%s%s, crop (%d,%d)-(%d,%d)", xf,
+                            (xf & 1) ? " flip-H" : "", (xf & 2) ? " flip-V" : "", (xf & 4) ? " rot-90 (not handled)" : "",
+                            crop[0], crop[1], crop[2], crop[3]);
+                }
+            }
+            g_queue_transform.store(xf, std::memory_order_relaxed);
             /* M89: seqlock - odd while slot, fence, tick and count change
              * together, so the capture never pairs one present's slot with
              * another's fence */
@@ -182,6 +199,7 @@ namespace ams::mitm::applet {
                 r.fence_n.store(have_fence ? fn : 0, std::memory_order_relaxed);
                 for (u32 k = 0; k < 4; ++k) { r.fence[k].store(have_fence ? fv[k] : 0, std::memory_order_relaxed); }
                 r.tick.store(qtick, std::memory_order_relaxed);
+                r.transform.store(xf, std::memory_order_relaxed);
                 r.seq.fetch_add(1, std::memory_order_release);
             }
             g_queue_count.fetch_add(1, std::memory_order_release);

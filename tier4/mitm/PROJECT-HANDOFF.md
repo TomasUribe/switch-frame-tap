@@ -1,4 +1,4 @@
-# switch-frame-tap: project handoff (v0.4.0)
+# switch-frame-tap: project handoff (v0.4.1)
 
 This is for whoever continues the project cold, most likely a local session
 with the SD card and the console at hand. It covers:
@@ -13,7 +13,7 @@ with the SD card and the console at hand. It covers:
 `tier4/mitm/STATUS.md` has the full evidence behind each item, newest
 milestone first. This page is the map.
 
-**Current release: v0.4.0 (2026-09-30), on GitHub.** The module streams
+**Current release: v0.4.1 (2026-09-30), on GitHub.** The module streams
 native 1080p60 (with ReverseNX-RT) or 720p60 H.264 plus the game's audio
 (grc:d PCM) over USB to a Windows or Linux viewer, whenever the viewer is
 reading and a game - or a homebrew app from a HOME-menu forwarder (vi:m) -
@@ -44,7 +44,8 @@ dock (question 4 below; questions 3's 1080p setup is solved - see STATUS.md
 M90-M92) and bitrate tuning. Since then: release v0.1.0 (manager, overlay,
 screenshots), v0.1.1 (homebrew via vi:m), v0.2.0 (the Windows viewer and a
 paced reader/decoder/vsync display), v0.3.0 (game audio), v0.4.0 (webcam
-mode, UVC).
+mode, UVC), v0.4.1 (games that draw upside down: queueBuffer's transform
+applied with the VIC's output flips).
 
 **The live pipeline (M86-M89)**, entered from `TryDebugCapture` when `live` is
 armed (`RunLive`):
@@ -278,6 +279,12 @@ Once USB 3.0 trains, handheld 720p60 could go uncompressed:
   conversion mode).
 
 ## 8. The traps (each cost at least one hardware cycle)
+
+- **The picture on screen is not always the buffer as stored.** queueBuffer's
+  `transform` asks the compositor to flip (Kirby: flip V). Anything that
+  reads the buffer must apply it (`present_flip`: the VIC's output flips,
+  the screenshot row order). Crop is logged too; so far it has always been
+  the content rectangle.
 
 - **usb:ds refuses more than ~128 bytes of configuration data per interface
   per speed** (Run AH: 0xcc8c at 130, inferred cap). The UVC streaming

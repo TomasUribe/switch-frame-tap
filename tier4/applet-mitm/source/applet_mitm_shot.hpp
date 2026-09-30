@@ -28,6 +28,7 @@ namespace ams::mitm::applet {
     bool TakeShotRequest();
 
     /* the visible w x h of a block-linear A8B8G8R8 surface -> PNG */
-    bool WriteShot(const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra = false);
+    /* flip: bit 0 mirror horizontally, bit 1 vertically (v0.4.1: the present's transform) */
+    bool WriteShot(const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra = false, u32 flip = 0);
 
 }
