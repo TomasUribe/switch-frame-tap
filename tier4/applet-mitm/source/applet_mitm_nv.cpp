@@ -44,6 +44,7 @@
 #include "applet_mitm_dbgpump.hpp"
 #include "applet_mitm_shot.hpp"
 #include "applet_mitm_audio.hpp"
+#include "applet_mitm_uvc.hpp"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -5457,9 +5458,17 @@ namespace ams::mitm::applet {
                 if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvstream: %s", SlotReadFailure()); return StreamEnd::GameGone; }
                 s.Decide("nvstream");
             }
-            /* v0.1.1b: any 1920x1080 surface, not only MK8's layout */
-            const bool full1080 = !s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed
-                               && g_ind_size >= NvfArenaBase + Layout1080().arena_size_pipe;
+            /* v0.1.1b: any 1920x1080 surface, not only MK8's layout.
+             * v0.4: a webcam sends the size its host committed to, whatever
+             * the game draws - the VIC scales either way (up, too) */
+            const bool uvc = g_uvc_mode;
+            u32 uvc_w = 0, uvc_h = 0;
+            if (uvc) { UvcFrameSize(std::addressof(uvc_w), std::addressof(uvc_h)); g_uvc_new_consumer.store(false, std::memory_order_relaxed); }
+            const bool fits1080 = g_ind_size >= NvfArenaBase + Layout1080().arena_size_pipe;
+            const bool full1080 = uvc ? (uvc_w == 1920 && fits1080)
+                                      : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed && fits1080);
+            if (uvc && uvc_w == 1920 && !fits1080) { LogLine("   nvstream: webcam asked for 1080p but the capture region is too small - sending 720p"); }
+            u32 uvc_drops = uvc ? UvcDroppedCount() : 0;
             s.lay = full1080 ? std::addressof(Layout1080()) : nullptr;
             const NvfLayout &L = s.Lay();
             /* M94: at 1080p one encode stays in flight while the next frame is
@@ -5469,8 +5478,8 @@ namespace ams::mitm::applet {
              * keeps the sequential path. */
             const bool pipe = full1080;
             s.arena_size = pipe ? L.arena_size_pipe : (gop != 0 ? L.arena_size_p : L.arena_size);   /* same base: past both stream stages */
-            LogLine("   nvstream: encoding %ux%u%s%s", L.w, L.h,
-                    full1080 ? " (native 1080p: 1920x1088 coded, SPS-cropped)" : (s.corner ? " (the handheld picture, 1:1)" : " (the VIC scales the picture down)"),
+            LogLine("   nvstream: encoding %ux%u%s%s%s", L.w, L.h, uvc ? " for the webcam" : "",
+                    full1080 ? " (1920x1088 coded, SPS-cropped)" : (s.corner ? " (the handheld picture, 1:1)" : " (the VIC scales the picture)"),
                     pipe ? "; pipelined: the next frame is read while this one encodes" : "");
             if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvstream")) { VicStage("ns:open_FAILED"); return g_engine_wedged ? StreamEnd::EngineStall : StreamEnd::Failed; }
             if (live) {
@@ -5506,7 +5515,7 @@ namespace ams::mitm::applet {
             u32 audio_seq = 0;
             u64 audio_bytes = 0;
             /* v0.3: game audio rides along while this stream runs */
-            if (live) { AudioFlush(); g_audio_active.store(g_audio_enabled.load(std::memory_order_relaxed), std::memory_order_relaxed); }
+            if (live && !uvc) { AudioFlush(); g_audio_active.store(g_audio_enabled.load(std::memory_order_relaxed), std::memory_order_relaxed); }
             ON_SCOPE_EXIT { g_audio_active.store(false, std::memory_order_relaxed); };
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
             bool pending = false, stalled = false, need_idr = true;
@@ -5565,6 +5574,32 @@ namespace ams::mitm::applet {
                 last_pos = f.pos;
                 pos = f.pos + 1;
 
+                /* v0.4 webcam: the sender thread chunks the frame into UVC
+                 * payloads; it takes one frame at a time, so waiting for the
+                 * previous one also frees its stage buffer */
+                if (uvc) {
+                    const u64 t4u = armTicksToNs(armGetSystemTick());
+                    if (pending) { UvcWaitSent(); ++sent; pending = false; }
+                    if (!g_uvc_streaming.load(std::memory_order_relaxed)) { why = "the camera app closed (host detached)"; end = StreamEnd::ViewerGone; return true; }
+                    armDCacheFlush(s.x.a + L.off_bits, bytes);
+                    std::memcpy(g_stream_stage[parity] + HdrsLen, s.x.a + L.off_bits, bytes);
+                    UvcQueueFrame(g_stream_stage[parity], HdrsLen + bytes);
+                    pending = true;
+                    parity ^= 1;
+                    last_sent = f.i;
+                    const u64 t6u = armTicksToNs(armGetSystemTick());
+                    const u64 age = (f.present_ns != 0 && t6u > f.present_ns) ? t6u - f.present_ns : 0;
+                    if (t4u - t3 > UINT64_C(500000000)) { ++viewer_gaps; }
+                    ++done;
+                    ++w_n; w_read += f.rn; w_flush += f.flush_ns; w_vic += f.vic_ns; w_enc += enc_wait;
+                    s_read += f.rn; s_vic += f.vic_ns; s_enc += enc_wait; s_usb += t6u - t3;
+                    s_bytes += bytes;
+                    if (f.is_idr) { s_bytes_i += bytes; ++n_i; } else { s_bytes_p += bytes; ++n_p; }
+                    s_age += age;
+                    if (age > m_age) { m_age = age; }
+                    if (bytes > m_bytes) { m_bytes = bytes; }
+                    return false;
+                }
                 /* the previous transfer has had this whole frame to finish in */
                 if (pending) {
                     size_t got = 0;
@@ -5666,6 +5701,19 @@ namespace ams::mitm::applet {
                 if (live && !g_stream_enabled.load(std::memory_order_relaxed)) { why = "turned off from the overlay"; end = StreamEnd::Disabled; break; }
                 if (live && g_reconfig_request.exchange(false, std::memory_order_relaxed)) { why = "new settings from the manager app"; end = StreamEnd::Reconfigure; break; }
                 if (live && g_app_excluded.load(std::memory_order_relaxed)) { why = "this app was excluded"; end = StreamEnd::Disabled; break; }
+                /* v0.4 webcam: a new commit starts from an IDR - or restarts the
+                 * stream at the new size; a dropped frame breaks the P chain */
+                if (uvc) {
+                    if (g_uvc_new_consumer.exchange(false, std::memory_order_relaxed)) {
+                        u32 nw = 0, nh = 0;
+                        UvcFrameSize(std::addressof(nw), std::addressof(nh));
+                        if (nw != uvc_w) { why = "the camera app asked for another size"; end = StreamEnd::Reconfigure; break; }
+                        need_idr = true;
+                    }
+                    const u32 nd = UvcDroppedCount();
+                    if (nd != uvc_drops) { uvc_drops = nd; need_idr = true; }
+                    if (UvcHostStalled()) { why = "the camera app stopped reading"; end = StreamEnd::ViewerGone; break; }
+                }
                 if (live && t0 - o_t0 >= UINT64_C(1000000000)) {
                     const u32 qn = g_queue_count.load(std::memory_order_relaxed);
                     g_live_fps_x10.store(static_cast<u32>(static_cast<u64>(sent - o_sent0) * UINT64_C(10000000000) / (t0 - o_t0)), std::memory_order_relaxed);
@@ -5793,6 +5841,10 @@ namespace ams::mitm::applet {
                         s.Stall("nvstream", "the last frame in flight"); stalled = true;
                     }
                 }
+            }
+            if (uvc) {
+                if (pending) { UvcWaitSent(); ++sent; pending = false; }
+                UvcLogStats("nvstream");
             }
             if (pending && end != StreamEnd::ViewerGone) {   /* a gone viewer's transfer was cancelled */
                 size_t got = 0;

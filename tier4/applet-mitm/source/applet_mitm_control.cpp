@@ -1,3 +1,4 @@
+#include "applet_mitm_uvc.hpp"
 #include "applet_mitm_control.hpp"
 #include <cstdio>
 #include "applet_mitm_nv.hpp"
@@ -38,6 +39,7 @@ namespace ams::mitm::applet {
                 Result GetStatus(sf::Out<StreamStatus> out) {
                     StreamStatus st = {};
                     st.version      = 4;
+                    st.reserved3    = g_uvc_mode ? 1u : 0u;   /* v0.4: webcam mode */
                     st.reserved     = (g_audio_enabled.load(std::memory_order_relaxed) ? 0x100u : 0u) | g_audio_state.load(std::memory_order_relaxed);   /* v4: audio */
                     st.state        = g_live_state.load(std::memory_order_relaxed);
                     st.enabled      = g_stream_enabled.load(std::memory_order_relaxed) ? 1 : 0;

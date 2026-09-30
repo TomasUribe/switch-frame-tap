@@ -1,4 +1,4 @@
-# switch-frame-tap: project handoff (v0.3.0)
+# switch-frame-tap: project handoff (v0.4.0)
 
 This is for whoever continues the project cold, most likely a local session
 with the SD card and the console at hand. It covers:
@@ -13,11 +13,13 @@ with the SD card and the console at hand. It covers:
 `tier4/mitm/STATUS.md` has the full evidence behind each item, newest
 milestone first. This page is the map.
 
-**Current release: v0.3.0 (2026-09-29), on GitHub.** The module streams
+**Current release: v0.4.0 (2026-09-30), on GitHub.** The module streams
 native 1080p60 (with ReverseNX-RT) or 720p60 H.264 plus the game's audio
 (grc:d PCM) over USB to a Windows or Linux viewer, whenever the viewer is
 reading and a game - or a homebrew app from a HOME-menu forwarder (vi:m) -
-is presenting. A release install is configured from
+is presenting - or, with `usb_mode = webcam`, appears as a UVC H.264 camera
+(1080p/720p60, no audio) that OBS reads with no viewer (`applet_mitm_uvc.cpp`).
+A release install is configured from
 `sdmc:/config/switch-frame-tap/config.ini` through the manager app (hbmenu)
 and the overlay (Tesla/Ultrahand); native-resolution PNG screenshots on a
 button combo; a never-attach list for anti-debug apps. Releases are built by
@@ -41,7 +43,8 @@ takes the newest FINISHED present from an 8-entry ring (M96). What remains:
 dock (question 4 below; questions 3's 1080p setup is solved - see STATUS.md
 M90-M92) and bitrate tuning. Since then: release v0.1.0 (manager, overlay,
 screenshots), v0.1.1 (homebrew via vi:m), v0.2.0 (the Windows viewer and a
-paced reader/decoder/vsync display), v0.3.0 (game audio).
+paced reader/decoder/vsync display), v0.3.0 (game audio), v0.4.0 (webcam
+mode, UVC).
 
 **The live pipeline (M86-M89)**, entered from `TryDebugCapture` when `live` is
 armed (`RunLive`):
@@ -275,6 +278,15 @@ Once USB 3.0 trains, handheld 720p60 could go uncompressed:
   conversion mode).
 
 ## 8. The traps (each cost at least one hardware cycle)
+
+- **usb:ds refuses more than ~128 bytes of configuration data per interface
+  per speed** (Run AH: 0xcc8c at 130, inferred cap). The UVC streaming
+  interface is at 124 with a `static_assert`; a third frame size or a
+  colour-matching descriptor needs another interface or a smaller block.
+  Appended data cannot be removed, so a refusal costs the whole boot. Also
+  from the UVC reference: EP0 only inside the SetupEvent window, manual
+  status stages, cancel AND reap a timed-out transfer, no isochronous
+  endpoints (no UVC audio).
 
 - **A zero address hangs the VIC**, and a hung VIC takes the compositor, and
   with it the console, down. `RunOneJob` refuses zero addresses; every new

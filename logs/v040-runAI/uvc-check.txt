@@ -1,0 +1,26 @@
+Run AI (v0.4.0 webcam mode), Linux, uvcvideo, tools/raw-recv/uvc-check
+
+$ uvc-check --size 1080 --seconds 15
+camera: /dev/video2  card "Switch Frame Tap Camera"  driver uvcvideo
+format 0: H264 "H.264"
+   1920x1080
+   1280x720
+negotiated 1920x1080 H264, buffer 2097152 B
+frame interval 1/60 s (60.0 fps)
+first frame 593 ms after STREAMON
+866 frames in 14.4 s = 60.0 fps; 866 decoded (1920x1080), 15 IDR, 0 decode errors, 0 flagged corrupt by the driver
+avg 16 KB/frame (8.0 Mbps), worst gap between frames 47 ms
+
+$ uvc-check --size 720 --seconds 10
+negotiated 1280x720 H264, buffer 2097152 B
+first frame 370 ms after STREAMON
+580 frames in 9.6 s = 60.1 fps; 580 decoded (1280x720), 10 IDR, 0 decode errors, 0 flagged corrupt by the driver
+avg 7 KB/frame (3.9 Mbps), worst gap between frames 29 ms
+
+$ sleep 8; uvc-check --size 1080 --seconds 5      (reopen after idle)
+first frame 789 ms after STREAMON
+254 frames in 4.2 s = 60.1 fps; 254 decoded (1920x1080), 5 IDR, 0 decode errors, 0 flagged corrupt by the driver
+avg 50 KB/frame (25.0 Mbps), worst gap between frames 26 ms
+
+Windows: OBS Video Capture Device works (latency higher than the viewer);
+the Windows Camera app does not open the device.

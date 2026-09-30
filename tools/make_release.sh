@@ -51,7 +51,7 @@ make -s -B -C "$REPO/tools/raw-recv" raw-view | grep -q "WITH H.264"
 LSTAGE="$OUT/stage-linux/switch-frame-tap-$VER-linux-viewer"
 rm -rf "$OUT/stage-linux"
 mkdir -p "$LSTAGE/tools/raw-recv"
-for f in raw-view.c raw-view Makefile 99-switch-frame-tap.rules install-launcher.sh switch-frame-tap.svg README.md; do
+for f in raw-view.c raw-view uvc-check.c Makefile 99-switch-frame-tap.rules install-launcher.sh switch-frame-tap.svg README.md; do
     cp "$REPO/tools/raw-recv/$f" "$LSTAGE/tools/raw-recv/"
 done
 cp "$REPO/LICENSE" "$LSTAGE/"
@@ -64,6 +64,10 @@ Switch Frame Tap $VER - the Linux viewer
   bash tools/raw-recv/install-launcher.sh
 
 Then open "Switch Frame Tap" from the desktop or the applications menu.
+
+Webcam mode (USB mode = Webcam in the manager app, then restart the console):
+no viewer needed - OBS lists "Switch Frame Tap Camera". To check it:
+  make -C tools/raw-recv uvc-check && tools/raw-recv/uvc-check --seconds 10
 tools/raw-recv/raw-view is a prebuilt binary (x86_64, Ubuntu 22.04); the
 installer rebuilds it from raw-view.c for your system.
 https://github.com/TomasUribe/switch-frame-tap

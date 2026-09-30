@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 103 hardware test cycles (through Run AF). Current build: **v0.3.0** (game audio; works - Run AG). Released: v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 105 hardware test cycles (through Run AI). Current build: **v0.4.0** (webcam mode; works - Run AI). Released: v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,61 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.4.0: webcam mode (Run AH: refused; Run AI: works) ***
+
+The user asked for a camera mode, chosen in the manager app instead of the
+viewer. `usb_mode = webcam` in config.ini -> token `uvc`; read at boot only
+(usb:ds descriptors cannot change once enabled), so the manager's "USB mode"
+row says "after a reboot" until then. StreamStatus `reserved3` bit 0 = this
+boot is a webcam; overlay and manager say "Waiting for a camera app".
+
+- `applet_mitm_uvc.cpp` follows Insektaure's SysDVR-UVC-Capture (GPL-2.0,
+  credited in NOTICE): IAD + VideoControl (18-byte camera terminal) +
+  VideoStreaming with one bulk endpoint in alt 0; H.264 frame-based format,
+  frames 1920x1080 (1) and 1280x720 (2), 60 fps only; 1209:5F1F, a different
+  id from the viewer's 5F1E so a Zadig WinUSB binding never grabs the camera.
+- EP0 thread: SetupEvents only, manual status stages, StallCtrl on anything
+  else; probe/commit (48 bytes, UVC 1.5). A commit records the frame size and
+  flags a new consumer.
+- Sender thread: one H.264 access unit at a time, 16 KB payloads with a
+  2-byte header, a ZLP after a payload that is a multiple of 512, FID toggled
+  after every frame sent or aborted, a 1 s timeout -> cancel + reap + drop.
+- TryNvencStream in UVC mode encodes the committed size whatever the game
+  draws (the VIC scales up or down; the 1080 layout needs the capture region
+  it always has), sends no SFTR headers and no audio, forces an IDR on a new
+  commit or after a dropped frame, restarts on a size change. Three dropped
+  frames in a row = the camera app closed (usb:ds never reports the host's
+  CLEAR_FEATURE): the stream detaches; RunLive then probes with an empty
+  payload (a bare header) once a second and resumes when the host reads, or
+  at the next commit.
+- `tools/raw-recv/uvc-check`: V4L2 + libavcodec, reports fps, decode errors,
+  driver-flagged corrupt buffers, gaps.
+
+### Run AH (logs `logs/v040-runAH`): the descriptors refused
+
+The module ran and waited ("live:no_viewer") but the console stayed
+`057e:2000`: `interfaces: VC 0, VS 1, video endpoint 0x82 rc=0xcc8c` - usb
+module 140, 102, in the InvalidParameter range - so usbDsEnable never ran.
+The only difference from the reference: the VS interface's SuperSpeed
+configuration data was 9 + 108 + 7 + 6 = **130 bytes** (two frame
+descriptors and a colour-matching descriptor); the reference's is 99, and our
+High-Speed one (124) passed. Read as a **128-byte cap per interface per
+speed** (inferred from these numbers, not documented). Fix: no
+colour-matching descriptor (the H.264 VUI carries the colour; hosts default
+to BT.709), 124 bytes, a `static_assert` to keep it there; one descriptor per
+append, each logged by name.
+
+### Run AI (`logs/v040-runAI`): works
+
+Linux (uvcvideo, uvc-check): 1920x1080 **60.0 fps**, 866 frames, 866
+decoded, 0 decode errors, 0 corrupt, worst gap 47 ms, first frame 593 ms
+after STREAMON; then 1280x720 (a new commit at another size - the stream
+restarted at 720p) **60.1 fps**, 580/580, first frame 370 ms; reopened after
+8 s idle: 60.1 fps, 0 errors. Windows: OBS Video Capture Device works;
+latency "not great" (OBS's decoder, RESEARCH.md §8 of the reference); the
+Windows Camera app does not open it (H.264-only camera). MJPEG through NVJPG
+would reach both - a possible next step.
 
 ## *** v0.3.0: game audio (Run AG: works) ***
 

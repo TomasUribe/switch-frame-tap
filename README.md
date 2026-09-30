@@ -3,7 +3,8 @@
 A Nintendo Switch sysmodule that streams the game you are playing - picture
 and sound - to a Windows or Linux PC over a USB cable, with no capture card,
 compressed with the console's own hardware H.264 encoder. With a manager app,
-an overlay, and native-resolution screenshots. Homebrew, built on and for the
+an overlay, native-resolution screenshots, and a **webcam mode** that makes the
+Switch a plain USB camera for OBS. Homebrew, built on and for the
 author's own console. **[Download the latest release](https://github.com/TomasUribe/switch-frame-tap/releases/latest)**.
 
 **The goal of this project is 1080p at 60 fps**: the game's native docked
@@ -105,7 +106,7 @@ manager app:
 |---|---|
 | A Switch running **Atmosphère** custom firmware | [Atmosphère releases](https://github.com/Atmosphere-NX/Atmosphere/releases) - tested with 1.11.2 on firmware 22.5.0 (Mariko). New to custom firmware: the [NH Switch Guide](https://switch.hacks.guide/). Keep a NAND backup. |
 | The **homebrew menu** | Comes with Atmosphère (`hbmenu.nro`); also [nx-hbmenu releases](https://github.com/switchbrew/nx-hbmenu/releases). It opens the manager app. |
-| A **Windows or Linux PC** | Windows 10/11: the viewer zip, plus the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie/). Linux: `libusb`, `SDL2`, `libavcodec` - one `apt install` line. Both [below](#install-v030). |
+| A **Windows or Linux PC** | Windows 10/11: the viewer zip, plus the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie/). Linux: `libusb`, `SDL2`, `libavcodec` - one `apt install` line. Both [below](#install-v040). In [webcam mode](#webcam-mode), no viewer or driver: OBS reads it as a camera. |
 | A **USB-C cable** | USB 2.0 is plenty; the Switch stays in handheld (the dock owns the port). |
 
 **Optional** - one per feature:
@@ -119,12 +120,12 @@ manager app:
 
 Nothing else: no other sysmodule, no sigpatches, no capture card.
 
-## Install (v0.3.0)
+## Install (v0.4.0)
 
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.3.0-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.4.0-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -138,7 +139,7 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.3.0-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.4.0-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -157,7 +158,7 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.3.0-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.4.0-linux-viewer.tar.gz` with the same files.
 
 On both, the viewer opens a window, waits for the Switch, reconnects on its
 own and closes only when you close it (F11 or a double-click: fullscreen). It
@@ -185,7 +186,8 @@ Expect more heat and battery drain, and some games dislike fake docked mode
 ### The manager app
 
 **Switch Frame Tap** in the homebrew menu: what the stream is doing (and its
-frame rate), streaming on/off, start with the console, picture quality
+frame rate), streaming on/off, start with the console, USB mode (PC viewer or
+webcam), picture quality
 (High/Medium/Low), keyframe interval, maximum resolution (1080p/720p), game
 audio on/off, start delay, screenshots, and a setup check (sysmodule, overlay, overlay loader,
 SaltyNX, ReverseNX-RT). Changes apply at once - a running stream restarts with
@@ -197,6 +199,36 @@ Needs an overlay menu (Tesla Menu or Ultrahand, on nx-ovlloader): stream
 on/off (remembered across reboots), live status, **Stream this app** (see
 below), and Game default / Handheld (720p) / Docked (1080p) through
 ReverseNX-RT.
+
+### Webcam mode
+
+Set **USB mode** to **Webcam** in the manager and restart the console: the
+Switch then shows up on the PC as a USB camera, **Switch Frame Tap Camera**
+(UVC, H.264, 1920x1080 or 1280x720 at 60 fps - the size the camera app asks
+for; the picture is scaled to it). No viewer and no driver - on Windows no
+Zadig either.
+
+- **OBS:** add a **Video Capture Device**, pick Switch Frame Tap Camera, and set
+  **Buffering** to **Disable**. Latency is higher than with the viewer: OBS's
+  H.264 camera decoder holds back several frames
+  ([an OBS issue](https://github.com/obsproject/obs-studio/pull/13462), not
+  the console's). On Linux OBS reads it through v4l2.
+- **No sound** in webcam mode: a USB microphone needs isochronous transfers,
+  which the Switch's USB device service cannot do. Use the viewer for sound.
+- **The Windows Camera app does not open it** (it wants uncompressed or MJPEG
+  cameras); OBS does.
+- On Linux, `tools/raw-recv/uvc-check` (`make -C tools/raw-recv uvc-check`)
+  streams it for a few seconds and reports frame rate and decode errors.
+- Changing the mode needs a restart (the USB descriptors are set at boot). Set
+  it back to **PC viewer** the same way.
+
+Measured (Linux, v4l2): 60.0 fps at 1920x1080 and 60.1 fps at 1280x720, 0
+decode errors, first frame 0.4-0.8 s after the camera opens; OBS on Windows
+works.
+
+The USB camera side follows Insektaure's
+[SysDVR-UVC-Capture](https://github.com/Insektaure/SysDVR-UVC-Capture)
+(GPL-2.0), whose research into `usb:ds` control transfers made it possible.
 
 ### Homebrew
 
@@ -231,7 +263,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.3.0       # -> dist/switch-frame-tap-0.3.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.4.0       # -> dist/switch-frame-tap-0.4.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -264,6 +296,8 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   1920x1088 and 10.5 MB a buffer; the log says so if not.
 - **Game audio** comes from the console's own video recorder (as with SysDVR):
   games that turn video capture off have no sound in the stream.
+- **Webcam mode:** picture only, higher latency in OBS than the viewer, not
+  visible to the Windows Camera app; switching modes needs a restart.
 - **PC viewer: Windows and Linux** (x86_64). No macOS viewer yet. On Windows
   the driver needs Zadig once, as with SysDVR.
 - **It debug-attaches to the running game.** A process can have one debugger,
@@ -475,6 +509,7 @@ transport** for streaming from the dock, where the dock owns the USB port
 | 1080p60 from the dock, over the network | not started: needs a network transport, see [above](#the-road-to-1080p60) |
 | Game audio (grc:d PCM alongside the video; paced playback) | **done** (v0.3.0) |
 | Windows viewer, and paced display (reader / decoder / vsync threads) on both | **done** (v0.2.0) |
+| Webcam mode (UVC 1.5 H.264 camera, 1080p/720p60) | **done, on hardware** (v0.4.0); MJPEG (NVJPG) could reach the Windows Camera app and cut OBS latency |
 | USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |
 | Home menu and system overlays | not possible through any route found |
 
@@ -482,8 +517,8 @@ transport** for streaming from the dock, where the dock owns the USB port
 
 | path | what |
 |---|---|
-| `tier4/applet-mitm/` | The sysmodule: `vi:u` / `vi:m` mitm, binder intercept, debug-SVC capture and event pump, VIC and NVENC over raw nvdrv, USB, game audio (grc:d), screenshots, the `sftap` control service. |
-| `tools/raw-recv/` | `raw-view`, the PC viewer (Linux, and Windows via `build-windows.sh`), and `install-launcher.sh`, its Linux desktop app (and `raw-recv`, the raw-frame receiver it grew out of). |
+| `tier4/applet-mitm/` | The sysmodule: `vi:u` / `vi:m` mitm, binder intercept, debug-SVC capture and event pump, VIC and NVENC over raw nvdrv, USB (the viewer's bulk transport, or a UVC camera), game audio (grc:d), screenshots, the `sftap` control service. |
+| `tools/raw-recv/` | `raw-view`, the PC viewer (Linux, and Windows via `build-windows.sh`), and `install-launcher.sh`, its Linux desktop app; `uvc-check`, the webcam-mode tester (and `raw-recv`, the raw-frame receiver it grew out of). |
 | `manager/` | The manager app for the homebrew menu (SDL2): settings, status, setup check, screenshot gallery. |
 | `overlay/` | The Tesla/Ultrahand overlay: stream on/off, status, handheld/docked through ReverseNX-RT. |
 | `tools/` | `make_release.sh` (the release zip), and PC-side analysis and self-tests: `sft_tool.py`, `nvframe_check.py`, `nvp_check.py`, `vic_csc.py`, `nvenc_replay.py`, `nvrec.py`. |

@@ -20,6 +20,7 @@ belongs there and where to fetch it.
 
   Atmosphère        GPL-2.0   https://github.com/Atmosphere-NX/Atmosphere
   SysDVR            GPL-2.0   https://github.com/exelix11/SysDVR
+  SysDVR-UVC-Capture GPL-2.0  https://github.com/Insektaure/SysDVR-UVC-Capture
   libdrm (tegra)    MIT       https://gitlab.freedesktop.org/mesa/drm
   libnx             ISC       https://github.com/switchbrew/libnx
   switchbrew wiki             https://switchbrew.org/wiki/
@@ -33,3 +34,11 @@ methods and configuration-struct layout from libdrm's Tegra backend
 (vic.h / vic40.h, Copyright (c) 2018 NVIDIA Corporation, MIT). Every one of the
 nine config structs in it was diffed field-for-field and bit-for-bit against
 those headers.
+
+tier4/applet-mitm/source/applet_mitm_uvc.cpp (v0.4 webcam mode) follows
+Insektaure's SysDVR-UVC-Capture (GPL-2.0, source/uvc/uvc_device.c and
+docs/RESEARCH.md): the UVC descriptor layout, the EP0 control-transfer handling
+on usb:ds (manual status stages, StallCtrl), probe/commit negotiation and the
+bulk payload rules (2-byte headers, FID toggling, zero-length packets,
+cancel-and-reap on timeout). Adapted to two frame sizes at 60 fps and a sender
+fed by this project's NVENC stream.

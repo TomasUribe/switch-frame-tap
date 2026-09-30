@@ -21,6 +21,10 @@ raw-view: raw-view.c
 	$(CC) $(CFLAGS) $(VIEW_CFLAGS) -o $@ $< $(VIEW_LIBS)
 	@echo "raw-view built $(if $(filter 1,$(H264)),WITH,WITHOUT) H.264 (libavcodec)"
 
+# v0.4: webcam-mode check (V4L2 + libavcodec)
+uvc-check: uvc-check.c
+	$(CC) $(CFLAGS) $(shell pkg-config --cflags libavcodec libavutil) -o $@ $< $(shell pkg-config --libs libavcodec libavutil)
+
 raw-recv: raw-recv.c
 	$(CC) $(CFLAGS) $(shell pkg-config --cflags libusb-1.0) -o $@ $< $(shell pkg-config --libs libusb-1.0)
 

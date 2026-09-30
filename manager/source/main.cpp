@@ -29,7 +29,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.3.0";
+    constexpr const char *AppVersion  = "0.4.0";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -144,6 +144,7 @@ namespace {
         bool shot = false;
         int shot_combo = 0;     /* index into ComboNames */
         bool audio = true;      /* v0.3 */
+        bool webcam = false;    /* v0.4: usb_mode = webcam, from the next boot */
     };
 
     bool IniGet(const std::string &ini, const char *key, std::string *out) {
@@ -186,6 +187,7 @@ namespace {
         if (IniGet(ini, "allow_untested_firmware", &v)) { s.any_fw = v == "1"; }
         if (IniGet(ini, "screenshot", &v)) { s.shot = v == "1"; }
         if (IniGet(ini, "audio", &v)) { s.audio = v != "0"; }
+        if (IniGet(ini, "usb_mode", &v)) { s.webcam = v == "webcam"; }
         if (IniGet(ini, "screenshot_buttons", &v)) { const int k = std::atoi(v.c_str()); if (k >= 0 && k <= 3) { s.shot_combo = k; } }
         return s;
     }
@@ -212,9 +214,11 @@ namespace {
             "# screenshot_buttons: 0 = L3 + R3, 1 = L + R + D-pad Down, 2 = ZL + ZR + D-pad Down, 3 = Minus + D-pad Down\n"
             "screenshot_buttons = %d\n"
             "# audio: 1 = send the game's sound to the PC viewer\n"
-            "audio = %d\n",
+            "audio = %d\n"
+            "# usb_mode: viewer (the Switch Frame Tap viewer) | webcam (a USB camera for OBS and other apps; no sound). Read at boot.\n"
+            "usb_mode = %s\n",
             QualityKeys[s.quality], KeyframeFrames[s.keyframe], s.cap720 ? "720" : "1080",
-            DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo, s.audio ? 1 : 0);
+            DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo, s.audio ? 1 : 0, s.webcam ? "webcam" : "viewer");
         std::fclose(f);
         return true;
     }
@@ -328,7 +332,7 @@ namespace {
             switch (st.state) {
                 case 0: return "Starting - waits for a game";
                 case 1: return "Off";
-                case 2: return "Waiting for the PC viewer";
+                case 2: return RunningWebcam() ? "Waiting for a camera app on the PC" : "Waiting for the PC viewer";
                 case 3: return "Waiting for a game";
                 case 4: std::snprintf(b, sizeof(b), "Streaming %ux%u, %u.%u fps", st.width, st.height, st.fps_x10 / 10, st.fps_x10 % 10); return b;
                 case 5: return "Encoder stalled - reboot to stream again";
@@ -344,6 +348,9 @@ namespace {
             if (!running || !have_status) { return ColWarn; }
             return st.state == 4 ? ColGood : ColText;
         }
+
+        /* v0.4: the mode this boot is in (the sysmodule's word), else config.ini */
+        bool RunningWebcam() { return have_status ? (st.reserved3 & 1) != 0 : set.webcam; }
 
         bool StreamOn() { return have_status ? st.enabled != 0 : stream_file_on; }
 
@@ -401,6 +408,20 @@ namespace {
                 [this] { return boot ? ColGood : ColDim; }, [this](int) { SetBoot(!boot); },
                 "Whether Atmosphere starts the sysmodule at boot. Takes effect at the next boot. "
                 "Off is the clean way to disable it completely." });
+            rows.push_back({ Kind::Setting, "USB mode", [this] {
+                    std::string v = set.webcam ? "Webcam" : "PC viewer";
+                    if (have_status && RunningWebcam() != set.webcam) { v += " - after a reboot"; }
+                    return v;
+                }, [this] { return (have_status && RunningWebcam() != set.webcam) ? ColWarn : ColText; },
+                [this](int) {
+                    set.webcam = !set.webcam;
+                    if (!SaveSettings(set)) { Toast("Could not write config.ini"); return; }
+                    Toast(test_install ? "Saved - but a test arm file is installed, so the sysmodule ignores config.ini"
+                                       : "Saved - restart the console to switch the USB mode");
+                },
+                "PC viewer: the Switch Frame Tap viewer app (sound, lowest latency). Webcam: the Switch shows up as a "
+                "USB camera, so OBS, Discord or a browser use it with no viewer and no driver - picture only, 1080p or "
+                "720p at 60 fps, the size the camera app asks for. Changes need a reboot." });
 
             rows.push_back({ Kind::Setting, "Apps never streamed", [this] {
                     char b[32];
@@ -431,7 +452,8 @@ namespace {
                 }, [this] { return !set.audio ? ColDim : (have_status && st.version >= 4 && (st.reserved & 0xFF) >= 2) ? ColWarn : ColGood; },
                 [this](int) { set.audio = !set.audio; Saved(); },
                 "Sends the game's sound to the PC viewer (M in the viewer mutes it). It comes from the console's own video "
-                "recorder, as with SysDVR - games that turn video capture off have no sound in the stream." });
+                "recorder, as with SysDVR - games that turn video capture off have no sound in the stream. "
+                "Webcam mode has no sound: a USB camera cannot carry it from the Switch." });
 
             rows.push_back({ Kind::Header, "Picture", nullptr, nullptr, nullptr, "" });
             rows.push_back({ Kind::Setting, "Quality", [this] { return std::string(QualityNames[set.quality]); }, nullptr,

@@ -146,6 +146,10 @@ int main() {
     /* v0.3: audio is on unless audio = 0 */
     ExpectRelease("audio = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
     ExpectRelease("audio = 1\nquality = low\n", "vic exec dbg usb live nvqp=28 nvgop=60 wait=20 audio");
+    /* v0.4: webcam mode */
+    ExpectRelease("usb_mode = webcam\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio uvc");
+    ExpectRelease("usb_mode = viewer\naudio = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
+    ExpectRelease("usb_mode = Webcam2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
     /* M99: screenshots */
     ExpectRelease("screenshot = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
     ExpectRelease("screenshot = 1\nscreenshot_buttons = 2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=2 audio");

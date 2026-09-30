@@ -22,6 +22,7 @@
 #include "applet_mitm_control.hpp"
 #include "applet_mitm_shot.hpp"
 #include "applet_mitm_audio.hpp"
+#include "applet_mitm_uvc.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -360,6 +361,11 @@ namespace ams {
                 mitm::applet::LogLine("   usb: not armed (add \"usb\" to the arm file)");
                 return;
             }
+            /* v0.4: webcam mode describes a UVC camera instead */
+            if (mitm::applet::g_uvc_mode) {
+                static_cast<void>(mitm::applet::UvcSetupDevice());
+                return;
+            }
             mitm::applet::LogLine("---- USB device enumeration (usb:ds) ----");
 
             /* ::Result - libnx's u32 - NOT ams::Result, which is a class and
@@ -666,7 +672,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.3.0: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm v0.4.0: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -674,6 +680,7 @@ namespace ams {
         mitm::applet::g_dbg_armed   = ArmFileContains("dbg");
         mitm::applet::g_dump_armed  = ArmFileContains("dump");
         g_usb_armed                 = ArmFileContains("usb");
+        mitm::applet::g_uvc_mode    = ArmFileContains("uvc");
         mitm::applet::g_bench_armed   = ArmFileContains("bench");
         mitm::applet::g_nvenc_armed   = ArmFileContains("nvenc");
         mitm::applet::g_nvjpg_armed   = ArmFileContains("jpg");
@@ -855,6 +862,15 @@ namespace ams::mitm::applet {
 
     bool UsbViewerPresent(u32 timeout_ms) {
         if (!UsbReady()) { return false; }
+        /* v0.4: a webcam's "viewer" is a host that committed a stream */
+        if (g_uvc_mode) {
+            for (u32 t = 0; !g_uvc_streaming.load(std::memory_order_relaxed); t += 50) {
+                if (t >= timeout_ms) { return false; }
+                os::SleepThread(TimeSpan::FromMilliSeconds(50));
+            }
+            /* committed - but after a stall, only once the host reads again */
+            return !UvcHostStalled() || UvcHostReading(timeout_ms);
+        }
         alignas(0x1000) static u8 hello[0x1000];
         const u32 h[8] = { 0x52544653u, 2u, 0, 0, 0, 0, 0, 0 };   /* "SFTR", v2, all else 0: length 0 */
         std::memcpy(hello, h, sizeof(h));
@@ -873,7 +889,7 @@ namespace ams::mitm::applet {
     }
 
     bool UsbReady() {
-        if (::ams::g_usb_ep_in == nullptr) { return false; }
+        if (::ams::g_usb_ep_in == nullptr && !g_uvc_mode) { return false; }
         UsbState st = UsbState_Detached;
         if (R_FAILED(usbDsGetState(std::addressof(st)))) { return false; }
         return st == UsbState_Configured;
