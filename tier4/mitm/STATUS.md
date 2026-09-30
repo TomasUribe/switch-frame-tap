@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 103 hardware test cycles (through Run AF). Current build: **v0.1.1** (released 2026-09-29; v0.1.0 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 103 hardware test cycles (through Run AF). Current build: **v0.2.0** (released 2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,35 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.2.0: the Windows viewer, and a paced display on both PCs ***
+
+The user asked for a click-and-run Windows client. raw-view is cross-compiled
+from Linux with Zig 0.16 against the official SDL2 2.32.10 mingw, libusb
+1.0.30 and BtbN's FFmpeg 8.1 LGPL builds (`tools/raw-recv/build-windows.sh`,
+toolchain in `ref/win`); a GUI exe that starts in --app mode, an icon, the
+DLLs, licences and a Zadig guide (WinUSB must be bound once - the Switch's
+usb:ds cannot announce it).
+
+- **test1**: worked, but "fps a lot worse" than Linux. The viewer read,
+  decoded and drew in one thread; the console keeps one transfer
+  outstanding, so the PC's decode/present time became the console's wait.
+- **test2**: a USB reader thread + "draw only the newest". Better, still
+  stuttering. Its log (`logs/v020-win-test2/viewer.log`, read from the
+  Windows partition, mounted read-only): decode ~0.1-3 ms, draw ~0.75 ms -
+  but packets came in bursts (queue 8/8) and bursts were thrown away (472
+  decoded, never shown); presents were unsynchronised with the display.
+- **test3**: reader -> decoder -> display threads; frames shown in order, one
+  per refresh (vsync), the oldest dropped only past two waiting; per-second
+  stats. `--file REC --paced` runs a recording through the live pipeline:
+  62 decoded / 62 shown per second, worst gap 16.4-16.7 ms, on Linux and the
+  Windows build under Wine. The user: "that seems to have worked".
+
+**v0.2.0** (tag `v0.2.0`): the Switch zip (unchanged but for version
+strings), the Linux viewer and the Windows viewer (`make_release.sh` builds
+all three when ref/win is present).
+
+---
 
 ## *** v0.1.1: homebrew applications stream (built, not yet run) ***
 

@@ -25,7 +25,7 @@ window against the game's ~59.2, 0 errors). See
 > it being on the PC screen (monitor not included).
 >
 > It is still **experimental**: USB only (so 1080p needs ReverseNX-RT in
-> handheld), no audio, a Linux viewer only, one console tested. Read
+> handheld), no audio, one console tested. Read
 > [Limitations](#limitations) before installing it.
 
 | | |
@@ -96,7 +96,7 @@ manager app:
 |---|---|
 | A Switch running **Atmosphère** custom firmware | [Atmosphère releases](https://github.com/Atmosphere-NX/Atmosphere/releases) - tested with 1.11.2 on firmware 22.5.0 (Mariko). New to custom firmware: the [NH Switch Guide](https://switch.hacks.guide/). Keep a NAND backup. |
 | The **homebrew menu** | Comes with Atmosphère (`hbmenu.nro`); also [nx-hbmenu releases](https://github.com/switchbrew/nx-hbmenu/releases). It opens the manager app. |
-| A **Linux PC** with the viewer's libraries | `libusb`, `SDL2`, `libavcodec` - one `apt install` line, [below](#install-v011). A Windows viewer is planned. |
+| A **Windows or Linux PC** | Windows 10/11: the viewer zip, plus the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie/). Linux: `libusb`, `SDL2`, `libavcodec` - one `apt install` line. Both [below](#install-v020). |
 | A **USB-C cable** | USB 2.0 is plenty; the Switch stays in handheld (the dock owns the port). |
 
 **Optional** - one per feature:
@@ -110,12 +110,12 @@ manager app:
 
 Nothing else: no other sysmodule, no sigpatches, no capture card.
 
-## Install (v0.1.1)
+## Install (v0.2.0)
 
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.1.1-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.2.0-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -128,7 +128,15 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
-**2. The PC viewer** (Linux). Install the build dependencies and the udev
+**2a. The PC viewer on Windows.** Unzip
+`switch-frame-tap-0.2.0-windows-viewer.zip` anywhere. Once, with the Switch
+connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
+List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
+it is that one), choose **WinUSB** and **Install Driver**. Then double-click
+`SwitchFrameTap.exe` (keep the DLLs next to it). Windows may warn about an
+unknown publisher: **More info -> Run anyway**.
+
+**2b. The PC viewer on Linux.** Install the build dependencies and the udev
 rule (lets the viewer open the Switch without sudo), then the desktop app:
 
 ```bash
@@ -139,10 +147,16 @@ bash tools/raw-recv/install-launcher.sh
 ```
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
-applications menu: it opens a window, waits for the Switch, reconnects on its
-own, and closes only when you close it (F11 or a double-click: fullscreen).
-The release also has `switch-frame-tap-0.1.1-linux-viewer.tar.gz` with the
-same files. A Windows viewer is planned for v0.2.
+applications menu. The release also has
+`switch-frame-tap-0.2.0-linux-viewer.tar.gz` with the same files.
+
+On both, the viewer opens a window, waits for the Switch, reconnects on its
+own and closes only when you close it (F11 or a double-click: fullscreen).
+It reads USB, decodes and draws on separate threads and shows the frames in
+order, one per screen refresh (vsync), so the picture stays smooth. Its
+statistics - frame rate, latencies, decode and draw times, once a second - go
+to the terminal on Linux and to `%APPDATA%\switch-frame-tap\viewer\viewer.log`
+on Windows.
 
 **3. Stream.** Connect the Switch (handheld) to the PC with the USB-C cable,
 open the viewer and start a game. The picture appears a few seconds after the
@@ -207,12 +221,16 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.1.1       # -> dist/switch-frame-tap-0.1.1-switch.zip
+bash tools/make_release.sh 0.2.0       # -> dist/switch-frame-tap-0.2.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
 Everything builds in the `devkitpro/devkita64` Docker image (the first build
-compiles libstratosphere, ~15 minutes). The PC viewer: `make -C tools/raw-recv`.
+compiles libstratosphere, ~15 minutes). The PC viewer: `make -C tools/raw-recv`;
+the Windows viewer is cross-compiled from Linux with Zig -
+`bash tools/raw-recv/build-windows.sh VERSION`, toolchain listed in
+[`ref/README.md`](ref/README.md). `raw-view --file REC.sft --paced` runs a
+recording through the live pipeline (no console needed).
 
 **Test installs.** With `sdmc:/applet-mitm.armed` on the card the sysmodule
 ignores `config.ini` and reads its flags from that file instead
@@ -235,7 +253,8 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   is block-linear RGBA, at most 1920x1080, in one memory object; the log says
   so if not. Colours are verified for the A8B8G8R8 format those two use.
 - **No audio** yet.
-- **The PC viewer is Linux-only** for now; a Windows viewer is planned for v0.2.
+- **PC viewer: Windows and Linux** (x86_64). No macOS viewer yet. On Windows
+  the driver needs Zadig once, as with SysDVR.
 - **It debug-attaches to the running game.** A process can have one debugger,
   so expect Atmosphère's cheat engine (dmnt) and similar tools not to work on
   a game while it is being streamed.
@@ -444,7 +463,7 @@ transport** for streaming from the dock, where the dock owns the USB port
 | Bitrate tuning (better P frames, QP) | next; also lowers what 1080p60 needs from the network |
 | 1080p60 from the dock, over the network | not started: needs a network transport, see [above](#the-road-to-1080p60) |
 | Audio | not started |
-| Windows viewer | next (v0.2) |
+| Windows viewer, and paced display (reader / decoder / vsync threads) on both | **done** (v0.2.0) |
 | USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |
 | Home menu and system overlays | not possible through any route found |
 
