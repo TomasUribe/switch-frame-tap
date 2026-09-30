@@ -104,6 +104,108 @@ static int read_exact(uint8_t *dst, size_t n, int ms)
     return g_quit ? -1 : (int)done;
 }
 
+/* ---- v0.2: the USB reader thread ------------------------------------------
+ * The console keeps one frame transfer outstanding: while the PC is decoding
+ * or drawing instead of reading, the console waits, and its whole pipeline
+ * with it. On Linux reads and presents are quick enough to hide that; on
+ * Windows (WinUSB, Direct3D + the compositor) they were not - the first
+ * Windows test ran "a lot" below Linux's frame rate. A thread now does
+ * nothing but read packets into this queue, so the cable is always drained;
+ * the main thread decodes every packet and draws only the newest frame. */
+#define QN 8
+typedef struct { sft_hdr_t hdr; uint8_t *data; size_t cap; Uint64 t_hdr; } pkt_t;
+static pkt_t g_q[QN];
+static int g_qh = 0, g_qn = 0, g_qmax = 0;
+static SDL_mutex *g_qm = NULL;
+static SDL_cond *g_q_put = NULL, *g_q_get = NULL;
+static volatile int g_rd_stop = 0;
+static SDL_Thread *g_rd = NULL;
+
+static int reader_main(void *arg)
+{
+    (void)arg;
+    while (!g_quit && !g_rd_stop && !g_lost) {
+        sft_hdr_t hdr;
+        const int r = read_exact((uint8_t *)&hdr, sizeof(hdr), 100);
+        if (r <= 0) continue;
+        const Uint64 t = SDL_GetPerformanceCounter();
+        if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); continue; }
+        if (hdr.length == 0 || hdr.length > 64u*1024*1024) continue;
+        SDL_LockMutex(g_qm);
+        while (g_qn == QN && !g_quit && !g_rd_stop) SDL_CondWaitTimeout(g_q_put, g_qm, 100);
+        const int slot = (g_qh + g_qn) % QN;
+        const int stop = g_quit || g_rd_stop;
+        SDL_UnlockMutex(g_qm);
+        if (stop) break;
+        pkt_t *p = &g_q[slot];
+        if (hdr.length > p->cap) {
+            /* libavcodec wants readable padding past the end of a packet */
+            uint8_t *d = realloc(p->data, (size_t)hdr.length + 64);
+            if (!d) break;
+            p->data = d; p->cap = hdr.length;
+        }
+        if (read_exact(p->data, hdr.length, 5000) != (int)hdr.length) continue;
+        memset(p->data + hdr.length, 0, 64);
+        p->hdr = hdr;
+        p->t_hdr = t;
+        SDL_LockMutex(g_qm);
+        g_qn++;
+        if (g_qn > g_qmax) g_qmax = g_qn;
+        SDL_CondSignal(g_q_get);
+        SDL_UnlockMutex(g_qm);
+    }
+    return 0;
+}
+
+static void reader_start(void)
+{
+    if (!g_qm) { g_qm = SDL_CreateMutex(); g_q_put = SDL_CreateCond(); g_q_get = SDL_CreateCond(); }
+    g_qh = g_qn = 0;
+    g_rd_stop = 0;
+    g_rd = SDL_CreateThread(reader_main, "usb-reader", NULL);
+}
+
+static void reader_stop(void)
+{
+    if (!g_rd) return;
+    g_rd_stop = 1;
+    SDL_LockMutex(g_qm); SDL_CondSignal(g_q_put); SDL_UnlockMutex(g_qm);
+    SDL_WaitThread(g_rd, NULL);
+    g_rd = NULL;
+    g_qh = g_qn = 0;
+}
+
+/* the oldest queued packet, copied out (waits up to ms); *left = still queued */
+static int reader_pop(sft_hdr_t *hdr, uint8_t **payload, size_t *cap, Uint64 *t_hdr, int ms, int *left)
+{
+    SDL_LockMutex(g_qm);
+    if (g_qn == 0) SDL_CondWaitTimeout(g_q_get, g_qm, (Uint32)ms);
+    if (g_qn == 0) { SDL_UnlockMutex(g_qm); return 0; }
+    pkt_t *p = &g_q[g_qh];
+    if (p->hdr.length > *cap) {
+        uint8_t *d = realloc(*payload, (size_t)p->hdr.length + 64);
+        if (!d) { SDL_UnlockMutex(g_qm); return 0; }
+        *payload = d; *cap = p->hdr.length;
+    }
+    memcpy(*payload, p->data, (size_t)p->hdr.length + 64);
+    *hdr = p->hdr;
+    *t_hdr = p->t_hdr;
+    g_qh = (g_qh + 1) % QN;
+    g_qn--;
+    *left = g_qn;
+    SDL_CondSignal(g_q_put);
+    SDL_UnlockMutex(g_qm);
+    return 1;
+}
+
+static int reader_pending(void)
+{
+    SDL_LockMutex(g_qm);
+    const int n = g_qn;
+    SDL_UnlockMutex(g_qm);
+    return n;
+}
+
 #ifdef SFT_H264
 typedef struct { AVCodecContext *c; AVPacket *pkt; AVFrame *frm; } h264_t;
 
@@ -254,6 +356,17 @@ int main(int argc, char **argv)
     /* double-clicked from Explorer: the app mode */
     if (argc == 1) g_app = 1;
     SDL_SetMainReady();
+    /* a GUI program has no console: the statistics go to a log file,
+     * %APPDATA%\switch-frame-tap\viewer\viewer.log */
+    if (g_app) {
+        char *dir = SDL_GetPrefPath("switch-frame-tap", "viewer");
+        if (dir) {
+            char path[1024];
+            snprintf(path, sizeof(path), "%sviewer.log", dir);
+            if (freopen(path, "w", stderr)) setvbuf(stderr, NULL, _IONBF, 0);
+            SDL_free(dir);
+        }
+    }
 #endif
     /* Ctrl-C before the first frame still ends with the summary below */
     signal(SIGINT, on_sigint);
@@ -313,6 +426,7 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "waiting for frames on %04x:%04x ep 0x%02x...\n", SFT_VID, SFT_PID, SFT_EP_IN);
     }
+    if (g_usb) reader_start();
     FILE *rec = record ? fopen(record, "wb") : NULL;
     FILE *es = h264_out ? fopen(h264_out, "wb") : NULL;
     if ((record && !rec) || (h264_out && !es)) { perror("output file"); return 1; }
@@ -338,16 +452,23 @@ int main(int argc, char **argv)
     double lat_sum = 0.0, lat_max = 0.0, age_sum = 0.0, age_max = 0.0;
     long lat_n = 0, age_n = 0, keyframes = 0, sessions = 1;
     int64_t out_kind = -1;
+    /* v0.2: frames decoded but not drawn (a newer one was already waiting),
+     * and the time spent drawing - the Windows diagnosis */
+    long shown = 0, skipped = 0;
+    double draw_ms_total = 0.0;
 
     while (!g_quit && (max_frames == 0 || packets < max_frames)) {
         if (g_app && g_lost) {
             /* the Switch left the bus (rebooted, cable out): keep the window */
+            reader_stop();
             libusb_release_interface(g_usb, SFT_IFACE);
             libusb_close(g_usb);
             g_usb = NULL; g_lost = 0;
             fprintf(stderr, "\nthe Switch disconnected - waiting for it\n");
             g_usb = app_wait_device(ctx, win, ren, tex);
             if (!g_usb) break;
+            g_lost = 0;
+            reader_start();
             have_kind = 0;
             continue;
         }
@@ -362,19 +483,26 @@ int main(int argc, char **argv)
         }
 
         sft_hdr_t hdr;
-        int r = read_exact((uint8_t *)&hdr, sizeof(hdr), g_app ? 100 : 1000);
-        if (r <= 0) continue;
-        const Uint64 t_hdr = SDL_GetPerformanceCounter();
-        if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); continue; }
-        if (hdr.length == 0 || hdr.length > 64u*1024*1024) continue;
-        if (hdr.length > cap) {
-            /* libavcodec wants readable padding past the end of a packet */
-            uint8_t *p = realloc(payload, (size_t)hdr.length + 64);
-            if (!p) break;
-            payload = p; cap = hdr.length;
+        Uint64 t_hdr = 0;
+        int left = 0;
+        if (g_in) {
+            /* a recording: read it in line, as always */
+            int r = read_exact((uint8_t *)&hdr, sizeof(hdr), 1000);
+            if (r <= 0) continue;
+            t_hdr = SDL_GetPerformanceCounter();
+            if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); continue; }
+            if (hdr.length == 0 || hdr.length > 64u*1024*1024) continue;
+            if (hdr.length > cap) {
+                /* libavcodec wants readable padding past the end of a packet */
+                uint8_t *p = realloc(payload, (size_t)hdr.length + 64);
+                if (!p) break;
+                payload = p; cap = hdr.length;
+            }
+            if (read_exact(payload, hdr.length, 5000) != (int)hdr.length) continue;
+            memset(payload + hdr.length, 0, 64);
+        } else if (!reader_pop(&hdr, &payload, &cap, &t_hdr, g_app ? 50 : 200, &left)) {
+            continue;
         }
-        if (read_exact(payload, hdr.length, 5000) != (int)hdr.length) continue;
-        memset(payload + hdr.length, 0, 64);
         packets++;
         bytes += hdr.length;
         if (rec) { fwrite(&hdr, 1, sizeof(hdr), rec); fwrite(payload, 1, hdr.length, rec); }
@@ -429,6 +557,10 @@ int main(int argc, char **argv)
         }
 
         if (g_app && frames == 1) { t_first = SDL_GetPerformanceCounter(); t_prev = t_first; }
+        /* v0.2: a newer packet is already waiting - decode it next and draw
+         * that instead; drawing this one would only add latency */
+        if (!g_in && win && is_h264 && reader_pending() > 0) { skipped++; continue; }
+        const Uint64 r0 = SDL_GetPerformanceCounter();
         const uint32_t want_fmt = is_h264 ? SDL_PIXELFORMAT_IYUV
                                 : packed420 ? SDL_PIXELFORMAT_RGB24
                                 : (swap_rb ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_ABGR8888);
@@ -484,8 +616,10 @@ int main(int argc, char **argv)
         SDL_RenderClear(ren);
         SDL_RenderCopy(ren, tex, NULL, NULL);
         SDL_RenderPresent(ren);
+        shown++;
 
         Uint64 now = SDL_GetPerformanceCounter();
+        draw_ms_total += (double)(now - r0) * 1000.0 / (double)freq;
         /* header arrival -> on screen, for the frame actually shown (with
          * frame threads that is an older one than the packet just read) */
         if (is_h264 && out_kind >= 0 && !g_in) {
@@ -502,13 +636,15 @@ int main(int argc, char **argv)
                      W, H, frames / secs, (double)bytes * 8.0 / 1e6 / secs, worst_gap, lost,
                      lat_n ? lat_sum / lat_n : 0.0, age_n ? age_sum / age_n : 0.0);
             SDL_SetWindowTitle(win, title);
-            fprintf(stderr, "\r%ld frames  %.1f fps  %.0f Mbps  worst gap %.1f ms  %ld lost  pc %.1f ms  console %.1f ms   ",
+            fprintf(stderr, "\r%ld frames  %.1f fps  %.0f Mbps  worst gap %.1f ms  %ld lost  pc %.1f ms  console %.1f ms  |  decode %.2f ms  draw %.2f ms  drawn %ld skipped %ld  queue max %d   ",
                     frames, frames / secs, (double)bytes * 8.0 / 1e6 / secs, worst_gap, lost,
-                    lat_n ? lat_sum / lat_n : 0.0, age_n ? age_sum / age_n : 0.0);
+                    lat_n ? lat_sum / lat_n : 0.0, age_n ? age_sum / age_n : 0.0,
+                    frames ? dec_ms_total / frames : 0.0, shown ? draw_ms_total / shown : 0.0, shown, skipped, g_qmax);
             fflush(stderr);
         }
     }
 
+    reader_stop();
 #ifdef SFT_H264
     if (dec_ok) {
         /* frame threads hold the last few frames: drain them */
@@ -527,6 +663,8 @@ int main(int argc, char **argv)
                        lat_sum / lat_n, lat_max, lat_n);
     if (age_n) fprintf(stderr, "console latency (present -> header sent): avg %.1f ms, max %.1f ms\n",
                        age_sum / age_n, age_max);
+    if (shown) fprintf(stderr, "drawn %ld, skipped %ld (a newer frame was waiting), draw avg %.2f ms, USB queue max %d of %d\n",
+                       shown, skipped, draw_ms_total / shown, g_qmax, QN);
     /* machine-readable last line, for tests */
     printf("packets=%ld frames=%ld undecoded=%ld lost=%ld\n", packets, frames, undecoded, lost);
 
