@@ -7,7 +7,12 @@ CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra
 BASE     = libusb-1.0 sdl2
 H264    := $(shell pkg-config --exists libavcodec libavutil && echo 1)
-ifeq ($(H264),1)
+MP4     := $(shell pkg-config --exists libavformat && echo 1)
+ifeq ($(H264)$(MP4),11)
+# v0.5: R records to MP4 (libavformat)
+VIEW_CFLAGS = -DSFT_H264 -DSFT_MP4 $(shell pkg-config --cflags $(BASE) libavcodec libavutil libavformat)
+VIEW_LIBS   = $(shell pkg-config --libs $(BASE) libavcodec libavutil libavformat)
+else ifeq ($(H264),1)
 VIEW_CFLAGS = -DSFT_H264 $(shell pkg-config --cflags $(BASE) libavcodec libavutil)
 VIEW_LIBS   = $(shell pkg-config --libs $(BASE) libavcodec libavutil)
 else
@@ -17,13 +22,17 @@ endif
 
 all: raw-view raw-recv
 
-raw-view: raw-view.c
+raw-view: raw-view.c record.h menu.h font_dejavu.h
 	$(CC) $(CFLAGS) $(VIEW_CFLAGS) -o $@ $< $(VIEW_LIBS)
 	@echo "raw-view built $(if $(filter 1,$(H264)),WITH,WITHOUT) H.264 (libavcodec)"
 
 # v0.4: webcam-mode check (V4L2 + libavcodec)
 uvc-check: uvc-check.c
 	$(CC) $(CFLAGS) $(shell pkg-config --cflags libavcodec libavutil) -o $@ $< $(shell pkg-config --libs libavcodec libavutil)
+
+# v0.5: checks a recording (tools/raw-recv/mp4_record_test.sh)
+mp4-check: mp4-check.c
+	$(CC) $(CFLAGS) $(shell pkg-config --cflags libavformat libavcodec libavutil) -o $@ $< $(shell pkg-config --libs libavformat libavcodec libavutil)
 
 raw-recv: raw-recv.c
 	$(CC) $(CFLAGS) $(shell pkg-config --cflags libusb-1.0) -o $@ $< $(shell pkg-config --libs libusb-1.0)

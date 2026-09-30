@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 106 hardware test cycles (through Run AJ). Current build: **v0.4.1** (upside-down games fixed - Run AJ). Released: v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 107 hardware test cycles (through Run AK). Current build: **v0.5.0** (recording in the viewer, a main screen - Run AK). Released: v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,51 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.5.0: recording in the viewer, and a main screen (Run AK: works) ***
+
+PC side only; the Switch side is v0.4.1's.
+
+- **R records to MP4** (`tools/raw-recv/record.h`, libavformat): the
+  console's H.264 access units untouched (SPS/PPS into the avcC extradata once,
+  samples keep the slices; keyframes found from NAL 5, not the header flag),
+  the game audio encoded to AAC-LC 192 kbps (FFmpeg's native encoder, 16-bit
+  interleaved -> planar float). Both timestamped with the PC's arrival clock,
+  as live playback is; both tracks start after the AAC priming (1024 samples),
+  so no timestamp is ever negative and the muxer never shifts one track.
+  Audio the console did not send becomes silence, so the sound never slides
+  ahead of the picture. Fragmented MP4 (frag_keyframe + empty_moov): a cut-off
+  recording still plays. A size change (720p <-> 1080p) continues in a new
+  file. Its own writer thread and a 192 MB queue: a slow disk stops the
+  recording, never the stream. Refuses to start under 1 GB free, stops under
+  500 MB. Linux ~/Videos, Windows the Videos known folder (UTF-8 paths, wide
+  Win32 calls). The Windows zip ships avformat-62.dll (+22 MB).
+- **Main screen** (`menu.h`): while there is no picture (no Switch, no driver,
+  no game - or no frame for 1.5 s) the window shows what it waits for, the
+  keys (R, M, F11, Esc) with REC/muted state, and the recordings folder.
+  Text with SDL2 alone: DejaVu Sans / Bold rendered once by `gen_font.py`
+  into a 4-bit atlas in `font_dejavu.h` (regular 32 px, bold 56 px: text is
+  only scaled down).
+- **Back to the main screen when the game is not on screen.** While a game
+  is suspended (HOME menu) the console keeps re-sending its last present at
+  ~20 fps (no new present within 50 ms -> the same slot again), ageing: the
+  first Run AK log shows the console age climbing to 836-1060 ms. The viewer
+  now treats a frame older than 800 ms (header `stride`, M85's age) as no new
+  picture: not drawn, and after 1.5 s the menu ("the game is not on screen").
+  Live frames are 5-60 ms old. Tested with a synthetic stream (60 fresh frames,
+  then 240 aged ones: menu after 1.5 s, 111 frames not shown).
+- Tests: `mp4_record_test.sh` (in run_pc_tests) replays Run I's 10 frames
+  with a 440 Hz tone through `raw-view --mp4` and `mp4-check` decodes every
+  frame and measures the pitch (443 Hz); the Windows build does the same under
+  Wine (441 Hz).
+
+### Run AK (`logs/v050-runAK`): recordings from the console
+
+MK8D at 1080p: 30.2 s, 1792/1792 frames decoded, 0 errors, 59.3 fps, audio
+30.17 s against video 30.18 s, 381 MB (~100 Mbps); the viewer skipped 0
+frames while recording, USB queue max 2. A 720p -> 1080p switch mid-recording
+split into two files (600 and 277 frames, 0 errors). The 30 s race is the
+v0.5.0 sample download; `docs/rec-mk8-race-1080p60.webp` is 4 s of it.
 
 ## *** v0.4.1: games that draw upside down (Run AJ: fixed) ***
 

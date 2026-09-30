@@ -54,12 +54,13 @@ END
 RC
 
 echo "== compiling"
-"$ZIG" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DSFT_H264 \
+"$ZIG" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 \
     -I "$W/sdl2/x86_64-w64-mingw32/include" -I "$W/libusb/include" -I "$W/ffmpeg/include" \
     "$REPO/tools/raw-recv/raw-view.c" "$B/raw-view.rc" \
     "$W/sdl2/x86_64-w64-mingw32/lib/libSDL2.dll.a" \
     "$W/libusb/MinGW64/static/libusb-1.0.dll.a" \
-    "$W/ffmpeg/lib/libavcodec.dll.a" "$W/ffmpeg/lib/libavutil.dll.a" \
+    "$W/ffmpeg/lib/libavcodec.dll.a" "$W/ffmpeg/lib/libavutil.dll.a" "$W/ffmpeg/lib/libavformat.dll.a" \
+    -lshell32 \
     -Wl,--subsystem,windows \
     -o "$B/SwitchFrameTap.exe"
 
@@ -67,10 +68,11 @@ PKG="$B/switch-frame-tap-$VER-windows-viewer"
 mkdir -p "$PKG/licenses"
 cp "$B/SwitchFrameTap.exe" "$PKG/"
 cp "$W/sdl2/x86_64-w64-mingw32/bin/SDL2.dll" "$W/libusb/MinGW64/dll/libusb-1.0.dll" "$PKG/"
-cp "$W/ffmpeg/bin/avcodec-62.dll" "$W/ffmpeg/bin/avutil-60.dll" "$W/ffmpeg/bin/swresample-6.dll" "$PKG/"
+cp "$W/ffmpeg/bin/avcodec-62.dll" "$W/ffmpeg/bin/avutil-60.dll" "$W/ffmpeg/bin/avformat-62.dll" "$W/ffmpeg/bin/swresample-6.dll" "$PKG/"
 cp "$REPO/LICENSE" "$PKG/licenses/switch-frame-tap-GPL-2.0.txt"
 cp "$W/sdl2/LICENSE.txt" "$PKG/licenses/SDL2-zlib.txt"
 cp "$W/ffmpeg/LICENSE.txt" "$PKG/licenses/FFmpeg-LGPL.txt"
+cp /usr/share/doc/fonts-dejavu-core/copyright "$PKG/licenses/DejaVu-fonts.txt"
 cp /usr/share/common-licenses/LGPL-2.1 "$PKG/licenses/libusb-LGPL-2.1.txt"
 cat > "$PKG/licenses/NOTICE.txt" <<TXT
 Switch Frame Tap $VER - Windows viewer. GPL-2.0, https://github.com/TomasUribe/switch-frame-tap
@@ -79,11 +81,16 @@ It ships these libraries, unmodified, as DLLs:
   SDL2.dll                2.32.10   zlib license   https://github.com/libsdl-org/SDL
   libusb-1.0.dll          1.0.30    LGPL-2.1       https://github.com/libusb/libusb
   avcodec-62.dll,
+  avformat-62.dll,
   avutil-60.dll,
   swresample-6.dll        FFmpeg 8.1, LGPL build (BtbN FFmpeg-Builds, ffmpeg-n8.1-latest-win64-lgpl-shared-8.1)
                                     LGPL-2.1+      https://ffmpeg.org  https://github.com/BtbN/FFmpeg-Builds
 The LGPL libraries' source is at those addresses; being DLLs, they can be
 replaced with other builds of the same version.
+
+The menu's text is drawn from DejaVu Sans and DejaVu Sans Bold glyphs built
+into SwitchFrameTap.exe (Bitstream Vera licence, DejaVu changes public domain;
+DejaVu-fonts.txt).
 TXT
 cat > "$PKG/README-WINDOWS.txt" <<'TXT'
 Switch Frame Tap - Windows viewer
@@ -112,10 +119,18 @@ changes. Tip: the Switch only shows up in Zadig while the sysmodule is running
 
 USING IT
 --------
-Double-click SwitchFrameTap.exe. The window waits for the Switch and shows the
-game as soon as one is running. It reconnects by itself when the Switch
+Double-click SwitchFrameTap.exe. The window shows what it is waiting for and
+the keys, and shows the game as soon as one is running. It reconnects by itself when the Switch
 reboots or the cable is unplugged. F11 or a double-click: fullscreen. Esc
-leaves fullscreen or closes the window.
+leaves fullscreen or closes the window. M mutes the game's sound.
+
+RECORDING
+---------
+Press R to record, R again to stop. The recording starts at the next
+keyframe (within a second) and is saved as an MP4 in your Videos folder,
+under "Switch Frame Tap": the console's own H.264 picture, untouched, and the
+game's sound. A red dot shows while it records. 1080p is about 11 MB a second
+(~650 MB a minute); it stops by itself if the disk gets nearly full.
 
 If the title bar says the Switch "has no USB driver", do the setup above.
 

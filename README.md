@@ -3,8 +3,8 @@
 A Nintendo Switch sysmodule that streams the game you are playing - picture
 and sound - to a Windows or Linux PC over a USB cable, with no capture card,
 compressed with the console's own hardware H.264 encoder. With a manager app,
-an overlay, native-resolution screenshots, and a **webcam mode** that makes the
-Switch a plain USB camera for OBS. Homebrew, built on and for the
+an overlay, native-resolution screenshots, **recording to MP4** from the
+viewer, and a **webcam mode** that makes the Switch a plain USB camera for OBS. Homebrew, built on and for the
 author's own console. **[Download the latest release](https://github.com/TomasUribe/switch-frame-tap/releases/latest)**.
 
 **The goal of this project is 1080p at 60 fps**: the game's native docked
@@ -42,6 +42,14 @@ window against the game's ~59.2, 0 errors). See
 the game's own resolution: Mario Kart 8 Deluxe at 1920x1080 (docked picture
 through ReverseNX-RT, in handheld), Ocarina of Time on Nintendo Switch Online
 at 1280x720 - the same frames the stream sends.*
+
+![A recording made with the viewer: Mario Kart 8 Deluxe at 1920x1080 60 fps, taking 1st place](docs/rec-mk8-race-1080p60.webp)
+
+*Recorded with the viewer's **R** key (v0.5.0): Mario Kart 8 Deluxe at native
+1920x1080, 60 fps (the docked picture through ReverseNX-RT, in handheld). The
+animation is 4 seconds of it scaled down; **[the whole 30-second recording](https://github.com/TomasUribe/switch-frame-tap/releases/download/v0.5.0/switch-frame-tap-sample-mk8-race-1080p60.mp4)**
+(381 MB, 1080p60 with sound) is the file exactly as the viewer saved it - the
+console's own H.264, never re-encoded: 1792 frames, 59.3 fps, 0 decode errors.*
 
 ![A frame off the live stream: Mario Kart 8 Deluxe race start, 1280x720, decoded from the console's H.264](docs/stream-mk8-go.jpg)
 
@@ -120,12 +128,12 @@ manager app:
 
 Nothing else: no other sysmodule, no sigpatches, no capture card.
 
-## Install (v0.4.1)
+## Install (v0.5.0)
 
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.4.1-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.5.0-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -139,7 +147,7 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.4.1-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.5.0-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -150,7 +158,7 @@ unknown publisher: **More info -> Run anyway**.
 rule (lets the viewer open the Switch without sudo), then the desktop app:
 
 ```bash
-sudo apt install build-essential libusb-1.0-0-dev libsdl2-dev libavcodec-dev libavutil-dev
+sudo apt install build-essential libusb-1.0-0-dev libsdl2-dev libavcodec-dev libavutil-dev libavformat-dev
 sudo cp tools/raw-recv/99-switch-frame-tap.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 bash tools/raw-recv/install-launcher.sh
@@ -158,16 +166,37 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.4.1-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.5.0-linux-viewer.tar.gz` with the same files.
 
-On both, the viewer opens a window, waits for the Switch, reconnects on its
-own and closes only when you close it (F11 or a double-click: fullscreen). It
-plays the game's sound on the default audio device (**M** mutes).
+On both, the viewer opens a window that says what it is waiting for (the
+Switch, its USB driver, or a game) and lists its keys; the same screen comes
+back whenever the game is closed or not on screen (the HOME menu) instead of
+a frozen frame. It reconnects on its own and closes only when you close it. It plays the game's sound on the
+default audio device.
+
+| key | |
+|---|---|
+| **R** | record / stop recording (below) |
+| **M** | mute / unmute the game's sound |
+| **F11** or a double-click | fullscreen |
+| **Esc** | leave fullscreen / close |
+
 It reads USB, decodes and draws on separate threads and shows the frames in
 order, one per screen refresh (vsync), so the picture stays smooth. Its
 statistics - frame rate, latencies, decode and draw times, once a second - go
 to the terminal on Linux and to `%APPDATA%\switch-frame-tap\viewer\viewer.log`
 on Windows.
+
+**Recording (v0.5.0).** Press **R** in the viewer: from the next keyframe (within
+a second) it saves an MP4 to `Videos/Switch Frame Tap` - the console's H.264
+exactly as it arrived, never re-encoded, so no quality is lost and it costs
+almost no CPU, plus the game's sound (AAC). **R** again stops. A red dot
+shows while it records, and the title bar the time and size. At 1080p it is
+about 11 MB a second (~650 MB a minute). The file is written in fragments, so
+a recording cut short by closing the window or pulling the cable still plays;
+if the game switches between 720p and 1080p mid-recording it continues in a
+new file; it will not start with less than 1 GB free and stops by itself
+below 500 MB.
 
 **3. Stream.** Connect the Switch (handheld) to the PC with the USB-C cable,
 open the viewer and start a game. The picture appears a few seconds after the
@@ -263,7 +292,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.4.1       # -> dist/switch-frame-tap-0.4.1-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.5.0       # -> dist/switch-frame-tap-0.5.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -512,6 +541,7 @@ transport** for streaming from the dock, where the dock owns the USB port
 | 1080p60 from the dock, over the network | not started: needs a network transport, see [above](#the-road-to-1080p60) |
 | Game audio (grc:d PCM alongside the video; paced playback) | **done** (v0.3.0) |
 | Windows viewer, and paced display (reader / decoder / vsync threads) on both | **done** (v0.2.0) |
+| Recording from the viewer (MP4: the console's H.264 untouched + AAC) | **done, on hardware** (v0.5.0) |
 | Webcam mode (UVC 1.5 H.264 camera, 1080p/720p60) | **done, on hardware** (v0.4.0); MJPEG (NVJPG) could reach the Windows Camera app and cut OBS latency |
 | USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |
 | Home menu and system overlays | not possible through any route found |
@@ -521,7 +551,7 @@ transport** for streaming from the dock, where the dock owns the USB port
 | path | what |
 |---|---|
 | `tier4/applet-mitm/` | The sysmodule: `vi:u` / `vi:m` mitm, binder intercept, debug-SVC capture and event pump, VIC and NVENC over raw nvdrv, USB (the viewer's bulk transport, or a UVC camera), game audio (grc:d), screenshots, the `sftap` control service. |
-| `tools/raw-recv/` | `raw-view`, the PC viewer (Linux, and Windows via `build-windows.sh`), and `install-launcher.sh`, its Linux desktop app; `uvc-check`, the webcam-mode tester (and `raw-recv`, the raw-frame receiver it grew out of). |
+| `tools/raw-recv/` | `raw-view`, the PC viewer (Linux, and Windows via `build-windows.sh`), and `install-launcher.sh`, its Linux desktop app; `record.h` (MP4 recording) and `menu.h` (the main screen, with a built-in DejaVu font from `gen_font.py`); `uvc-check`, the webcam-mode tester; `mp4-check` and `mp4-frames` (checking a recording, frames for the docs) (and `raw-recv`, the raw-frame receiver it grew out of). |
 | `manager/` | The manager app for the homebrew menu (SDL2): settings, status, setup check, screenshot gallery. |
 | `overlay/` | The Tesla/Ultrahand overlay: stream on/off, status, handheld/docked through ReverseNX-RT. |
 | `tools/` | `make_release.sh` (the release zip), and PC-side analysis and self-tests: `sft_tool.py`, `nvframe_check.py`, `nvp_check.py`, `vic_csc.py`, `nvenc_replay.py`, `nvrec.py`. |

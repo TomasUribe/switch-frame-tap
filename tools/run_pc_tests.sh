@@ -37,6 +37,7 @@ run "nvframe_check: layouts, colour, NVENC-read diagnosis, 1080p frame + GOP" py
 run "nvp_check: IDR + P GOP, drift test" python3 tools/nvp_check.py selftest
 run "raw-view builds (with H.264)" bash -c "make -s -B -C tools/raw-recv raw-view | grep -q 'WITH H.264'"
 run "stream end to end: console packets -> raw-view -> H.264" python3 tools/sft_stream_test.py
+run "recording: console H.264 + audio -> MP4 (every frame decodes, AAC at 440 Hz)" bash tools/raw-recv/mp4_record_test.sh
 run "sft_tool: stats, gaps, decode check, head, drift test, artifact detector" python3 tools/sft_tool.py selftest
 run "nvrec: Run E's grc scan decodes as committed" \
     bash -c "python3 tools/nvrec.py logs/m79-runE-grc-scan.bin --out $tmp/setups > $tmp/scan.txt && diff <(grep -v -- '-> ' logs/m79-runE-grc-scan.txt | sed 's/[[:space:]]*\$//') <(grep -v -- '-> ' $tmp/scan.txt | sed 's/[[:space:]]*\$//') >/dev/null"

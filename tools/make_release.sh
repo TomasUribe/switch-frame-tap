@@ -51,14 +51,14 @@ make -s -B -C "$REPO/tools/raw-recv" raw-view | grep -q "WITH H.264"
 LSTAGE="$OUT/stage-linux/switch-frame-tap-$VER-linux-viewer"
 rm -rf "$OUT/stage-linux"
 mkdir -p "$LSTAGE/tools/raw-recv"
-for f in raw-view.c raw-view uvc-check.c Makefile 99-switch-frame-tap.rules install-launcher.sh switch-frame-tap.svg README.md; do
+for f in raw-view.c record.h menu.h font_dejavu.h raw-view uvc-check.c mp4-check.c Makefile 99-switch-frame-tap.rules install-launcher.sh switch-frame-tap.svg README.md; do
     cp "$REPO/tools/raw-recv/$f" "$LSTAGE/tools/raw-recv/"
 done
 cp "$REPO/LICENSE" "$LSTAGE/"
 cat > "$LSTAGE/README.txt" <<TXT
 Switch Frame Tap $VER - the Linux viewer
 
-  sudo apt install build-essential libusb-1.0-0-dev libsdl2-dev libavcodec-dev libavutil-dev
+  sudo apt install build-essential libusb-1.0-0-dev libsdl2-dev libavcodec-dev libavutil-dev libavformat-dev
   sudo cp tools/raw-recv/99-switch-frame-tap.rules /etc/udev/rules.d/
   sudo udevadm control --reload-rules && sudo udevadm trigger
   bash tools/raw-recv/install-launcher.sh

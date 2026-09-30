@@ -1,0 +1,6 @@
+stream 0: video h264 1920x1080
+stream 1: audio aac 48000 Hz
+stream 0: 1792 packets, 1792 frames decoded, 0 errors, 30.18 s, 59.3 fps
+stream 1: 1415 packets, 1415 frames decoded, 0 errors, 30.17 s
+audio: 30.19 s decoded, dominant pitch ~1131 Hz
+OK

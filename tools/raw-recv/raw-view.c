@@ -25,6 +25,9 @@
  *   ./raw-view --file s.sft --paced --seconds 5   # v0.2: a recording through the LIVE
  *                              # pipeline (reader thread, decoder thread, vsync display)
  *                              # game audio (v0.3) plays on the default sound device; M mutes
+ *   R records to MP4 (v0.5) in Videos/Switch Frame Tap: the console's H.264 as it
+ *   arrived plus the game audio as AAC; --rec-dir DIR saves elsewhere, --mp4 FILE
+ *   records into FILE from the start (tests)
  *   ./raw-view --app           # M97: the desktop launcher's mode - the window opens at
  *                              # once, waits for the Switch, reconnects whenever it comes
  *                              # back, and only closes when you close it. F11 or a
@@ -78,6 +81,8 @@ static int g_app = 0;               /* --app: survive the console leaving the bu
 static int g_lost = 0;              /* --app: the console left; wait for it again */
 static int g_paced = 0;             /* --paced: a recording fed through the live pipeline at 60 fps, looped (tests) */
 static double g_run_secs = 0;       /* --seconds: stop the live pipeline after this long (tests) */
+static const char *g_mp4 = NULL;     /* --mp4 FILE: record into FILE from the start (tests) */
+static const char *g_rec_dir = NULL; /* --rec-dir DIR: where R saves (default Videos/Switch Frame Tap) */
 
 /* ---- v0.3: game audio ------------------------------------------------------
  * The console sends the sound since the last frame as its own packet before
@@ -112,6 +117,8 @@ static void audio_packet(const uint8_t *d, uint32_t n, uint32_t rate, uint32_t c
     }
 }
 static void on_sigint(int s) { (void)s; g_quit = 1; }
+#include "record.h"            /* v0.5: R records the stream to MP4 */
+#include "menu.h"              /* v0.5: the main screen while there is no picture */
 static libusb_device_handle *g_usb = NULL;
 static FILE *g_in = NULL;           /* --file */
 
@@ -176,6 +183,7 @@ static int reader_main(void *arg)
             if (hdr.length > sizeof(abuf)) { static uint8_t sink[4096]; for (uint32_t k = 0; k < hdr.length; k += sizeof(sink)) read_exact(sink, (hdr.length - k) < sizeof(sink) ? (hdr.length - k) : sizeof(sink), 5000); continue; }
             if (read_exact(abuf, hdr.length, 5000) != (int)hdr.length) continue;
             audio_packet(abuf, hdr.length, hdr.width, hdr.height);
+            rec_audio(abuf, hdr.length, hdr.width, hdr.height, t);
             continue;
         }
         if (g_paced) SDL_Delay(16);         /* a recording at roughly the console's pace */
@@ -313,12 +321,21 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
                    (e.type == SDL_MOUSEBUTTONDOWN && e.button.clicks == 2)) {
             const int fs = (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
             SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+        } else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_r && !e.key.repeat) {
+            rec_toggle();
+            char t[256], rs[200];
+            rec_status(rs, sizeof(rs));
+            snprintf(t, sizeof(t), "Switch Frame Tap%s", rs[0] ? rs : "  |  recording stopped");
+            SDL_SetWindowTitle(win, t);
+            if (g_menu) menu_draw(ren);
         } else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_m) {
             g_mute = !g_mute;
             if (g_adev) { SDL_ClearQueuedAudio(g_adev); SDL_PauseAudioDevice(g_adev, 1); g_a_paused = 1; }
             fprintf(stderr, "\naudio %s\n", g_mute ? "muted" : "on");
+            if (g_menu) menu_draw(ren);
         } else if (e.type == SDL_WINDOWEVENT) {
             /* resized or uncovered with no new frame: draw the last one again */
+            if (g_menu) { menu_draw(ren); continue; }
             SDL_RenderClear(ren);
             if (tex) SDL_RenderCopy(ren, tex, NULL, NULL);
             SDL_RenderPresent(ren);
@@ -356,6 +373,8 @@ static void app_title_cannot_open(SDL_Window *win, int err)
     snprintf(t, sizeof(t), "Switch Frame Tap - the Switch is connected but cannot be opened: install the udev rule (see the README)  [%s]", libusb_error_name(err));
 #endif
     SDL_SetWindowTitle(win, t);
+    g_menu_state = MENU_NODRIVER;
+    snprintf(g_menu_err, sizeof(g_menu_err), "%s", libusb_error_name(err));
 }
 
 /* --app: open and claim the console, keeping the window alive meanwhile */
@@ -363,14 +382,21 @@ static libusb_device_handle *app_wait_device(libusb_context *ctx, SDL_Window *wi
 {
     SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)");
     int said = 0;
-    for (;;) {
+    g_menu = 1;
+    g_menu_state = MENU_WAITING;
+    for (int tick = 0;; tick++) {
+        /* v0.5: the menu, redrawn often enough for the keys and the REC timer;
+         * the bus is looked at every 250 ms as before */
         app_events(win, ren, tex);
         if (g_quit) return NULL;
+        if (tick % 5 != 0) { menu_draw(ren); SDL_Delay(50); continue; }
         libusb_device_handle *h = libusb_open_device_with_vid_pid(ctx, SFT_VID, SFT_PID);
         if (h) {
             libusb_set_auto_detach_kernel_driver(h, 1);
             if (libusb_claim_interface(h, SFT_IFACE) == 0) {
                 SDL_SetWindowTitle(win, "Switch Frame Tap - connected, waiting for the picture");
+                g_menu_state = MENU_CONNECTED;
+                menu_draw(ren);
                 return h;
             }
             libusb_close(h);
@@ -379,9 +405,10 @@ static libusb_device_handle *app_wait_device(libusb_context *ctx, SDL_Window *wi
         } else {
             int err = 0;
             if (switch_on_bus(ctx, &err)) { app_title_cannot_open(win, err); said = 1; }
-            else if (said) { SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)"); said = 0; }
+            else if (said) { SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)"); said = 0; g_menu_state = MENU_WAITING; }
         }
-        SDL_Delay(250);
+        menu_draw(ren);
+        SDL_Delay(50);
     }
 }
 
@@ -431,6 +458,7 @@ static int decoder_main(void *arg)
         if (have_kind && hdr.kind < last_kind) { s_sessions++; fprintf(stderr, "\nnew stream session %ld (the console reattached)\n", (long)s_sessions); }
         last_kind = hdr.kind; have_kind = 1;
         if (a->es) fwrite(payload, 1, hdr.length, a->es);
+        rec_video(&hdr, payload, t_hdr);
         if (hdr.flags & SFT_FLAG_KEY) s_keyframes++;
         g_t_rx[hdr.kind & 255] = t_hdr;
         g_age_ms[hdr.kind & 255] = (hdr.stride != 0 && hdr.stride < 10000000u) ? hdr.stride / 1000.0 : -1.0;
@@ -486,6 +514,8 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     }
     for (int i = 0; i < FQ; i++) g_fq[i] = av_frame_alloc();
     if (!g_fm) { g_fm = SDL_CreateMutex(); g_f_put = SDL_CreateCond(); }
+    rec_init(g_rec_dir, g_mp4);
+    if (g_mp4) rec_toggle();
     dec_args_t da = { &dec, rec, es };
     g_dec_stop = 0;
     SDL_Thread *dth = SDL_CreateThread(decoder_main, "decoder", &da);
@@ -495,14 +525,14 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     uint32_t W = 0, H = 0;
     const Uint64 freq = SDL_GetPerformanceFrequency();
     const Uint64 t_start = SDL_GetPerformanceCounter();
-    Uint64 t_prev_show = 0, t_win = t_start;
-    long shown = 0, skipped = 0;
+    Uint64 t_prev_show = 0, t_win = t_start, t_menu = 0;
+    long shown = 0, skipped = 0, stale = 0;
     double lat_sum = 0, lat_max = 0, age_sum = 0, age_max = 0; long lat_n = 0, age_n = 0;
     /* this second's window */
     long w_shown = 0, w_skipped = 0, w_dec0 = 0, w_lat_n = 0, w_age_n = 0; double w_bytes0 = 0, w_lat = 0, w_age = 0, w_gap = 0, w_draw = 0, w_dec_ms0 = 0;
     int w_qmax_seen = 0;
     long w_a_bytes0 = 0;
-    char title[256];
+    char title[512];
 
     while (!g_quit) {
         app_events(win, ren, tex);
@@ -523,7 +553,23 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
         }
         SDL_LockMutex(g_fm);
         if (g_fn == 0) SDL_CondWaitTimeout(g_f_put, g_fm, 20);
-        if (g_fn == 0) { SDL_UnlockMutex(g_fm); goto stats; }
+        if (g_fn == 0) {
+            SDL_UnlockMutex(g_fm);
+        no_picture:
+            {
+                /* v0.5: no new picture for 1.5 s (no game yet, the game closed
+                 * or in the background, the stream turned off): the menu
+                 * instead of a frozen frame */
+                const Uint64 nowm = SDL_GetPerformanceCounter();
+                if (!g_menu && (!t_prev_show || (double)(nowm - t_prev_show) / (double)freq > 1.5)) {
+                    g_menu = 1;
+                    g_menu_state = t_prev_show ? MENU_PAUSED : MENU_CONNECTED;
+                    if (t_prev_show) fprintf(stderr, "\nno new picture for 1.5 s - showing the menu\n");
+                }
+                if (g_menu && (double)(nowm - t_menu) / (double)freq > 0.2) { menu_draw(ren); t_menu = nowm; }
+            }
+            goto stats;
+        }
         while (g_fn > 2) {                     /* the latency cap: at most two frames behind */
             av_frame_unref(g_fq[g_fh]);
             g_fh = (g_fh + 1) % FQ;
@@ -534,8 +580,23 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
         g_fh = (g_fh + 1) % FQ;
         g_fn--;
         SDL_UnlockMutex(g_fm);
+        /* v0.5: while the game is not on screen (HOME menu, suspended) the
+         * console keeps re-sending its last frame, ageing: frames older than
+         * 800 ms on the console are not new picture. Live frames are 5-60 ms
+         * old; a loading stall that long does not last the 1.5 s the menu
+         * waits for. (Recordings from before M85 carry no age: -1.) */
+        if (g_age_ms[show->pts & 255] > 800.0) {
+            av_frame_unref(show);
+            stale++;
+            goto no_picture;
+        }
         {
             const Uint64 r0 = SDL_GetPerformanceCounter();
+            if (g_menu) {                      /* back from the menu: the picture's own size again */
+                g_menu = 0;
+                if (tex) SDL_RenderSetLogicalSize(ren, (int)W, (int)H);
+                SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+            }
             if (!tex || (uint32_t)show->width != W || (uint32_t)show->height != H) {
                 if (tex) SDL_DestroyTexture(tex);
                 W = (uint32_t)show->width; H = (uint32_t)show->height;
@@ -547,6 +608,13 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
             SDL_UpdateYUVTexture(tex, NULL, show->data[0], show->linesize[0], show->data[1], show->linesize[1], show->data[2], show->linesize[2]);
             SDL_RenderClear(ren);
             SDL_RenderCopy(ren, tex, NULL, NULL);
+            if (rec_active()) {                /* v0.5: a red dot while recording (not in the file) */
+                const int d = (int)(H / 40 > 12 ? H / 40 : 12);
+                SDL_SetRenderDrawColor(ren, 230, 40, 40, 255);
+                SDL_Rect r = { d, d, d, d };
+                SDL_RenderFillRect(ren, &r);
+                SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+            }
             SDL_RenderPresent(ren);            /* waits for the display's refresh (vsync) */
             const Uint64 now = SDL_GetPerformanceCounter();
             w_draw += (double)(now - r0) * 1000.0 / (double)freq;
@@ -568,8 +636,10 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                 const long dec = s_decoded - w_dec0;
                 const double mbps = (s_bytes - w_bytes0) * 8.0 / 1e6 / secs;
                 const double dms = dec ? (s_dec_ms - w_dec_ms0) / dec : 0.0;
-                snprintf(title, sizeof(title), "Switch Frame Tap  %ux%u  %.1f fps  %.0f Mbps  pc %.1f ms  console %.1f ms",
-                         W, H, w_shown / secs, mbps, w_lat_n ? w_lat / w_lat_n : 0.0, w_age_n ? w_age / w_age_n : 0.0);
+                char rs[200];
+                rec_status(rs, sizeof(rs));
+                snprintf(title, sizeof(title), "Switch Frame Tap  %ux%u  %.1f fps  %.0f Mbps  pc %.1f ms  console %.1f ms%s",
+                         W, H, w_shown / secs, mbps, w_lat_n ? w_lat / w_lat_n : 0.0, w_age_n ? w_age / w_age_n : 0.0, rs);
                 if (W) SDL_SetWindowTitle(win, title);
                 const double a_kbs = (g_a_bytes - w_a_bytes0) / 1024.0 / secs;
                 const double a_q = g_adev ? SDL_GetQueuedAudioSize(g_adev) / 192.0 : 0.0;
@@ -588,9 +658,11 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     reader_stop();
     g_dec_stop = 1;
     SDL_WaitThread(dth, NULL);
+    rec_join();                               /* v0.5: finish and close a recording */
     const double secs = (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq;
     fprintf(stderr, "\n%ld packets, %ld decoded, %ld shown, %ld skipped (latency cap), %ld not decoded, %ld lost, %.1f MB in %.0f s\n",
             (long)s_packets, (long)s_decoded, shown, skipped, (long)s_undecoded, (long)s_lost, s_bytes / 1e6, secs);
+    if (stale) fprintf(stderr, "%ld re-sent frames not shown (the game was not on screen)\n", stale);
     if (s_keyframes) fprintf(stderr, "%ld keyframes (IDR)\n", (long)s_keyframes);
     if (lat_n) fprintf(stderr, "PC latency (header arrival -> on screen): avg %.1f ms, max %.1f ms\n", lat_sum / lat_n, lat_max);
     if (age_n) fprintf(stderr, "console latency (present -> header sent): avg %.1f ms, max %.1f ms\n", age_sum / age_n, age_max);
@@ -631,6 +703,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--app")) g_app = 1;
         else if (!strcmp(argv[i], "--paced")) g_paced = 1;
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) g_run_secs = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--mp4") && i + 1 < argc) g_mp4 = argv[++i];
+        else if (!strcmp(argv[i], "--rec-dir") && i + 1 < argc) g_rec_dir = argv[++i];
         else { fprintf(stderr, "unknown option %s (see the comment at the top of raw-view.c)\n", argv[i]); return 2; }
     }
     if (scale < 1) scale = 1;
@@ -678,10 +752,8 @@ int main(int argc, char **argv)
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Switch Frame Tap", SDL_GetError(), NULL);
             return 1;
         }
-        SDL_RenderSetLogicalSize(ren, 1280, 720);
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-        SDL_RenderClear(ren);
-        SDL_RenderPresent(ren);
+        rec_init(g_rec_dir, g_mp4);
+        menu_draw(ren);
         g_usb = app_wait_device(ctx, win, ren, NULL);
         if (!g_usb) { SDL_Quit(); libusb_exit(ctx); return 0; }
     } else if (file) {
@@ -747,6 +819,11 @@ int main(int argc, char **argv)
      * and the time spent drawing - the Windows diagnosis */
     long shown = 0, skipped = 0;
     double draw_ms_total = 0.0;
+    /* v0.5: --mp4 from a file replay records on a 60 fps clock (the file
+     * is read as fast as it decodes, so arrival times mean nothing) */
+    Uint64 t_synth = SDL_GetPerformanceCounter();
+    const Uint64 frame_ticks = SDL_GetPerformanceFrequency() / 60;
+    if (g_mp4) { rec_init(NULL, g_mp4); rec_toggle(); }
 
     while (!g_quit && (max_frames == 0 || packets < max_frames)) {
         if (g_app && g_lost) {
@@ -791,7 +868,8 @@ int main(int argc, char **argv)
             }
             if (read_exact(payload, hdr.length, 5000) != (int)hdr.length) continue;
             memset(payload + hdr.length, 0, 64);
-            if (hdr.flags & SFT_FLAG_AUDIO) continue;   /* v0.3: sound is the live pipeline's */
+            if (g_mp4) t_hdr = t_synth;
+            if (hdr.flags & SFT_FLAG_AUDIO) { rec_audio(payload, hdr.length, hdr.width, hdr.height, t_hdr); continue; }   /* v0.3: sound is the live pipeline's */
         } else if (!reader_pop(&hdr, &payload, &cap, &t_hdr, g_app ? 50 : 200, &left)) {
             continue;
         }
@@ -812,6 +890,7 @@ int main(int argc, char **argv)
             }
             last_kind = hdr.kind; have_kind = 1;
             if (es) fwrite(payload, 1, hdr.length, es);
+            if (g_in && g_mp4) { rec_video(&hdr, payload, t_hdr); t_synth += frame_ticks; }
             t_rx[hdr.kind & 255] = t_hdr;
             if (hdr.flags & SFT_FLAG_KEY) keyframes++;
             /* M85 builds put the console-side age (present -> header, us) in
@@ -957,6 +1036,7 @@ int main(int argc, char **argv)
                        age_sum / age_n, age_max);
     if (shown) fprintf(stderr, "drawn %ld, skipped %ld (a newer frame was waiting), draw avg %.2f ms, USB queue max %d of %d\n",
                        shown, skipped, draw_ms_total / shown, g_qmax, QN);
+    rec_join();                               /* v0.5: --mp4: finish the file */
     /* machine-readable last line, for tests */
     printf("packets=%ld frames=%ld undecoded=%ld lost=%ld\n", packets, frames, undecoded, lost);
 
