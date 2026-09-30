@@ -122,6 +122,8 @@ namespace ams::mitm::applet {
 
     }
 
+    void NotifyShot(const char *text) { Notify(text); }
+
     void StartShotInput() {
         R_ABORT_UNLESS(os::CreateThread(std::addressof(g_input_thread), InputThread, nullptr,
                                         g_input_stack, sizeof(g_input_stack),
@@ -138,7 +140,7 @@ namespace ams::mitm::applet {
         return true;
     }
 
-    bool WriteShot(const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2) {
+    bool WriteShot(const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra) {
         if (w == 0 || h == 0 || w > 1920 || h > 1088) { ++g_shot_fail; LogLine("shot: %ux%u is not a size this writes", w, h); return false; }
         const u64 t0 = armTicksToNs(armGetSystemTick());
         char path[128];
@@ -169,7 +171,7 @@ namespace ams::mitm::applet {
                 }
                 return true;
             },
-            [&](uint32_t y, uint8_t *rgb) { png::DeswizzleRowRgb(src, src_size, y, w, stride_bytes, bh_log2, rgb); }) && flush();
+            [&](uint32_t y, uint8_t *rgb) { png::DeswizzleRowRgb(src, src_size, y, w, stride_bytes, bh_log2, rgb, bgra); }) && flush();
         static_cast<void>(fs::FlushFile(f));
         fs::CloseFile(f);
         const u64 ms = (armTicksToNs(armGetSystemTick()) - t0) / 1000000;

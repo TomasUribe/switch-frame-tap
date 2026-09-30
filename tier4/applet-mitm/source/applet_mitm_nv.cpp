@@ -1276,6 +1276,8 @@ namespace ams::mitm::applet {
     constinit PresentRec g_present_ring[PresentRingSize] = {};
     constinit std::atomic<bool> g_stream_enabled{true};
     constinit std::atomic<bool> g_reconfig_request{false};
+    constinit std::atomic<u64>  g_app_tid{0};
+    constinit std::atomic<bool> g_app_excluded{false};
     constinit std::atomic<u32>  g_live_state{LiveState_Starting};
     constinit std::atomic<u32>  g_live_w{0}, g_live_h{0}, g_live_fps_x10{0}, g_live_game_fps_x10{0}, g_live_sessions{0};
 
@@ -2333,7 +2335,7 @@ namespace ams::mitm::applet {
          * exact-size one - three 1920x1080 A8B8G8R8 slots, what MK8 uses; a
          * game with another layout is reported and skipped. */
         bool FindSwapchainBySize(::ams::svc::Handle dbg, u64 want, u64 *out) {
-            u64 addr = 0;
+            u64 addr = 0, best = 0, best_size = ~UINT64_C(0);
             for (u32 steps = 0; steps < 4000; ++steps) {
                 ::ams::svc::MemoryInfo mi = {};
                 ::ams::svc::PageInfo   pi = {};
@@ -2341,9 +2343,20 @@ namespace ams::mitm::applet {
                 const u32  attr = static_cast<u32>(mi.attribute);
                 const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
                 if (dev && mi.size == want) { *out = mi.base_address; return true; }
+                /* v0.1.1b: some homebrew keeps its framebuffers inside a larger
+                 * device-mapped block (Run AE: two 1280x720 slots at +0xF0000
+                 * and +0x4B0000 of one allocation) - the smallest such block
+                 * that can hold them, if no region is exactly their size */
+                if (dev && mi.size > want && mi.size < best_size) { best = mi.base_address; best_size = mi.size; }
                 const u64 next = mi.base_address + mi.size;
-                if (next <= addr) { return false; }
+                if (next <= addr) { break; }
                 addr = next;
+            }
+            if (best_size != ~UINT64_C(0)) {
+                LogLine("   swapchain: no region of exactly %llu B; using the smallest device-mapped one that holds it (%llu B)",
+                        static_cast<unsigned long long>(want), static_cast<unsigned long long>(best_size));
+                *out = best;
+                return true;
             }
             return false;
         }
@@ -2399,6 +2412,14 @@ namespace ams::mitm::applet {
                     os::SleepThread(TimeSpan::FromMilliSeconds(200));
                 }
                 const bool presenting = g_queue_count.load(std::memory_order_relaxed) != q_before;
+                /* v0.1.1b: an app on the never-attach list (anti-debug builds
+                 * such as TiCo refuse to run under a debugger) */
+                if (have_app && g_app_excluded.load(std::memory_order_relaxed)) {
+                    g_live_state.store(LiveState_Excluded, std::memory_order_relaxed);
+                    if (!said_wait_game) { LogLine("   live: %016llx is excluded - not attaching", static_cast<unsigned long long>(g_app_tid.load())); VicStage("live:excluded"); said_wait_game = true; }
+                    os::SleepThread(TimeSpan::FromMilliSeconds(500));
+                    continue;
+                }
                 if (!have_app || pid.value == skip_pid || !presenting) {
                     g_live_state.store(LiveState_WaitGame, std::memory_order_relaxed);
                     if (!said_wait_game) {
@@ -4477,6 +4498,9 @@ namespace ams::mitm::applet {
         constexpr u32 NvfOffRefOut = (NvfOffCurUV + NvfChroma + 0xFFF) & ~0xFFFu;
         constexpr u32 NvfArenaSize = NvfOffRefOut + 0x160000;
         constexpr size_t NvfArenaBase = FbBlockRowStage + 3 * StreamStageSize;   /* past both stream stages */
+        /* v0.1.1b: the live capture may use the first stage (g_stage_buf, which
+         * the live stream never touches) as the tail of a larger slot */
+        constexpr size_t MaxSlotBytes = FbBlockRowStage + StreamStageSize;
         static_assert(NvfLuma == 1280 * 720 && NvfChroma == 1280 * 368, "16-row blocks: what NVENC reads");
         static_assert(NvfOffCurUV % 0x100 == 0 && NvfArenaBase % 0x1000 == 0);
         static_assert(sizeof(nvenc_grc_idr::Setup) <= NvfOffStatus && sizeof(nvenc_pic_stat_s) <= NvfOffRc - NvfOffStatus);
@@ -4739,8 +4763,10 @@ namespace ams::mitm::applet {
                 if (g.layout != 3) {
                     LogLine("   %s: swapchain layout %u is not block-linear - not supported", who, g.layout); return false;
                 }
-                if (g.buf_size > FbSlotSize || g.width > 1920 || g.height > 1088) {
-                    LogLine("   %s: buffer %ux%u, %u B - larger than one 1080p slot, not supported", who, g.width, g.height, g.buf_size); return false;
+                /* v0.1.1b: up to the 1080p slot plus the spare stage after it in
+                 * g_ind_buf (32-row blocks make a 1080p buffer 9.8 MB, Run AE) */
+                if (g.buf_size > MaxSlotBytes || g.width > 1920 || g.height > 1088) {
+                    LogLine("   %s: buffer %ux%u, %u B - larger than %zu B, not supported", who, g.width, g.height, g.buf_size, MaxSlotBytes); return false;
                 }
                 for (u32 k = 0; k < 8; ++k) { slot_off[k] = g.slot_offset[k]; }
                 nslots = g.num_slots;
@@ -4748,9 +4774,12 @@ namespace ams::mitm::applet {
                 /* MK8's A8B8G8R8 surface reads correctly as the VIC's
                  * A8R8G8B8 (M36/M83: R,G,B,A in memory); the same is assumed
                  * for any other format and said in the log */
-                const bool known_fmt = g.color_format == 0x100532120ull;
+                /* v0.1.1b: NvColorFormat A8R8G8B8 (0x100d12120) is B, G, R, A in
+                 * memory - the VIC's A8B8G8R8, the other way round */
+                const bool bgra = g.color_format == 0x100d12120ull;
+                const bool known_fmt = g.color_format == 0x100532120ull || bgra;
                 src = SrcDesc{ g.width, g.height, g.stride_px, vic::BLK_KIND_GENERIC_16Bx2, g.block_h_log2,
-                               vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
+                               bgra ? vic::PIXFMT_A8B8G8R8 : vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
                 mk8_layout = g.width == 1920 && g.height == 1080 && g.stride_px == 1920 && g.block_h_log2 == 4;
                 LogLine("   %s: game swapchain %ux%u stride %u px, block height 2^%u, %u slot(s) of %u B, format %#llx%s",
                         who, g.width, g.height, g.stride_px, g.block_h_log2, nslots, buf_bytes,
@@ -4776,7 +4805,10 @@ namespace ams::mitm::applet {
                     return false;
                 }
                 u32 si = 0;
-                if (R_FAILED(NvmapOwn(nvmap_fd, g_ind_buf, static_cast<u32>(FbSlotSize), 0, std::addressof(sh), std::addressof(si), true))) {
+                /* the slot copy, as the VIC sees it: one 1080p slot, or more for a
+                 * larger buffer (v0.1.1b) */
+                const u32 slot_map = static_cast<u32>(buf_bytes > FbSlotSize ? ((buf_bytes + 0xFFFu) & ~0xFFFu) : FbSlotSize);
+                if (R_FAILED(NvmapOwn(nvmap_fd, g_ind_buf, slot_map, 0, std::addressof(sh), std::addressof(si), true))) {
                     LogLine("   %s: nvmap of the slot copy failed", who); return false;
                 }
                 MapCmdBuffer(vfd, sh, std::addressof(slot_vic), "nvf-slot", 0);
@@ -5301,10 +5333,13 @@ namespace ams::mitm::applet {
         bool ShotFromSession(const NvfSession &s) {
             const u32 w = s.corner ? NvfW : s.src.w, h = s.corner ? NvfH : s.src.h;
             const size_t n = s.corner ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
-            return WriteShot(g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2);
+            return WriteShot(g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.pixfmt == vic::PIXFMT_A8B8G8R8);
         }
 
         bool ShotStandalone() {
+            if (g_app_excluded.load(std::memory_order_relaxed)) {
+                ++g_shot_fail; LogLine("shot: this app is excluded - not attaching"); NotifyShot("Screenshots are off for this app (excluded)"); return false;
+            }
             ::ams::os::ProcessId pid{};
             if (g_pmdmnt_rc != 0 || R_FAILED(::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid)))) {
                 ++g_shot_fail; LogLine("shot: no game is running"); return false;
@@ -5418,7 +5453,8 @@ namespace ams::mitm::applet {
                 if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   nvstream: %s", SlotReadFailure()); return StreamEnd::GameGone; }
                 s.Decide("nvstream");
             }
-            const bool full1080 = !s.corner && s.mk8_layout && !g_cap720_armed
+            /* v0.1.1b: any 1920x1080 surface, not only MK8's layout */
+            const bool full1080 = !s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed
                                && g_ind_size >= NvfArenaBase + Layout1080().arena_size_pipe;
             s.lay = full1080 ? std::addressof(Layout1080()) : nullptr;
             const NvfLayout &L = s.Lay();
@@ -5598,6 +5634,7 @@ namespace ams::mitm::applet {
                 const u64 t0 = armTicksToNs(armGetSystemTick());
                 if (live && !g_stream_enabled.load(std::memory_order_relaxed)) { why = "turned off from the overlay"; end = StreamEnd::Disabled; break; }
                 if (live && g_reconfig_request.exchange(false, std::memory_order_relaxed)) { why = "new settings from the manager app"; end = StreamEnd::Reconfigure; break; }
+                if (live && g_app_excluded.load(std::memory_order_relaxed)) { why = "this app was excluded"; end = StreamEnd::Disabled; break; }
                 if (live && t0 - o_t0 >= UINT64_C(1000000000)) {
                     const u32 qn = g_queue_count.load(std::memory_order_relaxed);
                     g_live_fps_x10.store(static_cast<u32>(static_cast<u64>(sent - o_sent0) * UINT64_C(10000000000) / (t0 - o_t0)), std::memory_order_relaxed);

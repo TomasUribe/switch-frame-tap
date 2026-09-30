@@ -141,8 +141,14 @@ namespace ams::mitm::applet {
         LiveState_Wedged     = 5,   /* an engine stalled: no streaming until reboot */
         LiveState_NotArmed   = 6,   /* "live" is not in the arm file */
         LiveState_Unsupported = 7,  /* M98: untested firmware; allow_untested_firmware=1 overrides */
+        LiveState_Excluded   = 8,   /* v0.1.1b: the running app is on the never-attach list */
     };
     extern std::atomic<bool> g_stream_enabled;
+    /* v0.1.1b: the running application's program id and whether it is on the
+     * never-attach list (sdmc:/config/switch-frame-tap/excluded.txt) - kept
+     * current by the app watcher (applet_mitm_service.cpp) */
+    extern std::atomic<u64>  g_app_tid;
+    extern std::atomic<bool> g_app_excluded;
     /* M98: new settings arrived (ReloadConfig): end the session, restart with them */
     extern std::atomic<bool> g_reconfig_request;
     extern std::atomic<u32>  g_live_state;

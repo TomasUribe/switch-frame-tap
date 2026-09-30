@@ -65,6 +65,20 @@ AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IViDisplaySvcMitm, AMS_VI_DISPLA
 
 AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IViRootMitm, AMS_VI_ROOT_MITM_INTERFACE_INFO, 0x2AB1E143)
 
+/* ---- v0.1.1: vi:m root wrapper, for homebrew ---------------------------
+ * libnx's viInitialize(ViServiceType_Default) tries vi:m first, then vi:s,
+ * then vi:u (libnx nx/source/services/vi.c _viInitialize), so every libnx app
+ * - forwarders on the HOME menu included - presents through vi:m, which games
+ * cannot open. The root is IManagerRootService: 2 GetDisplayService(u32),
+ * 3 GetDisplayServiceWithProxyNameExchange. Only the process that IS the
+ * running application is wrapped (ShouldMitm); qlaunch, am, the overlay
+ * loader and every other vi:m user get the real service. */
+#define AMS_VI_MANAGER_ROOT_MITM_INTERFACE_INFO(C, H) \
+    AMS_SF_METHOD_INFO(C, H, 2, Result, GetDisplayService, (sf::Out<sf::SharedPointer<ams::mitm::applet::IViDisplaySvcMitm>> out, u32 mode), (out, mode)) \
+    AMS_SF_METHOD_INFO(C, H, 3, Result, GetDisplayServiceWithProxyNameExchange, (sf::Out<sf::SharedPointer<ams::mitm::applet::IViDisplaySvcMitm>> out), (out))
+
+AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IViManagerRootMitm, AMS_VI_MANAGER_ROOT_MITM_INTERFACE_INFO, 0x2AB1E144)
+
 namespace ams::mitm::applet {
 
     class BinderMitm : public sf::MitmServiceImplBase {
@@ -100,5 +114,44 @@ namespace ams::mitm::applet {
             void Wrap(::Service disp_svc, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out);
     };
     static_assert(IsIViRootMitm<ViRootMitm>);
+
+    /* shared by the vi:u and vi:m roots: forward a root command that returns
+     * the display service, and wrap what it returns */
+    Result ForwardGetDisplayService(::Service *fwd, u32 cmd, u32 mode, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out);
+    void WrapDisplayService(::Service disp_svc, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out);
+    Result ForwardProxyNameExchange(::Service *fwd, u32 cmd, const u8 *msg, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out);
+
+    /* v0.1.1: the running application's pid, refreshed every 100 ms by its
+     * own thread (StartAppWatch). NEVER ask pm from ShouldMitm: sm waits on
+     * our answer synchronously (sm_service_manager.cpp GetMitmServiceHandleImpl,
+     * and aborts if it fails), and pm can be waiting on sm while it launches a
+     * program - a deadlock that would freeze the console. */
+    extern std::atomic<u64> g_app_pid;
+    inline bool IsRunningApplication(os::ProcessId pid) {
+        const u64 ap = g_app_pid.load(std::memory_order_relaxed);
+        return ap != 0 && ap == pid.value;
+    }
+    void StartAppWatch();
+
+    class ViManagerRootMitm : public sf::MitmServiceImplBase {
+        public:
+            using MitmServiceImplBase::MitmServiceImplBase;
+        public:
+            /* no IPC here (see g_app_pid). Applications and forwarders have
+             * program ids from 0x0100000000010000 up; system programs are
+             * below it, and 0x42... is where homebrew sysmodules live - the
+             * Tesla/Ultrahand overlay loader (0x420000000007E51A) among them.
+             * A forwarder with another id is caught by the pid once the
+             * watcher has seen it. */
+            static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
+                const u64 tid = client_info.program_id.value;
+                const bool app_range = tid >= UINT64_C(0x0100000000010000) && (tid >> 56) != 0x42;
+                return app_range || IsRunningApplication(client_info.process_id);
+            }
+        public:
+            Result GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode);
+            Result GetDisplayServiceWithProxyNameExchange(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out);
+    };
+    static_assert(IsIViManagerRootMitm<ViManagerRootMitm>);
 
 }

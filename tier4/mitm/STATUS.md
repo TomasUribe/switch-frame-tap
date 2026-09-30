@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 96 hardware test cycles (through M96 Run X). Current build: **M99c = release v0.1.0** (2026-09-29). Previous: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 103 hardware test cycles (through Run AF). Current build: **v0.1.1** (released 2026-09-29; v0.1.0 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,81 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.1.1: homebrew applications stream (built, not yet run) ***
+
+The user runs homebrew as **forwarders on the HOME menu** (applications, not
+applets) and they did not stream (SysDVR shows them: it records through grc).
+Cause, from libnx `_viInitialize`: `ViServiceType_Default` tries **vi:m first**,
+then vi:s, then vi:u - homebrew has vi:m access, so every libnx app presents
+through vi:m (GetDisplayService = root command 2, policy 1), which games
+cannot open. Only vi:u was wrapped; Run AD's log shows no second session.
+
+- **A vi:m mitm** (`ViManagerRootMitm`: 2 GetDisplayService, 3 ...WithProxyName
+  Exchange; the vi:u handlers refactored into shared `ForwardGetDisplayService`
+  / `ForwardProxyNameExchange` / `WrapDisplayService`). NPDM service_host vi:m.
+- **ShouldMitm makes no IPC.** First draft asked pm:dmnt there; but sm queries
+  the mitm synchronously (`GetMitmServiceHandleImpl`: `R_ABORT_UNLESS(
+  serviceDispatchInOut(query_h, 65000 ...))`), and pm can be waiting on sm
+  while it launches a program - a console-freezing deadlock. Now: program id
+  >= 0x0100000000010000 and not 0x42... (system programs sit below; homebrew
+  sysmodules, the overlay loader 0x420000000007E51A among them, at 0x42), or
+  the pid a watcher thread (`StartAppWatch`, pm:dmnt every 100 ms) has seen
+  as the application - for forwarders with 0x05... ids.
+- **The binder hook only feeds the capture from the application's pid**; any
+  other session it wraps is forwarded untouched.
+
+SysDVR was removed from the card at the user's request (backed up to
+~/switch-backups/sysdvr-2026-09-29 on the PC first).
+
+### Run AE (v0.1.1, logs `logs/v011-runAE*`): hbmenu streams; three gaps
+
+The vi:m mitm works: forwarders' sessions arrive ("cmd 2 mode=1 (vi:m - a
+homebrew application)"), and **hbmenu in title override streamed** (1280x720,
+2 slots). But:
+
+1. **TiCo refuses to run under a debugger** ("Protected build detected a
+   debugger") - our attach is what it detects. Not something to work around:
+   the app's own protection. -> a never-attach list.
+2. **"swapchain ... NOT FOUND"** for an app whose two 1280x720 buffers sit at
+   +0xF0000 and +0x4B0000 of one larger device-mapped allocation: the finder
+   wanted a region of exactly the swapchain's size.
+3. **A 1920x1080 app refused**: 32-row blocks (block_h_log2 5) make each buffer
+   9,830,400 B > one MK8 slot; and it is NvColorFormat A8R8G8B8 (B,G,R,A).
+4. MK8's first session: "MAP_CMD_BUFFER ... phys=0x0 ... slot pin returned 0"
+   - our own slot copy failed to pin; the retry 5 s later worked. Unexplained;
+   watch for it.
+
+### v0.1.1b
+
+- **Finder**: exact size first, else the smallest device-mapped region that
+  holds the swapchain (logged).
+- **Slots up to 10.5 MB** (`MaxSlotBytes`: the 1080p slot plus g_stage_buf,
+  which the live stream never uses); the VIC's view of the slot copy grows
+  with it. Any block height. **Native 1080p for any 1920x1080 surface**, not
+  only MK8's layout. **B,G,R,A surfaces** get the VIC's A8B8G8R8 and swapped
+  screenshots (png_test: a 1080p bh-5 BGRA case).
+- **Never-attach list** `config/switch-frame-tap/excluded.txt`: the app
+  watcher reads the program id (pm:info) and flags an excluded app; live mode
+  and screenshots never attach to it (state 8). sftap 3 SetAppExcluded;
+  StreamStatus v3 (64 B: app program id, excluded). Overlay: "Stream this
+  app" On/Off. Manager: "Apps never streamed" (A twice clears).
+
+### Run AF (v0.1.1b, logs `logs/v011b-runAF*`): released as v0.1.1
+
+User: "homebrew apps worked fine at 720p"; TiCo cannot be streamed (expected:
+anti-debug). Homebrew cannot be forced into docked mode: ReverseNX-RT hooks
+the official SDK's operation-mode calls through SaltyNX, and libnx apps ask am
+directly - faking it would take an am mitm, not worth the risk; most homebrew
+draws 720p in both modes anyway. The saved log is a later MK8-only boot: one
+"VIC did not complete" at 348 s, the session restarted 5 s later and ran on
+(with Run AE's failed first pin: two one-off engine hiccups, both recovered -
+watch).
+
+**v0.1.1** (tag `v0.1.1`, 2026-09-29): homebrew streaming, the never-attach
+list, README screenshots from the console (docs/shot-*.jpg).
+
+---
 
 ## *** M99: native-resolution screenshots on a button combo (built, not yet run) ***
 

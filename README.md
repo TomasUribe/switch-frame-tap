@@ -25,9 +25,18 @@ window against the game's ~59.2, 0 errors). See
 > it being on the PC screen (monitor not included).
 >
 > It is still **experimental**: USB only (so 1080p needs ReverseNX-RT in
-> handheld), official games only (not homebrew apps yet), two games tested,
-> no audio, a Linux viewer only, one console tested. Read
+> handheld), no audio, a Linux viewer only, one console tested. Read
 > [Limitations](#limitations) before installing it.
+
+| | |
+|---|---|
+| ![Mario Kart 8 Deluxe, a race at 1920x1080](docs/shot-mk8-race-1080p.jpg) | ![Mario Kart 8 Deluxe, Mario Kart Stadium at 1920x1080](docs/shot-mk8-stadium-1080p.jpg) |
+| ![Mario Kart 8 Deluxe, another race at 1920x1080](docs/shot-mk8-race2-1080p.jpg) | ![Ocarina of Time on Nintendo Switch Online, 1280x720](docs/shot-oot-nso-720p.jpg) |
+
+*Screenshots taken on the console with the screenshot button (L3 + R3), at
+the game's own resolution: Mario Kart 8 Deluxe at 1920x1080 (docked picture
+through ReverseNX-RT, in handheld), Ocarina of Time on Nintendo Switch Online
+at 1280x720 - the same frames the stream sends.*
 
 ![A frame off the live stream: Mario Kart 8 Deluxe race start, 1280x720, decoded from the console's H.264](docs/stream-mk8-go.jpg)
 
@@ -57,9 +66,10 @@ takes the frame before that encoder.
 
 ```
 the game presents a frame (queueBuffer)
-  | vi:u mitm sees it: which swapchain slot, and the GPU fence for it
+  | vi:u mitm (games) / vi:m mitm (homebrew) sees it: which swapchain slot,
+  | and the GPU fence for it
   v
-wait for the fence (the GPU is often still drawing: ~5-11 ms)
+take the newest frame the GPU has finished (or wait for the next one)
   v
 svcReadDebugProcessMemory: copy the slot out of the game's memory
   |   (the kernel debug SVCs - the only route to another process's pixels)
@@ -72,18 +82,19 @@ USB bulk -> tools/raw-recv/raw-view on the PC: libusb + libavcodec + SDL2
 ```
 
 The sysmodule never touches the GPU or the display stack's buffers directly.
-It watches the game's display traffic through a `vi:u` mitm, reads the
+It watches the game's display traffic through a `vi:u` mitm (and homebrew's
+through `vi:m`, for the running application only), reads the
 finished frame with the same debug SVCs Atmosphère's cheat engine uses, and
 drives the VIC and NVENC engines itself over raw `nvdrv` ioctls.
 
-## Install (v0.1.0)
+## Install (v0.1.1)
 
 **You need:** a Switch running Atmosphère (tested: Mariko, firmware 22.5.0,
 Atmosphère 1.11.2), a Linux PC, a USB-C cable, and a NAND backup. This drives
 hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.1.0-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.1.1-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -109,7 +120,7 @@ bash tools/raw-recv/install-launcher.sh
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu: it opens a window, waits for the Switch, reconnects on its
 own, and closes only when you close it (F11 or a double-click: fullscreen).
-The release also has `switch-frame-tap-0.1.0-linux-viewer.tar.gz` with the
+The release also has `switch-frame-tap-0.1.1-linux-viewer.tar.gz` with the
 same files. A Windows viewer is planned for v0.2.
 
 **3. Stream.** Connect the Switch (handheld) to the PC with the USB-C cable,
@@ -138,8 +149,21 @@ them. Settings live in `sdmc:/config/switch-frame-tap/config.ini`.
 ### The overlay
 
 Needs an overlay menu (Tesla Menu or Ultrahand, on nx-ovlloader): stream
-on/off (remembered across reboots), live status, and Game default / Handheld
-(720p) / Docked (1080p) through ReverseNX-RT.
+on/off (remembered across reboots), live status, **Stream this app** (see
+below), and Game default / Handheld (720p) / Docked (1080p) through
+ReverseNX-RT.
+
+### Homebrew
+
+Homebrew apps stream too - forwarders on the HOME menu, and the homebrew menu
+in title-override mode - at the resolution the app draws (usually 1280x720).
+ReverseNX-RT cannot switch homebrew to docked mode (it works through the
+official SDK, which homebrew does not use), and most homebrew draws 720p in
+both modes anyway. Some apps refuse to run while a debugger is attached - the
+stream reads frames that way - such as TiCo's protected builds: turn **Stream
+this app** off in the overlay while one is running and restart it; the
+sysmodule then never touches it (no stream, no screenshots). The manager's
+**Apps never streamed** clears the list.
 
 ### Screenshots
 
@@ -162,7 +186,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.1.0       # -> dist/switch-frame-tap-0.1.0-switch.zip
+bash tools/make_release.sh 0.1.1       # -> dist/switch-frame-tap-0.1.1-switch.zip
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -181,9 +205,10 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   ReverseNX-RT; streaming from the dock needs a network transport (not started).
 - **1080p60 wants CPU 1785 MHz.** The frame copy runs on the CPU; at the stock
   1020 MHz it is slower and 1080p runs a little below 60 (still playable).
-- **Official games only.** Homebrew apps started from the homebrew menu run as
-  applets, which present through `vi:s` rather than the `vi:u` this hooks, and
-  are not "the application" the stream looks for. Planned for v0.2.
+- **Homebrew:** apps that run as applets (the homebrew menu from the album)
+  are not streamed - use a forwarder or title override. Apps with anti-debug
+  protection (TiCo) cannot be streamed; exclude them. Homebrew cannot be
+  forced into docked mode.
 - **Two games tested:** Mario Kart 8 Deluxe (three 1920x1080 buffers) and
   Zelda: Breath of the Wild (two). Other games should work if their swapchain
   is block-linear RGBA, at most 1920x1080, in one memory object; the log says
@@ -393,8 +418,8 @@ transport** for streaming from the dock, where the dock owns the USB port
 | Frame-exact capture (GPU fence, slot+fence snapshot) | **done, on hardware** (M88-M89): 0 stale, 0 torn |
 | **1080p60 over USB** (1920x1088 NVENC setup, pipelined encode, finished-frame capture) | **done, on hardware** (M90-M96): 58.4 fps sent vs the game's 59.2, with ReverseNX-RT in handheld and CPU 1785 MHz |
 | 1080p60 at stock clocks (CPU 1020 MHz) | tested (Run X): works, a little below 60 |
-| **Release v0.1.0**: config file, manager app, overlay (stream on/off, handheld/docked), native screenshots | **done, on hardware** (M97-M99) |
-| Homebrew apps (applets: `vi:s`, the homebrew loader's process) | next (v0.2) |
+| **Releases**: v0.1.0 (config file, manager app, overlay, native screenshots); v0.1.1 (homebrew) | **done, on hardware** (M97-v0.1.1) |
+| Homebrew apps (forwarders and title override: a `vi:m` mitm for the running application only; larger and offset swapchains, BGRA, 1080p for any layout; a never-attach list) | **done, on hardware** (v0.1.1) |
 | Bitrate tuning (better P frames, QP) | next; also lowers what 1080p60 needs from the network |
 | 1080p60 from the dock, over the network | not started: needs a network transport, see [above](#the-road-to-1080p60) |
 | Audio | not started |

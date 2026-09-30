@@ -4,6 +4,7 @@
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_gbuf.hpp"
 #include "applet_mitm_nv.hpp"
+#include "applet_mitm_control.hpp"
 #include <atomic>
 
 namespace ams::mitm::applet {
@@ -115,6 +116,14 @@ namespace ams::mitm::applet {
                     parcel_in.GetSize(), parcel_out.GetSize());
         }
         if (total == 1) { LogMark("binder:first_txn"); }
+
+        /* v0.1.1: only the running application's frames feed the capture.
+         * With vi:m wrapped too, anything else that slipped through is passed
+         * on untouched (0 = the watcher has not seen an application yet). */
+        {
+            const u64 ap = g_app_pid.load(std::memory_order_relaxed);
+            if (ap != 0 && ap != m_client_info.process_id.value) { R_RETURN(sm::mitm::ResultShouldForwardToSession()); }
+        }
 
         /* SET_PREALLOCATED_BUFFER (14) carries a flattened NvGraphicBuffer in
          * its INPUT parcel - the full description of one frame's memory.
@@ -281,14 +290,51 @@ namespace ams::mitm::applet {
 
     /* ---- vi:u root ---------------------------------------------------- */
 
-    Result ViRootMitm::GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode) {
+    constinit std::atomic<u64> g_app_pid{0};
+
+    namespace {
+        alignas(os::ThreadStackAlignment) constinit u8 g_app_watch_stack[8_KB];
+        constinit os::ThreadType g_app_watch_thread;
+
+        void AppWatchThread(void *) {
+            u64 last = ~UINT64_C(0);
+            const bool info_ok = R_SUCCEEDED(::pminfoInitialize());
+            for (;;) {
+                os::ProcessId pid{};
+                const u64 now = R_SUCCEEDED(::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid))) ? pid.value : 0;
+                g_app_pid.store(now, std::memory_order_relaxed);
+                if (now != last) {
+                    /* v0.1.1b: which program it is, and whether it is excluded */
+                    u64 tid = 0;
+                    if (now != 0 && info_ok && R_FAILED(::pminfoGetProgramId(&tid, now))) { tid = 0; }
+                    g_app_tid.store(tid, std::memory_order_relaxed);
+                    g_app_excluded.store(tid != 0 && IsExcluded(tid), std::memory_order_relaxed);
+                    LogLine("app watch: application pid %llu, program %016llx%s", static_cast<unsigned long long>(now),
+                            static_cast<unsigned long long>(tid), g_app_excluded.load() ? " (EXCLUDED)" : "");
+                    last = now;
+                }
+                os::SleepThread(TimeSpan::FromMilliSeconds(100));
+            }
+        }
+    }
+
+    void StartAppWatch() {
+        if (g_pmdmnt_rc != 0) { LogLine("app watch: pm:dmnt unavailable - homebrew applications need an application-range program id"); return; }
+        R_ABORT_UNLESS(os::CreateThread(std::addressof(g_app_watch_thread), AppWatchThread, nullptr,
+                                        g_app_watch_stack, sizeof(g_app_watch_stack),
+                                        os::GetThreadPriority(os::GetCurrentThread())));
+        os::SetThreadNamePointer(std::addressof(g_app_watch_thread), "applet-mitm.AppWatch");
+        os::StartThread(std::addressof(g_app_watch_thread));
+    }
+
+    Result ForwardGetDisplayService(::Service *fwd, u32 cmd, u32 mode, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out) {
         g_stats.getdisp.fetch_add(1);
         LogMark("GetDisplayService:enter");
-        LogLine("   program=%016llx mode=%u",
-                static_cast<unsigned long long>(m_client_info.program_id.value), mode);
+        LogLine("   program=%016llx cmd %u mode=%u%s", static_cast<unsigned long long>(ci.program_id.value), cmd, mode,
+                cmd == 2 ? " (vi:m - a homebrew application)" : "");
 
         ::Service disp_svc = {};
-        const Result rc = serviceDispatchIn(m_forward_service.get(), 0, mode,
+        const Result rc = serviceDispatchIn(fwd, cmd, mode,
             .out_num_objects = 1,
             .out_objects     = std::addressof(disp_svc),
         );
@@ -296,13 +342,12 @@ namespace ams::mitm::applet {
             LogLine("   fwd FAILED rc=0x%x", rc.GetValue());
             R_RETURN(rc);
         }
-
-        this->Wrap(disp_svc, out);
+        WrapDisplayService(disp_svc, ci, out);
         LogMark("GetDisplayService:done");
         R_SUCCEED();
     }
 
-    void ViRootMitm::Wrap(::Service disp_svc, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out) {
+    void WrapDisplayService(::Service disp_svc, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out) {
         auto shared_srv = std::make_shared<::Service>(disp_svc);
         const sf::cmif::DomainObjectId target_object_id{ serviceGetObjectId(std::addressof(disp_svc)) };
 
@@ -310,19 +355,15 @@ namespace ams::mitm::applet {
          * service so undeclared commands auto-forward on this NON-domain
          * session. */
         ::ams::sf::impl::g_tier4_pending_mitm_forward = shared_srv;
-        out.SetValue(sf::CreateSharedObjectEmplaced<IViDisplaySvcMitm, ViDisplaySvcMitm>(std::shared_ptr<::Service>(shared_srv), m_client_info), target_object_id);
+        out.SetValue(sf::CreateSharedObjectEmplaced<IViDisplaySvcMitm, ViDisplaySvcMitm>(std::shared_ptr<::Service>(shared_srv), ci), target_object_id);
     }
 
-    Result ViRootMitm::GetDisplayServiceWithProxyNameExchange(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out) {
-        /* FIRST, before any IPC of ours (logging included) reuses the TLS
-         * message buffer: copy the game's request as it arrived. */
-        alignas(0x10) u8 msg[0x100];
-        std::memcpy(msg, armGetTls(), sizeof(msg));
-
+    /* msg: the client's request, copied from TLS before any IPC of ours */
+    Result ForwardProxyNameExchange(::Service *fwd, u32 cmd, const u8 *msg, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out) {
         g_stats.getdisp.fetch_add(1);
         LogMark("GetDisplayServiceWithProxyNameExchange:enter");
 
-        const HipcParsedRequest req = hipcParseRequest(msg);
+        const HipcParsedRequest req = hipcParseRequest(const_cast<u8 *>(msg));
         const uintptr_t words = reinterpret_cast<uintptr_t>(req.data.data_words);
         const uintptr_t raw   = (words + 0xF) & ~static_cast<uintptr_t>(0xF);
         const size_t total    = static_cast<size_t>(req.meta.num_data_words) * 4;
@@ -331,15 +372,15 @@ namespace ams::mitm::applet {
          * arguments (libnx cmifMakeRequest); what follows the header, less the
          * slack actually used, is the arguments with their zero padding */
         size_t args = 0;
-        const bool sane = total >= sizeof(CmifInHeader) + (raw - words) && raw + sizeof(CmifInHeader) <= reinterpret_cast<uintptr_t>(msg) + sizeof(msg)
-                       && hdr->magic == CMIF_IN_HEADER_MAGIC && hdr->command_id == 1;
+        const bool sane = total >= sizeof(CmifInHeader) + (raw - words) && raw + sizeof(CmifInHeader) <= reinterpret_cast<uintptr_t>(msg) + 0x100
+                       && hdr->magic == CMIF_IN_HEADER_MAGIC && hdr->command_id == cmd;
         if (sane) {
             args = total - (raw - words) - sizeof(CmifInHeader);
             if (args > 0x40) { args = 0x40; }
         }
         const u8 *a = reinterpret_cast<const u8 *>(raw + sizeof(CmifInHeader));
-        LogLine("   program=%016llx cmd 1 (ProxyNameExchange): %zu argument byte(s)%s; data words %u, pid %s",
-                static_cast<unsigned long long>(m_client_info.program_id.value), args, sane ? "" : " (UNPARSED)",
+        LogLine("   program=%016llx cmd %u (ProxyNameExchange): %zu argument byte(s)%s; data words %u, pid %s",
+                static_cast<unsigned long long>(ci.program_id.value), cmd, args, sane ? "" : " (UNPARSED)",
                 req.meta.num_data_words, req.meta.send_pid ? "sent" : "none");
         if (sane && args != 0) {
             char hex[3 * 0x40 + 1] = {};
@@ -349,7 +390,7 @@ namespace ams::mitm::applet {
         if (!sane) {
             /* could not read the request: let the real service answer it as
              * before (unwrapped), rather than guess its arguments */
-            LogLine("   not wrapping: forwarding untouched is no longer possible here - using GetDisplayService(0) instead");
+            LogLine("   not wrapping: forwarding untouched is no longer possible here - using GetDisplayService instead");
         }
 
         ::Service disp_svc = {};
@@ -358,19 +399,46 @@ namespace ams::mitm::applet {
             SfDispatchParams disp = {};
             disp.out_num_objects = 1;
             disp.out_objects     = std::addressof(disp_svc);
-            rc = serviceDispatchImpl(m_forward_service.get(), 1, a, static_cast<u32>(args), nullptr, 0, disp);
+            rc = serviceDispatchImpl(fwd, cmd, a, static_cast<u32>(args), nullptr, 0, disp);
         } else {
-            const u32 policy = 0;
-            rc = serviceDispatchIn(m_forward_service.get(), 0, policy,
+            /* the plain GetDisplayService of the same root: 0 on vi:u, 2 on vi:m */
+            const u32 policy = cmd == 3 ? 1 : 0;
+            rc = serviceDispatchIn(fwd, cmd - 1, policy,
                                    .out_num_objects = 1, .out_objects = std::addressof(disp_svc));
         }
         if (R_FAILED(rc)) {
             LogLine("   fwd FAILED rc=0x%x", rc);
             R_RETURN(::ams::Result(rc));
         }
-        this->Wrap(disp_svc, out);
+        WrapDisplayService(disp_svc, ci, out);
         LogMark("GetDisplayServiceWithProxyNameExchange:done");
         R_SUCCEED();
+    }
+
+    Result ViRootMitm::GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode) {
+        R_RETURN(ForwardGetDisplayService(m_forward_service.get(), 0, mode, m_client_info, out));
+    }
+
+    void ViRootMitm::Wrap(::Service disp_svc, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out) {
+        WrapDisplayService(disp_svc, m_client_info, out);
+    }
+
+    Result ViRootMitm::GetDisplayServiceWithProxyNameExchange(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out) {
+        /* FIRST, before any IPC of ours (logging included) reuses the TLS
+         * message buffer: copy the game's request as it arrived. */
+        alignas(0x10) u8 msg[0x100];
+        std::memcpy(msg, armGetTls(), sizeof(msg));
+        R_RETURN(ForwardProxyNameExchange(m_forward_service.get(), 1, msg, m_client_info, out));
+    }
+
+    Result ViManagerRootMitm::GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode) {
+        R_RETURN(ForwardGetDisplayService(m_forward_service.get(), 2, mode, m_client_info, out));
+    }
+
+    Result ViManagerRootMitm::GetDisplayServiceWithProxyNameExchange(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out) {
+        alignas(0x10) u8 msg[0x100];
+        std::memcpy(msg, armGetTls(), sizeof(msg));
+        R_RETURN(ForwardProxyNameExchange(m_forward_service.get(), 3, msg, m_client_info, out));
     }
 
 }

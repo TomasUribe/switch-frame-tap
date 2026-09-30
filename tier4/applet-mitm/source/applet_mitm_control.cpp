@@ -1,4 +1,5 @@
 #include "applet_mitm_control.hpp"
+#include <cstdio>
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_shot.hpp"
@@ -9,12 +10,33 @@ namespace ams::mitm::applet {
 
         constexpr const char OffDir[]  = "sdmc:/config/switch-frame-tap";
         constexpr const char OffFile[] = "sdmc:/config/switch-frame-tap/stream-off";
+        constexpr const char ExclFile[] = "sdmc:/config/switch-frame-tap/excluded.txt";
+
+        /* the never-attach list: program ids, one per line in hex */
+        constexpr size_t MaxExcluded = 64;
+        constinit os::SdkMutex g_excl_lock;
+        constinit u64 g_excl[MaxExcluded] = {};
+        constinit size_t g_excl_n = 0;
+
+        void SaveExcludedLocked() {
+            char buf[MaxExcluded * 17 + 1];
+            size_t n = 0;
+            for (size_t i = 0; i < g_excl_n; ++i) { n += std::snprintf(buf + n, sizeof(buf) - n, "%016llx\n", static_cast<unsigned long long>(g_excl[i])); }
+            static_cast<void>(fs::DeleteFile(ExclFile));
+            if (n == 0) { return; }
+            static_cast<void>(fs::CreateDirectory(OffDir));
+            if (R_FAILED(fs::CreateFile(ExclFile, static_cast<s64>(n)))) { return; }
+            fs::FileHandle f;
+            if (R_FAILED(fs::OpenFile(std::addressof(f), ExclFile, fs::OpenMode_Write))) { return; }
+            static_cast<void>(fs::WriteFile(f, 0, buf, n, fs::WriteOption::Flush));
+            fs::CloseFile(f);
+        }
 
         class StreamControl {
             public:
                 Result GetStatus(sf::Out<StreamStatus> out) {
                     StreamStatus st = {};
-                    st.version      = 2;
+                    st.version      = 3;
                     st.state        = g_live_state.load(std::memory_order_relaxed);
                     st.enabled      = g_stream_enabled.load(std::memory_order_relaxed) ? 1 : 0;
                     st.width        = g_live_w.load(std::memory_order_relaxed);
@@ -25,6 +47,8 @@ namespace ams::mitm::applet {
                     st.shot_enabled = g_shot_enabled.load(std::memory_order_relaxed) ? 1 : 0;
                     st.shots        = g_shot_count.load(std::memory_order_relaxed);
                     st.shot_fails   = g_shot_fail.load(std::memory_order_relaxed);
+                    st.app_tid      = g_app_tid.load(std::memory_order_relaxed);
+                    st.app_excluded = g_app_excluded.load(std::memory_order_relaxed) ? 1 : 0;
                     out.SetValue(st);
                     R_SUCCEED();
                 }
@@ -50,6 +74,22 @@ namespace ams::mitm::applet {
 
                 Result ReloadConfig() {
                     ReloadReleaseConfig();
+                    LoadExcluded();
+                    R_SUCCEED();
+                }
+
+                Result SetAppExcluded(u64 program_id, u8 excluded) {
+                    if (program_id == 0) { R_SUCCEED(); }
+                    {
+                        std::scoped_lock lk(g_excl_lock);
+                        size_t i = 0;
+                        while (i < g_excl_n && g_excl[i] != program_id) { ++i; }
+                        if (excluded && i == g_excl_n && g_excl_n < MaxExcluded) { g_excl[g_excl_n++] = program_id; }
+                        if (!excluded && i < g_excl_n) { g_excl[i] = g_excl[--g_excl_n]; }
+                        SaveExcludedLocked();
+                    }
+                    if (g_app_tid.load(std::memory_order_relaxed) == program_id) { g_app_excluded.store(excluded != 0, std::memory_order_relaxed); }
+                    LogLine("sftap: %016llx %s", static_cast<unsigned long long>(program_id), excluded ? "EXCLUDED - never attached" : "streamed again");
                     R_SUCCEED();
                 }
         };
@@ -69,6 +109,47 @@ namespace ams::mitm::applet {
             g_control_manager.LoopProcess();
         }
 
+    }
+
+    void LoadExcluded() {
+        char buf[MaxExcluded * 18];
+        size_t len = 0;
+        fs::FileHandle f;
+        if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), ExclFile, fs::OpenMode_Read))) {
+            s64 sz = 0;
+            if (R_SUCCEEDED(fs::GetFileSize(std::addressof(sz), f)) && sz > 0) {
+                len = static_cast<size_t>(sz) < sizeof(buf) - 1 ? static_cast<size_t>(sz) : sizeof(buf) - 1;
+                if (R_FAILED(fs::ReadFile(f, 0, buf, len))) { len = 0; }
+            }
+            fs::CloseFile(f);
+        }
+        buf[len] = '\0';
+        std::scoped_lock lk(g_excl_lock);
+        g_excl_n = 0;
+        for (size_t i = 0; i < len && g_excl_n < MaxExcluded; ) {
+            u64 v = 0;
+            size_t d = 0;
+            for (; i < len; ++i, ++d) {
+                const char c = buf[i];
+                const int h = (c >= '0' && c <= '9') ? c - '0' : (c >= 'a' && c <= 'f') ? c - 'a' + 10 : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+                if (h < 0) { break; }
+                v = (v << 4) | static_cast<u64>(h);
+            }
+            if (d == 16 && v != 0) { g_excl[g_excl_n++] = v; }
+            while (i < len && buf[i] != '\n') { ++i; }
+            ++i;
+        }
+        const u64 cur = g_app_tid.load(std::memory_order_relaxed);
+        bool ex = false;
+        for (size_t k = 0; k < g_excl_n; ++k) { if (g_excl[k] == cur) { ex = true; } }
+        g_app_excluded.store(cur != 0 && ex, std::memory_order_relaxed);
+        LogLine("sftap: %zu app(s) excluded (never attached)", g_excl_n);
+    }
+
+    bool IsExcluded(u64 program_id) {
+        std::scoped_lock lk(g_excl_lock);
+        for (size_t k = 0; k < g_excl_n; ++k) { if (g_excl[k] == program_id) { return true; } }
+        return false;
     }
 
     void LoadStreamEnabled() {

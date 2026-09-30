@@ -21,11 +21,13 @@ namespace ams::mitm::applet {
     extern std::atomic<u32>  g_shot_count, g_shot_fail;
 
     void StartShotInput();
+    /* a toast through Ultrahand, if it is installed */
+    void NotifyShot(const char *text);
 
     /* a fresh (< 3 s old) request, consumed; stale ones are dropped */
     bool TakeShotRequest();
 
     /* the visible w x h of a block-linear A8B8G8R8 surface -> PNG */
-    bool WriteShot(const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2);
+    bool WriteShot(const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra = false);
 
 }

@@ -27,20 +27,21 @@ static size_t RefOffset(uint32_t xb, uint32_t y, uint32_t wb, uint32_t bh) {
     return size_t(y / rows) * bpr * bbytes + size_t(xb / 64) * bbytes + size_t((y % rows) / 8) * 512 + g;
 }
 
-static void RunCase(uint32_t sw, uint32_t sh, uint32_t bh, uint32_t w, uint32_t h, const char *out_path) {
+static void RunCase(uint32_t sw, uint32_t sh, uint32_t bh, uint32_t w, uint32_t h, const char *out_path, bool bgra = false) {
     /* the surface: sw x sh RGBA, rows padded to whole blocks */
     const uint32_t wb = sw * 4, rows = ((sh + (8u << bh) - 1) / (8u << bh)) * (8u << bh);
     std::vector<uint8_t> surf(size_t(((wb + 63) / 64) * 64) * rows, 0);
     auto pix = [](uint32_t x, uint32_t y, int c) -> uint8_t { return uint8_t((x * 7 + y * 13 + c * 91 + (x ^ y)) & 0xFF); };
     for (uint32_t y = 0; y < sh; ++y) {
         for (uint32_t x = 0; x < sw; ++x) {
-            for (int c = 0; c < 4; ++c) { surf[RefOffset(x * 4 + c, y, wb, bh)] = c == 3 ? 0xFF : pix(x, y, c); }
+            /* memory order R,G,B,A - or B,G,R,A for a bgra surface */
+            for (int c = 0; c < 4; ++c) { const int mc = (bgra && c != 3) ? 2 - c : c; surf[RefOffset(x * 4 + mc, y, wb, bh)] = c == 3 ? 0xFF : pix(x, y, c); }
         }
     }
     std::vector<uint8_t> file, row(1 + w * 3);
     const bool ok = png::WritePng(w, h, row.data(),
         [&](const uint8_t *d, size_t n) { file.insert(file.end(), d, d + n); return true; },
-        [&](uint32_t y, uint8_t *rgb) { png::DeswizzleRowRgb(surf.data(), surf.size(), y, w, wb, bh, rgb); });
+        [&](uint32_t y, uint8_t *rgb) { png::DeswizzleRowRgb(surf.data(), surf.size(), y, w, wb, bh, rgb, bgra); });
     if (!ok) { std::printf("FAIL WritePng returned false\n"); ++g_fail; return; }
     if (file.size() != png::PngSize(w, h)) { std::printf("FAIL PngSize(%u, %u) = %llu, file is %zu B\n", w, h, (unsigned long long)png::PngSize(w, h), file.size()); ++g_fail; return; }
 
@@ -79,6 +80,7 @@ int main(int argc, char **argv) {
     RunCase(1920, 1080, 4, 1280, 720, nullptr);                        /* the handheld corner */
     RunCase(1280, 720, 4, 1280, 720, nullptr);                         /* a 720p swapchain */
     RunCase(100, 37, 2, 100, 37, nullptr);                             /* odd sizes, another block height */
+    RunCase(1920, 1080, 5, 1920, 1080, nullptr, true);                 /* v0.1.1b: 32-row blocks, B,G,R,A (Run AE's 1080p app) */
     std::printf("%s (%d failure%s)\n", g_fail ? "FAILED" : "OK", g_fail, g_fail == 1 ? "" : "s");
     return g_fail ? 1 : 0;
 }

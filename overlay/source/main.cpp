@@ -23,8 +23,9 @@ namespace {
     struct StreamStatus {
         u32 version, state, enabled, width, height, fps_x10, game_fps_x10, sessions;
         u32 shot_enabled, shots, shot_fails, reserved;     /* version 2 (M99) */
+        u64 app_tid; u32 app_excluded, reserved3;          /* version 3 (v0.1.1b) */
     };
-    static_assert(sizeof(StreamStatus) == 48);
+    static_assert(sizeof(StreamStatus) == 64);
 
     enum : u32 {
         LiveState_Starting = 0, LiveState_Off, LiveState_WaitViewer, LiveState_WaitGame,
@@ -67,6 +68,14 @@ namespace {
             return false;
         }
         return true;
+    }
+
+    /* v0.1.1b: the never-attach list - for apps that refuse to run under a
+     * debugger (TiCo's protected builds) */
+    void SftapSetAppExcluded(u64 tid, bool excluded) {
+        if (!SftapConnect()) { return; }
+        const struct { u64 tid; u8 excluded; u8 pad[7]; } in = { tid, static_cast<u8>(excluded ? 1 : 0), {} };
+        serviceDispatchIn(&g_sftap, 3, in);
     }
 
     void SftapSetEnabled(bool on) {
@@ -189,6 +198,7 @@ namespace {
             case LiveState_Wedged:     return "Encoder stalled - reboot to stream again";
             case LiveState_NotArmed:   return "Live mode not armed (arm file)";
             case 7:                    return "Firmware not tested - see the manager app";
+            case 8:                    return "Not streaming this app (excluded)";
             default:                   return "Unknown";
         }
     }
@@ -196,7 +206,7 @@ namespace {
     class MainGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("Switch Frame Tap", "v0.97");
+                auto *frame = new tsl::elm::OverlayFrame("Switch Frame Tap", "v0.1.1");
                 auto *list = new tsl::elm::List();
 
                 list->addItem(new tsl::elm::CategoryHeader("Stream to PC"));
@@ -207,6 +217,16 @@ namespace {
                     m_tick = 0;
                 });
                 list->addItem(m_toggle);
+                m_app = new tsl::elm::ListItem("Stream this app");
+                m_app->setClickListener([this](u64 keys) {
+                    if ((keys & HidNpadButton_A) && m_have && m_st.version >= 3 && m_st.app_tid != 0) {
+                        SftapSetAppExcluded(m_st.app_tid, m_st.app_excluded == 0);
+                        m_tick = 0;
+                        return true;
+                    }
+                    return false;
+                });
+                list->addItem(m_app);
                 list->addItem(new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
                     r->drawString(m_status.c_str(), false, x + 15, y + 22, 18, r->a(tsl::style::color::ColorText));
                     r->drawString(m_game.c_str(), false, x + 15, y + 46, 16, r->a(tsl::style::color::ColorDescription));
@@ -249,6 +269,10 @@ namespace {
                 } else {
                     m_game.clear();
                 }
+                if (m_app != nullptr) {
+                    if (!m_have || m_st.version < 3 || m_st.app_tid == 0) { m_app->setValue("No app", true); }
+                    else { m_app->setValue(m_st.app_excluded ? "Off" : "On", m_st.app_excluded != 0); }
+                }
                 if (m_toggle != nullptr && m_have && m_toggle->getState() != (m_st.enabled != 0)) {
                     m_toggle->setState(m_st.enabled != 0);
                 }
@@ -265,6 +289,7 @@ namespace {
             u32 m_tick = 0;
             std::string m_status, m_game;
             tsl::elm::ToggleListItem *m_toggle = nullptr;
+            tsl::elm::ListItem *m_app = nullptr;
             tsl::elm::ListItem *m_modes[4] = {};
     };
 

@@ -26,6 +26,7 @@
         "vi:m",
         "vi:s",
         "pm:dmnt",
+        "pm:info",
         "usb:ds",
         "mm:u",
         "clkrst",
@@ -34,6 +35,7 @@
     ],
     "service_host": [
         "vi:u",
+        "vi:m",
         "nvdrv:s",
         "sftap"
     ],

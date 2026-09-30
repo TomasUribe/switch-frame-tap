@@ -36,15 +36,17 @@ namespace ams::mitm::applet::png {
 
     /* one row of RGBA (block-linear, `stride_bytes` wide) -> w pixels of RGB.
      * 16-byte runs (4 pixels) are contiguous in a GOB, so it copies by run. */
+    /* bgra: the surface is B, G, R, A in memory (NvColorFormat A8R8G8B8) */
     inline void DeswizzleRowRgb(const uint8_t *src, size_t src_size, uint32_t y, uint32_t w,
-                                uint32_t stride_bytes, uint32_t bh_log2, uint8_t *rgb) {
+                                uint32_t stride_bytes, uint32_t bh_log2, uint8_t *rgb, bool bgra = false) {
+        const int r = bgra ? 2 : 0, b = bgra ? 0 : 2;
         for (uint32_t x = 0; x < w; x += 4) {
             const size_t off = BlockLinearOffset(x * 4, y, stride_bytes, bh_log2);
             const uint32_t n = (w - x) < 4 ? (w - x) : 4;
             for (uint32_t k = 0; k < n; ++k) {
                 const size_t o = off + k * 4;
                 uint8_t *d = rgb + (x + k) * 3;
-                if (o + 3 < src_size) { d[0] = src[o]; d[1] = src[o + 1]; d[2] = src[o + 2]; }
+                if (o + 3 < src_size) { d[0] = src[o + r]; d[1] = src[o + 1]; d[2] = src[o + b]; }
                 else { d[0] = d[1] = d[2] = 0; }
             }
         }

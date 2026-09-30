@@ -41,10 +41,12 @@ namespace ams {
 
         enum PortIndex {
             PortIndex_AppletMitm,
+            PortIndex_ViManagerMitm,   /* v0.1.1: homebrew applications present through vi:m */
             PortIndex_Count,
         };
 
         constexpr sm::ServiceName AppletMitmServiceName = sm::ServiceName::Encode("vi:u");
+        constexpr sm::ServiceName ViManagerMitmServiceName = sm::ServiceName::Encode("vi:m");
 
         struct ServerOptions {
             static constexpr size_t PointerBufferSize   = 0x1000;
@@ -592,6 +594,14 @@ namespace ams {
                         mitm::applet::LogLine("  AcceptMitmImpl rc=0x%x", r.GetValue());
                         R_RETURN(r);
                     }
+                case PortIndex_ViManagerMitm:
+                    {
+                        const Result r = this->AcceptMitmImpl(server,
+                            sf::CreateSharedObjectEmplaced<mitm::applet::IViManagerRootMitm, mitm::applet::ViManagerRootMitm>(decltype(fsrv)(fsrv), client_info),
+                            fsrv);
+                        mitm::applet::LogLine("  AcceptMitmImpl (vi:m) rc=0x%x", r.GetValue());
+                        R_RETURN(r);
+                    }
                 AMS_UNREACHABLE_DEFAULT_CASE();
             }
         }
@@ -654,7 +664,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm M99c: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm v0.1.1: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -694,6 +704,7 @@ namespace ams {
         if (mitm::applet::g_live_armed) { mitm::applet::g_nvstream_armed = true; }
         /* M97: the overlay's on/off switch, remembered on the SD */
         mitm::applet::LoadStreamEnabled();
+        mitm::applet::LoadExcluded();
         if (!mitm::applet::g_live_armed) { mitm::applet::g_live_state.store(mitm::applet::LiveState_NotArmed); }
         mitm::applet::g_nvp_armed     = ArmFileContains("nvp");
         mitm::applet::g_nvp_n         = ArmFileNumber("nvp", 30);
@@ -772,6 +783,7 @@ namespace ams {
         mitm::applet::LogMark("main:heartbeat_started");
 
         mitm::applet::StartControlService();
+        mitm::applet::StartAppWatch();
         mitm::applet::StartShotInput();   /* idle, and hid untouched, until screenshots are on */
         mitm::applet::StartVicWorker();
         /* M76: its own thread, so an mm:u or clkrst call that blocks can never
@@ -784,6 +796,10 @@ namespace ams {
 
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");
+        /* v0.1.1: after vi:u, and wrapping only the running application's own
+         * sessions (ShouldMitm asks pm:dmnt) */
+        R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViManagerRootMitm>(PortIndex_ViManagerMitm, ViManagerMitmServiceName));
+        mitm::applet::LogLine("registered mitm server for vi:m (homebrew applications only)");
 
         mitm::applet::LogMark("main:LoopProcess");
         g_server_manager.LoopProcess();

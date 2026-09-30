@@ -29,7 +29,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.1.0";
+    constexpr const char *AppVersion  = "0.1.1";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -37,6 +37,18 @@ namespace {
     constexpr const char *ConfigDir   = "sdmc:/config/switch-frame-tap";
     constexpr const char *ConfigIni   = "sdmc:/config/switch-frame-tap/config.ini";
     constexpr const char *StreamOff   = "sdmc:/config/switch-frame-tap/stream-off";
+    constexpr const char *ExclFile    = "sdmc:/config/switch-frame-tap/excluded.txt";
+
+    /* v0.1.1b: the never-attach list (one hex program id per line) */
+    size_t CountExcluded() {
+        size_t n = 0;
+        if (FILE *f = std::fopen(ExclFile, "rb")) {
+            char line[64];
+            while (std::fgets(line, sizeof(line), f)) { if (std::strlen(line) >= 16) { ++n; } }
+            std::fclose(f);
+        }
+        return n;
+    }
     constexpr const char *TestArmFile = "sdmc:/applet-mitm.armed";
     constexpr const char *ShotDir     = "sdmc:/switch/switch-frame-tap/screenshots";
 
@@ -78,6 +90,7 @@ namespace {
     struct StreamStatus {
         u32 version, state, enabled, width, height, fps_x10, game_fps_x10, sessions;
         u32 shot_enabled, shots, shot_fails, reserved;     /* version 2 (M99) */
+        u64 app_tid; u32 app_excluded, reserved3;          /* version 3 (v0.1.1b) */
     };
 
     Service g_sftap;
@@ -274,7 +287,8 @@ namespace {
         StreamStatus st = {};
         bool running = false, have_status = false, installed = false, boot = false, test_install = false;
         bool stream_file_on = true;
-        size_t shot_files = 0;
+        size_t shot_files = 0, excluded = 0;
+        bool confirm_clear = false;
         u32 fw = 0;
         u64 ams = 0;
         std::string toast;
@@ -288,6 +302,7 @@ namespace {
             test_install = FileExists(TestArmFile);
             stream_file_on = !FileExists(StreamOff);
             shot_files = ListShots().size();
+            excluded = CountExcluded();
             running = ModuleRunning();
             have_status = running && SftapStatus(&st);
         }
@@ -315,6 +330,7 @@ namespace {
                 case 5: return "Encoder stalled - reboot to stream again";
                 case 6: return "Test install without live mode";
                 case 7: return "Firmware not tested - streaming is off";
+                case 8: return "Not streaming this app (excluded)";
                 default: return "Unknown";
             }
         }
@@ -381,6 +397,22 @@ namespace {
                 [this] { return boot ? ColGood : ColDim; }, [this](int) { SetBoot(!boot); },
                 "Whether Atmosphere starts the sysmodule at boot. Takes effect at the next boot. "
                 "Off is the clean way to disable it completely." });
+
+            rows.push_back({ Kind::Setting, "Apps never streamed", [this] {
+                    char b[32];
+                    std::snprintf(b, sizeof(b), confirm_clear ? "Press A to clear" : "%zu", excluded);
+                    return std::string(b);
+                }, [this] { return confirm_clear ? ColWarn : ColText; }, [this](int) {
+                    if (excluded == 0) { Toast("No app is excluded"); return; }
+                    if (!confirm_clear) { confirm_clear = true; return; }
+                    confirm_clear = false;
+                    std::remove(ExclFile);
+                    if (have_status) { SftapReload(); }
+                    Toast("Every app is streamed again");
+                },
+                "Apps that refuse to run under a debugger - such as TiCo's protected builds - need the sysmodule to leave "
+                "them alone. Turn \"Stream this app\" off in the overlay while one runs, and it is never attached again "
+                "(no stream, no screenshots). A here clears the list." });
 
             rows.push_back({ Kind::Header, "Picture", nullptr, nullptr, nullptr, "" });
             rows.push_back({ Kind::Setting, "Quality", [this] { return std::string(QualityNames[set.quality]); }, nullptr,
@@ -463,6 +495,7 @@ namespace {
         bool Selectable(int i) const { return rows[i].kind != Kind::Header; }
 
         void Move(int d) {
+            confirm_clear = false;
             int i = sel;
             do { i += d; } while (i >= 0 && i < static_cast<int>(rows.size()) && !Selectable(i));
             if (i >= 0 && i < static_cast<int>(rows.size())) { sel = i; }
