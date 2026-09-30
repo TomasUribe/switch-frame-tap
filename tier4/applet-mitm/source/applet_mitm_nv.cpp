@@ -43,6 +43,7 @@
 #include "nvenc_1080p.h"
 #include "applet_mitm_dbgpump.hpp"
 #include "applet_mitm_shot.hpp"
+#include "applet_mitm_audio.hpp"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -162,6 +163,9 @@ namespace ams::mitm::applet {
         /* M57: usbDs requires a 0x1000-aligned buffer, so the 32-byte frame
          * header cannot be posted from the stack. */
         alignas(0x1000) constinit u8 g_usb_hdr[0x1000] = {};
+        /* v0.3: queued game audio, sent as its own packet before each frame */
+        constexpr size_t AudioStageSize = 32_KB;       /* ~170 ms - more than a frame ever carries */
+        alignas(0x1000) constinit u8 g_audio_stage[AudioStageSize] = {};
 
         /* M54: the decisive measurement. LogMemoryPools() in applet_mitm_main.cpp
          * is in an anonymous namespace, so it cannot be reached from here - this
@@ -5499,6 +5503,11 @@ namespace ams::mitm::applet {
             u32 size_changes = 0;
             g_vic_quiet = true;
             u32 parity = 0, urb = 0, sent = 0, errs = 0, dropped = 0, done = 0, clock_fixes = 0;
+            u32 audio_seq = 0;
+            u64 audio_bytes = 0;
+            /* v0.3: game audio rides along while this stream runs */
+            if (live) { AudioFlush(); g_audio_active.store(g_audio_enabled.load(std::memory_order_relaxed), std::memory_order_relaxed); }
+            ON_SCOPE_EXIT { g_audio_active.store(false, std::memory_order_relaxed); };
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
             bool pending = false, stalled = false, need_idr = true;
             const char *why = "all frames sent";
@@ -5562,6 +5571,28 @@ namespace ams::mitm::applet {
                     if (!UsbWaitAsync(urb, std::addressof(got))) { pending = false; why = "USB transfer did not complete (viewer gone?)"; end = StreamEnd::ViewerGone; return true; }
                     ++sent;
                     pending = false;
+                }
+                /* v0.3: the game audio since the last frame, as its own packet -
+                 * nothing else is in flight on the endpoint at this point.
+                 * flags bit 3: 16-bit stereo PCM; width = rate, height = channels. */
+                if (live && g_audio_active.load(std::memory_order_relaxed)) {
+                    const size_t an = AudioTake(g_audio_stage, AudioStageSize);
+                    if (an != 0) {
+                        SftHdrWire ah = {};
+                        ah.magic = 0x52544653u;
+                        ah.version = 2;
+                        ah.flags = 8;
+                        ah.width = 48000; ah.height = 2;
+                        ah.length = static_cast<u32>(an);
+                        ah.kind = audio_seq++;
+                        std::memcpy(g_usb_hdr, std::addressof(ah), sizeof(ah));
+                        size_t as = 0;
+                        if (!UsbSendBuffer(g_usb_hdr, sizeof(SftHdrWire), std::addressof(as)) ||
+                            !UsbSendBuffer(g_audio_stage, an, std::addressof(as))) {
+                            why = "USB audio send failed (viewer gone?)"; end = StreamEnd::ViewerGone; return true;
+                        }
+                        audio_bytes += an;
+                    }
                 }
                 const u64 t4 = armTicksToNs(armGetSystemTick());
                 armDCacheFlush(s.x.a + L.off_bits, bytes);
@@ -5774,6 +5805,10 @@ namespace ams::mitm::applet {
             const u64 fps_x10 = wall ? static_cast<u64>(sent) * UINT64_C(10000000000) / wall : 0;
             const u64 game_x10 = wall ? static_cast<u64>(presented) * UINT64_C(10000000000) / wall : 0;
             LogLine("   nvstream: stopped: %s", why);
+            if (audio_bytes != 0) {
+                LogLine("   nvstream: game audio %llu KB in %u packets (%llu ms of sound)", static_cast<unsigned long long>(audio_bytes / 1024), audio_seq,
+                        static_cast<unsigned long long>(audio_bytes / 192));
+            }
             LogLine("   nvstream: %u frames sent in %llu ms -> %llu.%llu fps (game presented %llu.%llu fps, %u presents skipped), %u encodes with errors",
                     sent, static_cast<unsigned long long>(wall / 1000000),
                     static_cast<unsigned long long>(fps_x10 / 10), static_cast<unsigned long long>(fps_x10 % 10),

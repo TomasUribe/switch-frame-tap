@@ -136,20 +136,23 @@ int main() {
     }
 
     /* M98: the release config */
-    ExpectRelease("", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
-    ExpectRelease("# comment\nquality = medium\n", "vic exec dbg usb live nvqp=24 nvgop=60 wait=20");
-    ExpectRelease("[stream]\r\nquality=low\r\nkeyframe_interval = 30\r\nmax_resolution = 720\r\n", "vic exec dbg usb live nvqp=28 nvgop=30 wait=20 cap720");
-    ExpectRelease("quality=high\nqp=22\nstart_delay=5\n", "vic exec dbg usb live nvqp=22 nvgop=60 wait=5");
-    ExpectRelease("qp=99\nkeyframe_interval=0\nstart_delay=-3\nmax_resolution=4k\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
-    ExpectRelease("; quality=low\n#qp=30\nallow_untested_firmware = 1", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 anyfw");
-    ExpectRelease("myquality=low\nquality_x=low\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
+    ExpectRelease("", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("# comment\nquality = medium\n", "vic exec dbg usb live nvqp=24 nvgop=60 wait=20 audio");
+    ExpectRelease("[stream]\r\nquality=low\r\nkeyframe_interval = 30\r\nmax_resolution = 720\r\n", "vic exec dbg usb live nvqp=28 nvgop=30 wait=20 cap720 audio");
+    ExpectRelease("quality=high\nqp=22\nstart_delay=5\n", "vic exec dbg usb live nvqp=22 nvgop=60 wait=5 audio");
+    ExpectRelease("qp=99\nkeyframe_interval=0\nstart_delay=-3\nmax_resolution=4k\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("; quality=low\n#qp=30\nallow_untested_firmware = 1", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 anyfw audio");
+    ExpectRelease("myquality=low\nquality_x=low\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    /* v0.3: audio is on unless audio = 0 */
+    ExpectRelease("audio = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
+    ExpectRelease("audio = 1\nquality = low\n", "vic exec dbg usb live nvqp=28 nvgop=60 wait=20 audio");
     /* M99: screenshots */
-    ExpectRelease("screenshot = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0");
-    ExpectRelease("screenshot = 1\nscreenshot_buttons = 2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=2");
-    ExpectRelease("screenshot = 0\nscreenshot_buttons = 2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
-    ExpectRelease("screenshot = 1\nscreenshot_buttons = 9\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0");
+    ExpectRelease("screenshot = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
+    ExpectRelease("screenshot = 1\nscreenshot_buttons = 2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=2 audio");
+    ExpectRelease("screenshot = 0\nscreenshot_buttons = 2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("screenshot = 1\nscreenshot_buttons = 9\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
     /* a comment word must not arm a flag the way an arm-file token would */
-    ExpectRelease("# grc dump nvp\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
+    ExpectRelease("# grc dump nvp\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
 
     std::printf("%s (%d failure%s)\n", g_fail == 0 ? "OK" : "FAILED", g_fail, g_fail == 1 ? "" : "s");
     return g_fail == 0 ? 0 : 1;

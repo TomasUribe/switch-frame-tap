@@ -21,6 +21,7 @@
 #include "applet_mitm_clk.hpp"
 #include "applet_mitm_control.hpp"
 #include "applet_mitm_shot.hpp"
+#include "applet_mitm_audio.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -251,6 +252,7 @@ namespace ams {
             mitm::applet::g_anyfw_armed   = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "anyfw");
             mitm::applet::g_shot_enabled.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "shot"));
             mitm::applet::g_shot_combo.store(mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "shotkey", 0) & 3);
+            mitm::applet::g_audio_enabled.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "audio"));
         }
 
         /* Numeric option out of the arm file: "wait=180" delays the probe so
@@ -664,7 +666,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.2.0: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm v0.3.0: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -697,6 +699,7 @@ namespace ams {
         mitm::applet::g_anyfw_armed   = ArmFileContains("anyfw");
         mitm::applet::g_shot_enabled.store(ArmFileContains("shot"));
         mitm::applet::g_shot_combo.store(ArmFileNumber("shotkey", 0) & 3);
+        mitm::applet::g_audio_enabled.store(ArmFileContains("audio"));
         mitm::applet::LogLine("install type from GetEntryType(sdmc:/applet-mitm.armed) rc=0x%x", mitm::applet::g_arm_probe_rc);
         mitm::applet::LogLine("%s: %.*s", mitm::applet::g_release_mode ? "release install, sdmc:/config/switch-frame-tap/config.ini ->" : "TEST install, sdmc:/applet-mitm.armed",
                               static_cast<int>(g_arm_len), g_arm_buf);
@@ -785,6 +788,7 @@ namespace ams {
         mitm::applet::StartControlService();
         mitm::applet::StartAppWatch();
         mitm::applet::StartShotInput();   /* idle, and hid untouched, until screenshots are on */
+        mitm::applet::StartAudio();       /* idle, and grc:d untouched, until audio is on */
         mitm::applet::StartVicWorker();
         /* M76: its own thread, so an mm:u or clkrst call that blocks can never
          * hold up vi:u registration below. Holds the clocks past the survey

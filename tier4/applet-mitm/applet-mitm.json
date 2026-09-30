@@ -31,7 +31,8 @@
         "mm:u",
         "clkrst",
         "hid",
-        "time:u"
+        "time:u",
+        "grc:d"
     ],
     "service_host": [
         "vi:u",

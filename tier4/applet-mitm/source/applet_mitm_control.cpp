@@ -3,6 +3,7 @@
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_shot.hpp"
+#include "applet_mitm_audio.hpp"
 
 namespace ams::mitm::applet {
 
@@ -36,7 +37,8 @@ namespace ams::mitm::applet {
             public:
                 Result GetStatus(sf::Out<StreamStatus> out) {
                     StreamStatus st = {};
-                    st.version      = 3;
+                    st.version      = 4;
+                    st.reserved     = (g_audio_enabled.load(std::memory_order_relaxed) ? 0x100u : 0u) | g_audio_state.load(std::memory_order_relaxed);   /* v4: audio */
                     st.state        = g_live_state.load(std::memory_order_relaxed);
                     st.enabled      = g_stream_enabled.load(std::memory_order_relaxed) ? 1 : 0;
                     st.width        = g_live_w.load(std::memory_order_relaxed);

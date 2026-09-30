@@ -30,7 +30,7 @@ namespace ams::mitm::applet {
         u32 shot_enabled;
         u32 shots;           /* screenshots written this boot */
         u32 shot_fails;
-        u32 reserved;
+        u32 reserved;        /* version 4 (v0.3): audio - bit 8 enabled, low byte 0 idle / 1 playing / 2 grc:d unavailable / 3 start failed */
         /* version 3 (v0.1.1b) */
         u64 app_tid;         /* the running application, 0 = none */
         u32 app_excluded;

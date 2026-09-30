@@ -25,7 +25,7 @@ window against the game's ~59.2, 0 errors). See
 > it being on the PC screen (monitor not included).
 >
 > It is still **experimental**: USB only (so 1080p needs ReverseNX-RT in
-> handheld), no audio, one console tested. Read
+> handheld), one console tested. Read
 > [Limitations](#limitations) before installing it.
 
 | | |
@@ -52,6 +52,7 @@ animation.*
 |---|---|
 | Resolution / frame rate | **1920x1080** when the game renders it (docked picture via ReverseNX-RT): MK8D 58.4 fps over a session, 59.5-59.9 per window; 1280x720 native handheld: MK8D 57-59 fps, BOTW 29 fps |
 | Transport | USB 2.0 bulk, the Switch's own USB-C port, no dock |
+| Audio | the game's sound, 48 kHz stereo PCM, from the console's own recorder (grc:d); ~1.5 Mbps alongside the video |
 | Video | H.264 from the Switch's NVENC, constant QP 20, keyframe every 60 frames; 720p ~40-55 Mbps, 1080p ~90 Mbps in a race |
 | Latency | 720p: ~20-23 ms on the console (game present -> sent) + ~21-24 ms on the PC (arrival -> on screen); 1080p: ~34 + ~25 ms |
 | Reliability | 0 lost / 0 undecodable frames in every run since M84; 0 stale or torn frames (M89) |
@@ -110,12 +111,12 @@ manager app:
 
 Nothing else: no other sysmodule, no sigpatches, no capture card.
 
-## Install (v0.2.0)
+## Install (v0.3.0)
 
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.2.0-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.3.0-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -129,7 +130,7 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.2.0-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.3.0-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -148,10 +149,11 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.2.0-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.3.0-linux-viewer.tar.gz` with the same files.
 
 On both, the viewer opens a window, waits for the Switch, reconnects on its
-own and closes only when you close it (F11 or a double-click: fullscreen).
+own and closes only when you close it (F11 or a double-click: fullscreen). It
+plays the game's sound on the default audio device (**M** mutes).
 It reads USB, decodes and draws on separate threads and shows the frames in
 order, one per screen refresh (vsync), so the picture stays smooth. Its
 statistics - frame rate, latencies, decode and draw times, once a second - go
@@ -176,8 +178,8 @@ Expect more heat and battery drain, and some games dislike fake docked mode
 
 **Switch Frame Tap** in the homebrew menu: what the stream is doing (and its
 frame rate), streaming on/off, start with the console, picture quality
-(High/Medium/Low), keyframe interval, maximum resolution (1080p/720p), start
-delay, screenshots, and a setup check (sysmodule, overlay, overlay loader,
+(High/Medium/Low), keyframe interval, maximum resolution (1080p/720p), game
+audio on/off, start delay, screenshots, and a setup check (sysmodule, overlay, overlay loader,
 SaltyNX, ReverseNX-RT). Changes apply at once - a running stream restarts with
 them. Settings live in `sdmc:/config/switch-frame-tap/config.ini`.
 
@@ -221,7 +223,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.2.0       # -> dist/switch-frame-tap-0.2.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.3.0       # -> dist/switch-frame-tap-0.3.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -252,7 +254,8 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   Zelda: Breath of the Wild (two). Other games should work if their swapchain
   is block-linear RGBA, at most 1920x1080, in one memory object; the log says
   so if not. Colours are verified for the A8B8G8R8 format those two use.
-- **No audio** yet.
+- **Game audio** comes from the console's own video recorder (as with SysDVR):
+  games that turn video capture off have no sound in the stream.
 - **PC viewer: Windows and Linux** (x86_64). No macOS viewer yet. On Windows
   the driver needs Zadig once, as with SysDVR.
 - **It debug-attaches to the running game.** A process can have one debugger,
@@ -462,7 +465,7 @@ transport** for streaming from the dock, where the dock owns the USB port
 | Homebrew apps (forwarders and title override: a `vi:m` mitm for the running application only; larger and offset swapchains, BGRA, 1080p for any layout; a never-attach list) | **done, on hardware** (v0.1.1) |
 | Bitrate tuning (better P frames, QP) | next; also lowers what 1080p60 needs from the network |
 | 1080p60 from the dock, over the network | not started: needs a network transport, see [above](#the-road-to-1080p60) |
-| Audio | not started |
+| Game audio (grc:d PCM alongside the video; paced playback) | **done** (v0.3.0) |
 | Windows viewer, and paced display (reader / decoder / vsync threads) on both | **done** (v0.2.0) |
 | USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |
 | Home menu and system overlays | not possible through any route found |

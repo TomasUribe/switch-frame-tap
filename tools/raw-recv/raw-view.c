@@ -24,6 +24,7 @@
  *                              # 0 = one per core, which cost ~250 ms in M84 Run J)
  *   ./raw-view --file s.sft --paced --seconds 5   # v0.2: a recording through the LIVE
  *                              # pipeline (reader thread, decoder thread, vsync display)
+ *                              # game audio (v0.3) plays on the default sound device; M mutes
  *   ./raw-view --app           # M97: the desktop launcher's mode - the window opens at
  *                              # once, waits for the Switch, reconnects whenever it comes
  *                              # back, and only closes when you close it. F11 or a
@@ -63,6 +64,7 @@
 #define SFT_FLAG_PACKED420 1u
 #define SFT_FLAG_H264      2u
 #define SFT_FLAG_KEY       4u   /* M85: an IDR access unit (H.264 only) */
+#define SFT_FLAG_AUDIO     8u   /* v0.3: game audio, 16-bit stereo PCM (width = rate, height = channels) */
 
 #pragma pack(push, 1)
 typedef struct {
@@ -76,6 +78,39 @@ static int g_app = 0;               /* --app: survive the console leaving the bu
 static int g_lost = 0;              /* --app: the console left; wait for it again */
 static int g_paced = 0;             /* --paced: a recording fed through the live pipeline at 60 fps, looped (tests) */
 static double g_run_secs = 0;       /* --seconds: stop the live pipeline after this long (tests) */
+
+/* ---- v0.3: game audio ------------------------------------------------------
+ * The console sends the sound since the last frame as its own packet before
+ * each frame (~16 ms, 3 KB). The reader thread queues it on the sound device
+ * directly: playback starts once ~40 ms are buffered (and waits for that again
+ * after running dry), and if more than ~120 ms pile up the queue is cleared,
+ * so the sound cannot drift behind the picture. M mutes. */
+static SDL_AudioDeviceID g_adev = 0;
+static int g_a_paused = 1, g_mute = 0;
+static volatile long g_a_bytes = 0, g_a_resyncs = 0, g_a_underruns = 0;
+
+static void audio_packet(const uint8_t *d, uint32_t n, uint32_t rate, uint32_t ch)
+{
+    if (!g_adev || g_mute || rate != 48000 || ch != 2) return;
+    const Uint32 bps = 48000 * 4;
+    Uint32 q = SDL_GetQueuedAudioSize(g_adev);
+    if (!g_a_paused && q == 0) {               /* ran dry: build the cushion again */
+        SDL_PauseAudioDevice(g_adev, 1);
+        g_a_paused = 1;
+        g_a_underruns++;
+    }
+    if (q > bps * 120 / 1000) {                /* too far behind the picture: start over */
+        SDL_ClearQueuedAudio(g_adev);
+        q = 0;
+        g_a_resyncs++;
+    }
+    SDL_QueueAudio(g_adev, d, n);
+    g_a_bytes += n;
+    if (g_a_paused && q + n >= bps * 40 / 1000) {
+        SDL_PauseAudioDevice(g_adev, 0);
+        g_a_paused = 0;
+    }
+}
 static void on_sigint(int s) { (void)s; g_quit = 1; }
 static libusb_device_handle *g_usb = NULL;
 static FILE *g_in = NULL;           /* --file */
@@ -136,6 +171,13 @@ static int reader_main(void *arg)
         const Uint64 t = SDL_GetPerformanceCounter();
         if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); continue; }
         if (hdr.length == 0 || hdr.length > 64u*1024*1024) continue;
+        if (hdr.flags & SFT_FLAG_AUDIO) {
+            static uint8_t abuf[64 * 1024];
+            if (hdr.length > sizeof(abuf)) { static uint8_t sink[4096]; for (uint32_t k = 0; k < hdr.length; k += sizeof(sink)) read_exact(sink, (hdr.length - k) < sizeof(sink) ? (hdr.length - k) : sizeof(sink), 5000); continue; }
+            if (read_exact(abuf, hdr.length, 5000) != (int)hdr.length) continue;
+            audio_packet(abuf, hdr.length, hdr.width, hdr.height);
+            continue;
+        }
         if (g_paced) SDL_Delay(16);         /* a recording at roughly the console's pace */
         SDL_LockMutex(g_qm);
         while (g_qn == QN && !g_quit && !g_rd_stop) SDL_CondWaitTimeout(g_q_put, g_qm, 100);
@@ -271,6 +313,10 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
                    (e.type == SDL_MOUSEBUTTONDOWN && e.button.clicks == 2)) {
             const int fs = (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
             SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+        } else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_m) {
+            g_mute = !g_mute;
+            if (g_adev) { SDL_ClearQueuedAudio(g_adev); SDL_PauseAudioDevice(g_adev, 1); g_a_paused = 1; }
+            fprintf(stderr, "\naudio %s\n", g_mute ? "muted" : "on");
         } else if (e.type == SDL_WINDOWEVENT) {
             /* resized or uncovered with no new frame: draw the last one again */
             SDL_RenderClear(ren);
@@ -425,6 +471,15 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
         ren = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : NULL;
         if (!ren) { fprintf(stderr, "SDL window: %s\n", SDL_GetError()); return 1; }
     }
+    /* v0.3: the sound device (opened paused; audio_packet starts it) */
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
+        SDL_AudioSpec want = {0}, have = {0};
+        want.freq = 48000; want.format = AUDIO_S16LSB; want.channels = 2; want.samples = 512;
+        g_adev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+        fprintf(stderr, "audio: %s\n", g_adev ? "48 kHz stereo" : SDL_GetError());
+    } else {
+        fprintf(stderr, "audio: %s\n", SDL_GetError());
+    }
     SDL_RendererInfo ri;
     if (SDL_GetRendererInfo(ren, &ri) == 0) {
         fprintf(stderr, "renderer: %s%s\n", ri.name, (ri.flags & SDL_RENDERER_PRESENTVSYNC) ? ", vsync" : ", NO vsync");
@@ -446,6 +501,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     /* this second's window */
     long w_shown = 0, w_skipped = 0, w_dec0 = 0, w_lat_n = 0, w_age_n = 0; double w_bytes0 = 0, w_lat = 0, w_age = 0, w_gap = 0, w_draw = 0, w_dec_ms0 = 0;
     int w_qmax_seen = 0;
+    long w_a_bytes0 = 0;
     char title[256];
 
     while (!g_quit) {
@@ -515,10 +571,14 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                 snprintf(title, sizeof(title), "Switch Frame Tap  %ux%u  %.1f fps  %.0f Mbps  pc %.1f ms  console %.1f ms",
                          W, H, w_shown / secs, mbps, w_lat_n ? w_lat / w_lat_n : 0.0, w_age_n ? w_age / w_age_n : 0.0);
                 if (W) SDL_SetWindowTitle(win, title);
-                fprintf(stderr, "[%7.1f s] decoded %.1f fps, shown %.1f fps, skipped %ld, %.0f Mbps | pc %.1f ms, console %.1f ms | decode %.2f ms (max %.1f), draw+vsync %.1f ms, worst gap %.1f ms, usb queue max %d\n",
+                const double a_kbs = (g_a_bytes - w_a_bytes0) / 1024.0 / secs;
+                const double a_q = g_adev ? SDL_GetQueuedAudioSize(g_adev) / 192.0 : 0.0;
+                fprintf(stderr, "[%7.1f s] decoded %.1f fps, shown %.1f fps, skipped %ld, %.0f Mbps | pc %.1f ms, console %.1f ms | decode %.2f ms (max %.1f), draw+vsync %.1f ms, worst gap %.1f ms, usb queue max %d | audio %.0f KB/s, %.0f ms queued, %ld underruns, %ld resyncs%s\n",
                         (double)(now - t_start) / (double)freq, dec / secs, w_shown / secs, w_skipped, mbps,
                         w_lat_n ? w_lat / w_lat_n : 0.0, w_age_n ? w_age / w_age_n : 0.0,
-                        dms, s_dec_max, w_shown ? w_draw / w_shown : 0.0, w_gap, w_qmax_seen);
+                        dms, s_dec_max, w_shown ? w_draw / w_shown : 0.0, w_gap, w_qmax_seen,
+                        a_kbs, a_q, (long)g_a_underruns, (long)g_a_resyncs, g_mute ? " (muted)" : "");
+                w_a_bytes0 = g_a_bytes;
                 t_win = now; w_shown = w_skipped = 0; w_dec0 = s_decoded; w_bytes0 = s_bytes; w_dec_ms0 = s_dec_ms;
                 w_lat = w_age = w_gap = w_draw = 0; w_lat_n = w_age_n = 0; s_dec_max = 0; g_qmax = 0; w_qmax_seen = 0;
             }
@@ -535,6 +595,8 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     if (lat_n) fprintf(stderr, "PC latency (header arrival -> on screen): avg %.1f ms, max %.1f ms\n", lat_sum / lat_n, lat_max);
     if (age_n) fprintf(stderr, "console latency (present -> header sent): avg %.1f ms, max %.1f ms\n", age_sum / age_n, age_max);
     printf("packets=%ld frames=%ld undecoded=%ld lost=%ld\n", (long)s_packets, (long)s_decoded, (long)s_undecoded, (long)s_lost);
+    if (g_a_bytes) fprintf(stderr, "game audio: %.1f MB, %ld underruns, %ld resyncs\n", g_a_bytes / 1e6, (long)g_a_underruns, (long)g_a_resyncs);
+    if (g_adev) { SDL_CloseAudioDevice(g_adev); g_adev = 0; }
     av_frame_free(&show);
     for (int i = 0; i < FQ; i++) av_frame_free(&g_fq[i]);
     h264_close(&dec);
@@ -729,6 +791,7 @@ int main(int argc, char **argv)
             }
             if (read_exact(payload, hdr.length, 5000) != (int)hdr.length) continue;
             memset(payload + hdr.length, 0, 64);
+            if (hdr.flags & SFT_FLAG_AUDIO) continue;   /* v0.3: sound is the live pipeline's */
         } else if (!reader_pop(&hdr, &payload, &cap, &t_hdr, g_app ? 50 : 200, &left)) {
             continue;
         }

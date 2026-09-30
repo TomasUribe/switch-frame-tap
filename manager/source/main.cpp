@@ -29,7 +29,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.2.0";
+    constexpr const char *AppVersion  = "0.3.0";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -143,6 +143,7 @@ namespace {
         bool any_fw = false;
         bool shot = false;
         int shot_combo = 0;     /* index into ComboNames */
+        bool audio = true;      /* v0.3 */
     };
 
     bool IniGet(const std::string &ini, const char *key, std::string *out) {
@@ -184,6 +185,7 @@ namespace {
         if (IniGet(ini, "start_delay", &v)) { for (int i = 0; i < 5; ++i) { if (std::atoi(v.c_str()) == DelaySeconds[i]) { s.delay = i; } } }
         if (IniGet(ini, "allow_untested_firmware", &v)) { s.any_fw = v == "1"; }
         if (IniGet(ini, "screenshot", &v)) { s.shot = v == "1"; }
+        if (IniGet(ini, "audio", &v)) { s.audio = v != "0"; }
         if (IniGet(ini, "screenshot_buttons", &v)) { const int k = std::atoi(v.c_str()); if (k >= 0 && k <= 3) { s.shot_combo = k; } }
         return s;
     }
@@ -208,9 +210,11 @@ namespace {
             "# screenshot: 1 = a button combo saves a native-resolution PNG to /switch/switch-frame-tap/screenshots\n"
             "screenshot = %d\n"
             "# screenshot_buttons: 0 = L3 + R3, 1 = L + R + D-pad Down, 2 = ZL + ZR + D-pad Down, 3 = Minus + D-pad Down\n"
-            "screenshot_buttons = %d\n",
+            "screenshot_buttons = %d\n"
+            "# audio: 1 = send the game's sound to the PC viewer\n"
+            "audio = %d\n",
             QualityKeys[s.quality], KeyframeFrames[s.keyframe], s.cap720 ? "720" : "1080",
-            DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo);
+            DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo, s.audio ? 1 : 0);
         std::fclose(f);
         return true;
     }
@@ -413,6 +417,21 @@ namespace {
                 "Apps that refuse to run under a debugger - such as TiCo's protected builds - need the sysmodule to leave "
                 "them alone. Turn \"Stream this app\" off in the overlay while one runs, and it is never attached again "
                 "(no stream, no screenshots). A here clears the list." });
+
+            rows.push_back({ Kind::Setting, "Game audio", [this] {
+                    if (!set.audio) { return std::string("Off"); }
+                    if (have_status && st.version >= 4) {
+                        switch (st.reserved & 0xFF) {
+                            case 1: return std::string("On - playing");
+                            case 2: return std::string("On - recorder unavailable");
+                            case 3: return std::string("On - could not start");
+                        }
+                    }
+                    return std::string("On");
+                }, [this] { return !set.audio ? ColDim : (have_status && st.version >= 4 && (st.reserved & 0xFF) >= 2) ? ColWarn : ColGood; },
+                [this](int) { set.audio = !set.audio; Saved(); },
+                "Sends the game's sound to the PC viewer (M in the viewer mutes it). It comes from the console's own video "
+                "recorder, as with SysDVR - games that turn video capture off have no sound in the stream." });
 
             rows.push_back({ Kind::Header, "Picture", nullptr, nullptr, nullptr, "" });
             rows.push_back({ Kind::Setting, "Quality", [this] { return std::string(QualityNames[set.quality]); }, nullptr,

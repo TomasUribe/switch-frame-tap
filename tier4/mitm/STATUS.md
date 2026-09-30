@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 103 hardware test cycles (through Run AF). Current build: **v0.2.0** (released 2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 103 hardware test cycles (through Run AF). Current build: **v0.3.0** (game audio; works - Run AG). Released: v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,41 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.3.0: game audio (Run AG: works) ***
+
+The user picked audio as the next feature.
+
+- **Source: grc:d**, the console's continuous recorder (what SysDVR streams):
+  16-bit stereo PCM, 48 kHz, 4 KB (~21 ms) per `grcdTransfer` (cmd 2, stream
+  1). Its own thread and session (`applet_mitm_audio.cpp`): the transfer
+  blocks, forever when the game disables video capture. **grcdBegin (cmd 1)
+  may run only once per boot** - a second call asserts inside grc - so, as
+  SysDVR does, it is called only after a transfer answers 0x3E8D4 (2212-0500,
+  not started), and at most once. NPDM: grc:d.
+- A 64 KB SPSC ring (~340 ms), filled only while a live stream runs, flushed
+  at each stream start. The stream thread - which owns the endpoint - sends
+  what has piled up as its own SFTR packet (flags bit 3; width = 48000,
+  height = 2, kind = sequence) right after the previous video transfer
+  completes and before the next video header: nothing else is ever in flight.
+- Config `audio = 1 | 0` (default on) -> token `audio`; the manager's "Game
+  audio" (StreamStatus v4 carries its state in `reserved`).
+- Viewer: the reader thread queues audio packets on the default sound device
+  (SDL, 48 kHz s16 stereo): playback starts at ~40 ms buffered, re-buffers
+  after running dry, clears if more than ~120 ms pile up; M mutes; the
+  per-second line adds audio KB/s, queued ms, underruns, resyncs. File replay
+  skips audio packets. A synthetic stream (the 10-frame recording with a
+  440 Hz tone before each frame) through `--paced`: ~194 KB/s, 25-40 ms queued.
+
+### Run AG (v0.3.0, logs `logs/v030-runAG`): "first try! that worked perfectly"
+
+grc:d opened, `Begin rc=0x0` (the first transfer answered "not started"),
+"game audio flowing (4096 B chunks)". Six sessions, 60 and 30 fps games: the
+sound kept pace with the video - 41.6 s of sound in a 41.9 s stream, 104.2 s
+in 106.3 s, 39.7 s in 41.7 s (the difference: the moments before the first
+chunk). No crash report.
+
+---
 
 ## *** v0.2.0: the Windows viewer, and a paced display on both PCs ***
 

@@ -79,6 +79,7 @@ namespace ams::mitm::applet::armfile {
      *   allow_untested_firmware = 1                  -> anyfw
  *   screenshot        = 1                        -> shot     (M99)
  *   screenshot_buttons = 0..3                    -> shotkey= (the combo preset)
+ *   audio             = 1 | 0 (default 1)        -> audio    (v0.3: game audio from grc:d)
      *
      * Unknown keys and malformed values are ignored: a bad config file must
      * leave the defaults, never arm something else. */
@@ -125,7 +126,7 @@ namespace ams::mitm::applet::armfile {
     inline size_t BuildReleaseArm(const char *ini, size_t n, char *out, size_t cap) {
         unsigned qp = 20, gop = 60, wait = 20, u = 0;
         unsigned shotkey = 0;
-        bool cap720 = false, anyfw = false, shot = false;
+        bool cap720 = false, anyfw = false, shot = false, audio = true;
         char v[32];
         if (IniValue(ini, n, "quality", v, sizeof(v))) {
             if (std::strcmp(v, "medium") == 0) { qp = 24; }
@@ -138,10 +139,11 @@ namespace ams::mitm::applet::armfile {
         if (IniValue(ini, n, "allow_untested_firmware", v, sizeof(v)) && std::strcmp(v, "1") == 0) { anyfw = true; }
         if (IniValue(ini, n, "screenshot", v, sizeof(v)) && std::strcmp(v, "1") == 0) { shot = true; }
         if (IniValue(ini, n, "screenshot_buttons", v, sizeof(v)) && ParseUnsigned(v, &u) && u <= 3) { shotkey = u; }
+        if (IniValue(ini, n, "audio", v, sizeof(v)) && std::strcmp(v, "0") == 0) { audio = false; }
         char shotbuf[24] = "";
         if (shot) { std::snprintf(shotbuf, sizeof(shotbuf), " shot shotkey=%u", shotkey); }
-        const int w = std::snprintf(out, cap, "vic exec dbg usb live nvqp=%u nvgop=%u wait=%u%s%s%s",
-                                    qp, gop, wait, cap720 ? " cap720" : "", anyfw ? " anyfw" : "", shotbuf);
+        const int w = std::snprintf(out, cap, "vic exec dbg usb live nvqp=%u nvgop=%u wait=%u%s%s%s%s",
+                                    qp, gop, wait, cap720 ? " cap720" : "", anyfw ? " anyfw" : "", shotbuf, audio ? " audio" : "");
         return (w < 0 || static_cast<size_t>(w) >= cap) ? 0 : static_cast<size_t>(w);
     }
 
