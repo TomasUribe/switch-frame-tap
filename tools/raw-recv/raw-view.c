@@ -22,6 +22,8 @@
  *   ./raw-view --low-latency   # one decode thread, frames out immediately
  *   ./raw-view --threads 2     # N frame threads: N-1 frames of decoder delay (default 2;
  *                              # 0 = one per core, which cost ~250 ms in M84 Run J)
+ *   ./raw-view --file s.sft --paced --seconds 5   # v0.2: a recording through the LIVE
+ *                              # pipeline (reader thread, decoder thread, vsync display)
  *   ./raw-view --app           # M97: the desktop launcher's mode - the window opens at
  *                              # once, waits for the Switch, reconnects whenever it comes
  *                              # back, and only closes when you close it. F11 or a
@@ -72,6 +74,8 @@ typedef struct {
 static volatile sig_atomic_t g_quit = 0;
 static int g_app = 0;               /* --app: survive the console leaving the bus */
 static int g_lost = 0;              /* --app: the console left; wait for it again */
+static int g_paced = 0;             /* --paced: a recording fed through the live pipeline at 60 fps, looped (tests) */
+static double g_run_secs = 0;       /* --seconds: stop the live pipeline after this long (tests) */
 static void on_sigint(int s) { (void)s; g_quit = 1; }
 static libusb_device_handle *g_usb = NULL;
 static FILE *g_in = NULL;           /* --file */
@@ -82,6 +86,7 @@ static int read_exact(uint8_t *dst, size_t n, int ms)
 {
     if (g_in) {
         size_t got = fread(dst, 1, n, g_in);
+        if (got == 0 && g_paced) { rewind(g_in); got = fread(dst, 1, n, g_in); }
         if (got != n) { g_quit = 1; return -3; }
         return (int)n;
     }
@@ -131,6 +136,7 @@ static int reader_main(void *arg)
         const Uint64 t = SDL_GetPerformanceCounter();
         if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); continue; }
         if (hdr.length == 0 || hdr.length > 64u*1024*1024) continue;
+        if (g_paced) SDL_Delay(16);         /* a recording at roughly the console's pace */
         SDL_LockMutex(g_qm);
         while (g_qn == QN && !g_quit && !g_rd_stop) SDL_CondWaitTimeout(g_q_put, g_qm, 100);
         const int slot = (g_qh + g_qn) % QN;
@@ -333,6 +339,218 @@ static libusb_device_handle *app_wait_device(libusb_context *ctx, SDL_Window *wi
     }
 }
 
+#ifdef SFT_H264
+/* ---- v0.2 test3: the live pipeline - reader -> decoder -> paced display -----
+ *
+ * Test build 2 (Windows, logs/v020-win-test2): decoding ~0.1-3 ms and drawing
+ * ~0.75 ms a frame, yet it stuttered: packets arrived in bursts (the USB
+ * queue hit 8 of 8), and "draw only the newest" then threw whole bursts away
+ * (472 frames decoded, never shown), while presenting unsynchronised to the
+ * display left the compositor to show frames at uneven moments.
+ *
+ * Now three threads: the reader drains the cable (reader_main), a decoder
+ * turns every packet into a frame in a small FIFO, and the display loop shows
+ * the frames IN ORDER, one per display refresh (vsync). Only when more than
+ * two are waiting does it drop the oldest - a two-frame latency cap instead
+ * of throwing a burst away. Statistics are per second, not since the start. */
+#define FQ 6
+static AVFrame *g_fq[FQ];
+static int g_fh = 0, g_fn = 0;
+static SDL_mutex *g_fm = NULL;
+static SDL_cond *g_f_put = NULL;
+static volatile int g_dec_stop = 0;
+static Uint64 g_t_rx[256];           /* header arrival per frame number */
+static double g_age_ms[256];         /* the console's own age of that frame */
+
+/* counters the decoder writes and the display loop reads (benign races) */
+static volatile long s_packets = 0, s_decoded = 0, s_undecoded = 0, s_lost = 0, s_keyframes = 0, s_sessions = 1;
+static volatile double s_bytes = 0, s_dec_ms = 0, s_dec_max = 0;
+
+typedef struct { h264_t *dec; FILE *rec; FILE *es; } dec_args_t;
+
+static int decoder_main(void *arg)
+{
+    dec_args_t *a = arg;
+    uint8_t *payload = NULL; size_t cap = 0;
+    uint32_t last_kind = 0; int have_kind = 0;
+    const Uint64 freq = SDL_GetPerformanceFrequency();
+    while (!g_quit && !g_dec_stop) {
+        sft_hdr_t hdr; Uint64 t_hdr = 0; int left = 0;
+        if (!reader_pop(&hdr, &payload, &cap, &t_hdr, 50, &left)) continue;
+        s_packets++;
+        s_bytes += hdr.length;
+        if (a->rec) { fwrite(&hdr, 1, sizeof(hdr), a->rec); fwrite(payload, 1, hdr.length, a->rec); }
+        if (!(hdr.flags & SFT_FLAG_H264)) { s_undecoded++; continue; }   /* the old raw formats: file replay only */
+        if (have_kind && hdr.kind > last_kind + 1) s_lost += hdr.kind - last_kind - 1;
+        if (have_kind && hdr.kind < last_kind) { s_sessions++; fprintf(stderr, "\nnew stream session %ld (the console reattached)\n", (long)s_sessions); }
+        last_kind = hdr.kind; have_kind = 1;
+        if (a->es) fwrite(payload, 1, hdr.length, a->es);
+        if (hdr.flags & SFT_FLAG_KEY) s_keyframes++;
+        g_t_rx[hdr.kind & 255] = t_hdr;
+        g_age_ms[hdr.kind & 255] = (hdr.stride != 0 && hdr.stride < 10000000u) ? hdr.stride / 1000.0 : -1.0;
+        const Uint64 d0 = SDL_GetPerformanceCounter();
+        const int got = h264_decode(a->dec, payload, (int)hdr.length, (int64_t)hdr.kind);
+        const double dm = (double)(SDL_GetPerformanceCounter() - d0) * 1000.0 / (double)freq;
+        s_dec_ms += dm;
+        if (dm > s_dec_max) s_dec_max = dm;
+        if (got < 0) { s_undecoded++; continue; }
+        if (got == 0) continue;
+        s_decoded++;
+        SDL_LockMutex(g_fm);
+        if (g_fn == FQ) {                      /* the display is far behind: make room */
+            av_frame_unref(g_fq[g_fh]);
+            g_fh = (g_fh + 1) % FQ;
+            g_fn--;
+        }
+        av_frame_move_ref(g_fq[(g_fh + g_fn) % FQ], a->dec->frm);
+        g_fn++;
+        SDL_CondSignal(g_f_put);
+        SDL_UnlockMutex(g_fm);
+    }
+    free(payload);
+    return 0;
+}
+
+static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int app,
+                    int low_latency, int threads, FILE *rec, FILE *es)
+{
+    h264_t dec = {0};
+    if (h264_open(&dec, low_latency, threads) != 0) { fprintf(stderr, "libavcodec H.264 decoder unavailable\n"); return 1; }
+    if (!win) {
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+        SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
+        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+        win = SDL_CreateWindow("Switch Frame Tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                               1280, 720, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+        ren = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : NULL;
+        if (!ren) { fprintf(stderr, "SDL window: %s\n", SDL_GetError()); return 1; }
+    }
+    SDL_RendererInfo ri;
+    if (SDL_GetRendererInfo(ren, &ri) == 0) {
+        fprintf(stderr, "renderer: %s%s\n", ri.name, (ri.flags & SDL_RENDERER_PRESENTVSYNC) ? ", vsync" : ", NO vsync");
+    }
+    for (int i = 0; i < FQ; i++) g_fq[i] = av_frame_alloc();
+    if (!g_fm) { g_fm = SDL_CreateMutex(); g_f_put = SDL_CreateCond(); }
+    dec_args_t da = { &dec, rec, es };
+    g_dec_stop = 0;
+    SDL_Thread *dth = SDL_CreateThread(decoder_main, "decoder", &da);
+
+    SDL_Texture *tex = NULL;
+    AVFrame *show = av_frame_alloc();
+    uint32_t W = 0, H = 0;
+    const Uint64 freq = SDL_GetPerformanceFrequency();
+    const Uint64 t_start = SDL_GetPerformanceCounter();
+    Uint64 t_prev_show = 0, t_win = t_start;
+    long shown = 0, skipped = 0;
+    double lat_sum = 0, lat_max = 0, age_sum = 0, age_max = 0; long lat_n = 0, age_n = 0;
+    /* this second's window */
+    long w_shown = 0, w_skipped = 0, w_dec0 = 0, w_lat_n = 0, w_age_n = 0; double w_bytes0 = 0, w_lat = 0, w_age = 0, w_gap = 0, w_draw = 0, w_dec_ms0 = 0;
+    int w_qmax_seen = 0;
+    char title[256];
+
+    while (!g_quit) {
+        app_events(win, ren, tex);
+        if (g_run_secs > 0 && (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq >= g_run_secs) break;
+        if (g_lost) {
+            /* the Switch left the bus (rebooted, cable out) */
+            reader_stop();
+            libusb_release_interface(g_usb, SFT_IFACE);
+            libusb_close(g_usb);
+            g_usb = NULL;
+            fprintf(stderr, "\nthe Switch disconnected%s\n", app ? " - waiting for it" : "");
+            if (!app) break;
+            g_usb = app_wait_device(ctx, win, ren, tex);
+            if (!g_usb) break;
+            g_lost = 0;
+            reader_start();
+            continue;
+        }
+        SDL_LockMutex(g_fm);
+        if (g_fn == 0) SDL_CondWaitTimeout(g_f_put, g_fm, 20);
+        if (g_fn == 0) { SDL_UnlockMutex(g_fm); goto stats; }
+        while (g_fn > 2) {                     /* the latency cap: at most two frames behind */
+            av_frame_unref(g_fq[g_fh]);
+            g_fh = (g_fh + 1) % FQ;
+            g_fn--;
+            skipped++; w_skipped++;
+        }
+        av_frame_move_ref(show, g_fq[g_fh]);
+        g_fh = (g_fh + 1) % FQ;
+        g_fn--;
+        SDL_UnlockMutex(g_fm);
+        {
+            const Uint64 r0 = SDL_GetPerformanceCounter();
+            if (!tex || (uint32_t)show->width != W || (uint32_t)show->height != H) {
+                if (tex) SDL_DestroyTexture(tex);
+                W = (uint32_t)show->width; H = (uint32_t)show->height;
+                if (!(SDL_GetWindowFlags(win) & (SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED))) SDL_SetWindowSize(win, (int)W, (int)H);
+                tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, (int)W, (int)H);
+                SDL_RenderSetLogicalSize(ren, (int)W, (int)H);
+                fprintf(stderr, "\nstream: %ux%u H.264\n", W, H);
+            }
+            SDL_UpdateYUVTexture(tex, NULL, show->data[0], show->linesize[0], show->data[1], show->linesize[1], show->data[2], show->linesize[2]);
+            SDL_RenderClear(ren);
+            SDL_RenderCopy(ren, tex, NULL, NULL);
+            SDL_RenderPresent(ren);            /* waits for the display's refresh (vsync) */
+            const Uint64 now = SDL_GetPerformanceCounter();
+            w_draw += (double)(now - r0) * 1000.0 / (double)freq;
+            shown++; w_shown++;
+            const int k = (int)(show->pts & 255);
+            const double l = (double)(now - g_t_rx[k]) * 1000.0 / (double)freq;
+            if (l >= 0 && l < 5000) { lat_sum += l; lat_n++; w_lat += l; w_lat_n++; if (l > lat_max) lat_max = l; }
+            if (g_age_ms[k] >= 0) { age_sum += g_age_ms[k]; age_n++; w_age += g_age_ms[k]; w_age_n++; if (g_age_ms[k] > age_max) age_max = g_age_ms[k]; }
+            if (t_prev_show) { const double gap = (double)(now - t_prev_show) * 1000.0 / (double)freq; if (gap > w_gap) w_gap = gap; }
+            t_prev_show = now;
+            av_frame_unref(show);
+        }
+    stats:
+        {
+            const Uint64 now = SDL_GetPerformanceCounter();
+            const double secs = (double)(now - t_win) / (double)freq;
+            if (g_qmax > w_qmax_seen) w_qmax_seen = g_qmax;
+            if (secs >= 1.0) {
+                const long dec = s_decoded - w_dec0;
+                const double mbps = (s_bytes - w_bytes0) * 8.0 / 1e6 / secs;
+                const double dms = dec ? (s_dec_ms - w_dec_ms0) / dec : 0.0;
+                snprintf(title, sizeof(title), "Switch Frame Tap  %ux%u  %.1f fps  %.0f Mbps  pc %.1f ms  console %.1f ms",
+                         W, H, w_shown / secs, mbps, w_lat_n ? w_lat / w_lat_n : 0.0, w_age_n ? w_age / w_age_n : 0.0);
+                if (W) SDL_SetWindowTitle(win, title);
+                fprintf(stderr, "[%7.1f s] decoded %.1f fps, shown %.1f fps, skipped %ld, %.0f Mbps | pc %.1f ms, console %.1f ms | decode %.2f ms (max %.1f), draw+vsync %.1f ms, worst gap %.1f ms, usb queue max %d\n",
+                        (double)(now - t_start) / (double)freq, dec / secs, w_shown / secs, w_skipped, mbps,
+                        w_lat_n ? w_lat / w_lat_n : 0.0, w_age_n ? w_age / w_age_n : 0.0,
+                        dms, s_dec_max, w_shown ? w_draw / w_shown : 0.0, w_gap, w_qmax_seen);
+                t_win = now; w_shown = w_skipped = 0; w_dec0 = s_decoded; w_bytes0 = s_bytes; w_dec_ms0 = s_dec_ms;
+                w_lat = w_age = w_gap = w_draw = 0; w_lat_n = w_age_n = 0; s_dec_max = 0; g_qmax = 0; w_qmax_seen = 0;
+            }
+        }
+    }
+
+    reader_stop();
+    g_dec_stop = 1;
+    SDL_WaitThread(dth, NULL);
+    const double secs = (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq;
+    fprintf(stderr, "\n%ld packets, %ld decoded, %ld shown, %ld skipped (latency cap), %ld not decoded, %ld lost, %.1f MB in %.0f s\n",
+            (long)s_packets, (long)s_decoded, shown, skipped, (long)s_undecoded, (long)s_lost, s_bytes / 1e6, secs);
+    if (s_keyframes) fprintf(stderr, "%ld keyframes (IDR)\n", (long)s_keyframes);
+    if (lat_n) fprintf(stderr, "PC latency (header arrival -> on screen): avg %.1f ms, max %.1f ms\n", lat_sum / lat_n, lat_max);
+    if (age_n) fprintf(stderr, "console latency (present -> header sent): avg %.1f ms, max %.1f ms\n", age_sum / age_n, age_max);
+    printf("packets=%ld frames=%ld undecoded=%ld lost=%ld\n", (long)s_packets, (long)s_decoded, (long)s_undecoded, (long)s_lost);
+    av_frame_free(&show);
+    for (int i = 0; i < FQ; i++) av_frame_free(&g_fq[i]);
+    h264_close(&dec);
+    if (rec) fclose(rec);
+    if (es) fclose(es);
+    if (tex) SDL_DestroyTexture(tex);
+    SDL_DestroyRenderer(ren);
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+    if (g_usb) { libusb_release_interface(g_usb, SFT_IFACE); libusb_close(g_usb); }
+    if (ctx) libusb_exit(ctx);
+    if (g_in) fclose(g_in);
+    return 0;
+}
+#endif
+
 int main(int argc, char **argv)
 {
     int swap_rb = 0, scale = 1, headless = 0, low_latency = 0, threads = 2;
@@ -349,6 +567,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--low-latency")) low_latency = 1;
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc) threads = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--app")) g_app = 1;
+        else if (!strcmp(argv[i], "--paced")) g_paced = 1;
+        else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) g_run_secs = atof(argv[++i]);
         else { fprintf(stderr, "unknown option %s (see the comment at the top of raw-view.c)\n", argv[i]); return 2; }
     }
     if (scale < 1) scale = 1;
@@ -390,7 +610,7 @@ int main(int argc, char **argv)
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
         win = SDL_CreateWindow("Switch Frame Tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                1280, 720, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-        ren = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED) : NULL;
+        ren = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : NULL;
         if (!ren) {
             fprintf(stderr, "SDL window: %s\n", SDL_GetError());
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Switch Frame Tap", SDL_GetError(), NULL);
@@ -430,6 +650,15 @@ int main(int argc, char **argv)
     FILE *rec = record ? fopen(record, "wb") : NULL;
     FILE *es = h264_out ? fopen(h264_out, "wb") : NULL;
     if ((record && !rec) || (h264_out && !es)) { perror("output file"); return 1; }
+#ifdef SFT_H264
+    /* v0.2 test3: live USB goes through the paced three-thread pipeline;
+     * the loop below is file replay (and the tests) */
+    if (g_usb || (g_in && g_paced)) {
+        (void)headless; (void)max_frames;
+        if (!g_usb) reader_start();            /* --paced: the recording goes through the same reader thread */
+        return run_live(ctx, win, ren, g_app, low_latency, threads, rec, es);
+    }
+#endif
 
 #ifdef SFT_H264
     h264_t dec = {0};
