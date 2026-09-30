@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 107 hardware test cycles (through Run AK). Current build: **v0.5.0** (recording in the viewer, a main screen - Run AK). Released: v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 109 hardware test cycles (through Run AM). Current build: **v0.6.0** (smaller P frames - Runs AL, AM). Released: v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,39 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.6.0: bitrate tuning (Runs AL, AM) ***
+
+Question 1 of the handoff (P frames ~60 % of an IDR). Evidence first:
+
+- `tools/raw-recv/h264-stats` on Run AK's 30 s race (decoder motion-vector
+  export): 102 Mbps; P 205 KB = 57 % of I; racing P frames only 52-59 %
+  predicted, vectors 18-25 px - motion estimation works but misses.
+- `tools/nvsetup-dump` now decodes me/md/quant control. grc's P setup (ours)
+  searches only from the zero vector and this frame's spatial neighbours:
+  temporal and co-located hints off; stamps of 4-25 points; qpel, const
+  lambda 4; intra 4x4 off.
+- **Run AL (`logs/v060-runAL`, token `nvab` from `encoder_test = 1`):** the
+  stream cycles four P-setup variants, 600 frames each from an IDR, logging P
+  and I sizes, intra share (status intra/inter MB counts) and avgQP. 1080p
+  MK8D, 26 windows. P size / I size per variant (content-normalised): A
+  baseline 0.62; B P QP+2 0.47 (-25 %); C temporal hint 0.60 (-4 %, intra
+  27 -> 21 %); D both 0.54 (-13 %). Window noise is +-0.1. avgQP 22 confirms
+  the P QP in both QP fields of the P setup; the temporal hint (2 bytes,
+  0x60c/0x60d) never stalled the engine.
+- **The encoder is not the problem:** x264 veryfast at constant QP 20 (no B,
+  1 ref, keyint 60) on the same 600 racing frames needs 89 % of our bits
+  (QP 22: 73 %, 24: 55 %, 26: 42 %, 28: 34 %). I frames are ~3 % of the bits,
+  so the keyframe interval is no lever either.
+- **Shipped:** every P frame at QP+2 (capped at 51) with the temporal hint
+  (variant D, `ProductionVariant`); `nvab` stays for the rate-control work.
+- **Run AM:** a 44 s 1080p race recorded with the new default: 82 Mbps
+  (Run AK's 102), 2616/2616 frames, 0 errors; coded QP (decoder venc_params)
+  I 20.1, P 22.1 (Run AK: 20.1 / 20.1). The slice headers say 24 for every
+  frame: the setup's slice control starts at grc's 24 and the first MB's
+  delta moves to the real QP.
+- Not done, by decision: a bitrate cap (RCMODE 18 with our own target) - with
+  the network transport, where it matters.
 
 ## *** v0.5.0: recording in the viewer, and a main screen (Run AK: works) ***
 

@@ -254,6 +254,7 @@ namespace ams {
             mitm::applet::g_shot_enabled.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "shot"));
             mitm::applet::g_shot_combo.store(mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "shotkey", 0) & 3);
             mitm::applet::g_audio_enabled.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "audio"));
+            mitm::applet::g_nvab_armed = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "nvab");
         }
 
         /* Numeric option out of the arm file: "wait=180" delays the probe so
@@ -672,7 +673,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.5.0: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm v0.6.0: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -699,6 +700,7 @@ namespace ams {
         mitm::applet::g_nvstream_n    = ArmFileNumber("nvstream", 3600);
         mitm::applet::g_nvstream_qp   = ArmFileNumber("nvqp", 20);
         mitm::applet::g_nvstream_gop  = ArmFileNumber("nvgop", 0);
+        mitm::applet::g_nvab_armed    = ArmFileContains("nvab");
         mitm::applet::g_live_armed    = ArmFileContains("live");
         mitm::applet::g_nv1080_armed  = ArmFileContains("nv1080");
         mitm::applet::g_nv1080_n      = ArmFileNumber("nv1080", 120);

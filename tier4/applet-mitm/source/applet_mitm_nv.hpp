@@ -92,6 +92,9 @@ namespace ams::mitm::applet {
     extern bool g_nvstream_armed; /* M83: game -> VIC -> NVENC H.264 -> USB */
     extern u32  g_nvstream_n, g_nvstream_qp;
     extern u32  g_nvstream_gop;   /* M85: 0 = IDR-only; N = an IDR every N frames, P frames between */
+    /* v0.6 bitrate tuning: "nvab" cycles the P-frame encoder settings through
+     * four variants, 10 s each, and logs each window's sizes and intra share */
+    extern bool g_nvab_armed;
     extern bool g_live_armed;     /* M86: stream whenever a viewer and a game are there */
     extern bool g_nv1080_armed;   /* M90: 1080p encoder probe (frame 0, GOP, timed) */
     extern u32  g_nv1080_n;

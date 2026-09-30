@@ -66,7 +66,7 @@ animation.*
 | Resolution / frame rate | **1920x1080** when the game renders it (docked picture via ReverseNX-RT): MK8D 58.4 fps over a session, 59.5-59.9 per window; 1280x720 native handheld: MK8D 57-59 fps, BOTW 29 fps |
 | Transport | USB 2.0 bulk, the Switch's own USB-C port, no dock |
 | Audio | the game's sound, 48 kHz stereo PCM, from the console's own recorder (grc:d); ~1.5 Mbps alongside the video |
-| Video | H.264 from the Switch's NVENC, constant QP 20, keyframe every 60 frames; 720p ~40-55 Mbps, 1080p ~90 Mbps in a race |
+| Video | H.264 from the Switch's NVENC, constant QP 20 (P frames 22, v0.6.0), keyframe every 60 frames; 1080p ~80 Mbps in a fast race, 720p about half; the manager's Medium / Low quality roughly half / a third of that |
 | Latency | 720p: ~20-23 ms on the console (game present -> sent) + ~21-24 ms on the PC (arrival -> on screen); 1080p: ~34 + ~25 ms |
 | Reliability | 0 lost / 0 undecodable frames in every run since M84; 0 stale or torn frames (M89) |
 | Console | Mariko, firmware 22.5.0, Atmosphère 1.11.2 (the only one tested) |
@@ -128,12 +128,12 @@ manager app:
 
 Nothing else: no other sysmodule, no sigpatches, no capture card.
 
-## Install (v0.5.0)
+## Install (v0.6.0)
 
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.5.0-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.6.0-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -147,7 +147,7 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.5.0-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.6.0-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -166,7 +166,7 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.5.0-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.6.0-linux-viewer.tar.gz` with the same files.
 
 On both, the viewer opens a window that says what it is waiting for (the
 Switch, its USB driver, or a game) and lists its keys; the same screen comes
@@ -192,7 +192,7 @@ a second) it saves an MP4 to `Videos/Switch Frame Tap` - the console's H.264
 exactly as it arrived, never re-encoded, so no quality is lost and it costs
 almost no CPU, plus the game's sound (AAC). **R** again stops. A red dot
 shows while it records, and the title bar the time and size. At 1080p it is
-about 11 MB a second (~650 MB a minute). The file is written in fragments, so
+about 10 MB a second (~600 MB a minute) at High quality, half that at Medium. The file is written in fragments, so
 a recording cut short by closing the window or pulling the cable still plays;
 if the game switches between 720p and 1080p mid-recording it continues in a
 new file; it will not start with less than 1 GB free and stops by itself
@@ -292,7 +292,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.5.0       # -> dist/switch-frame-tap-0.5.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.6.0       # -> dist/switch-frame-tap-0.6.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -338,9 +338,12 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
 - **Occasional micro-stutters** during loading and heavy scenes: reads,
   the VIC and NVENC are shared with the whole system (NVENC also with the
   console's own background recording), and a frame can take 50-200 ms then.
-- **Bitrate is not tuned.** P frames are about 60% of a keyframe in a fast
-  race at QP 20; ~40-55 Mbps fits USB 2.0 (~290 Mbps) easily but is more than
-  it needs to be.
+- **Bitrate is set by quality, not capped.** v0.6.0 made P frames about
+  15-20% smaller (QP +2 on P frames, a better motion search); at the same
+  quality x264 needs ~89% of the console's bits, so what remains is the price
+  of "High" (near-lossless) at 1080p60. USB has room for it; a bitrate cap
+  (the console's own rate control) comes with the network transport, where it
+  is needed.
 - **One console tested.** Mariko, firmware 22.5.0, Atmosphère 1.11.2.
 
 ## If something goes wrong
@@ -537,7 +540,8 @@ transport** for streaming from the dock, where the dock owns the USB port
 | 1080p60 at stock clocks (CPU 1020 MHz) | tested (Run X): works, a little below 60 |
 | **Releases**: v0.1.0 (config file, manager app, overlay, native screenshots); v0.1.1 (homebrew) | **done, on hardware** (M97-v0.1.1) |
 | Homebrew apps (forwarders and title override: a `vi:m` mitm for the running application only; larger and offset swapchains, BGRA, 1080p for any layout; a never-attach list) | **done, on hardware** (v0.1.1) |
-| Bitrate tuning (better P frames, QP) | next; also lowers what 1080p60 needs from the network |
+| Bitrate tuning (better P frames, QP) | **done** (v0.6.0): P frames at QP+2 and the temporal motion hint, ~15-20 % smaller; the encoder measured against x264 (89 % of our bits at the same QP) |
+| A bitrate cap (NVENC's own rate control) | with the network transport |
 | 1080p60 from the dock, over the network | not started: needs a network transport, see [above](#the-road-to-1080p60) |
 | Game audio (grc:d PCM alongside the video; paced playback) | **done** (v0.3.0) |
 | Windows viewer, and paced display (reader / decoder / vsync threads) on both | **done** (v0.2.0) |
@@ -551,7 +555,7 @@ transport** for streaming from the dock, where the dock owns the USB port
 | path | what |
 |---|---|
 | `tier4/applet-mitm/` | The sysmodule: `vi:u` / `vi:m` mitm, binder intercept, debug-SVC capture and event pump, VIC and NVENC over raw nvdrv, USB (the viewer's bulk transport, or a UVC camera), game audio (grc:d), screenshots, the `sftap` control service. |
-| `tools/raw-recv/` | `raw-view`, the PC viewer (Linux, and Windows via `build-windows.sh`), and `install-launcher.sh`, its Linux desktop app; `record.h` (MP4 recording) and `menu.h` (the main screen, with a built-in DejaVu font from `gen_font.py`); `uvc-check`, the webcam-mode tester; `mp4-check` and `mp4-frames` (checking a recording, frames for the docs) (and `raw-recv`, the raw-frame receiver it grew out of). |
+| `tools/raw-recv/` | `raw-view`, the PC viewer (Linux, and Windows via `build-windows.sh`), and `install-launcher.sh`, its Linux desktop app; `record.h` (MP4 recording) and `menu.h` (the main screen, with a built-in DejaVu font from `gen_font.py`); `uvc-check`, the webcam-mode tester; `mp4-check`, `mp4-frames` and `h264-stats` (checking a recording, frames for the docs, the encoder's efficiency: frame sizes, coded QP, motion vectors) (and `raw-recv`, the raw-frame receiver it grew out of). |
 | `manager/` | The manager app for the homebrew menu (SDL2): settings, status, setup check, screenshot gallery. |
 | `overlay/` | The Tesla/Ultrahand overlay: stream on/off, status, handheld/docked through ReverseNX-RT. |
 | `tools/` | `make_release.sh` (the release zip), and PC-side analysis and self-tests: `sft_tool.py`, `nvframe_check.py`, `nvp_check.py`, `vic_csc.py`, `nvenc_replay.py`, `nvrec.py`. |

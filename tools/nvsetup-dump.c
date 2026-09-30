@@ -126,11 +126,55 @@ int main(int argc, char **argv)
                    sl->num_mb, sl->qp_avr, sl->qp_slice_min, sl->qp_slice_max, sl->force_intra,
                    sl->disable_deblocking_filter_idc, sl->cabac_init_idc,
                    sl->me_control_idx, sl->md_control_idx, sl->q_control_idx);
+        } else if (i == 1) {
+            /* v0.6: the motion search, field by field (bitrate tuning) */
+            const nvenc_h264_me_control_s *me = (const void *)(buf + arr[i].off);
+            printf("    predictor_mode=%u (0 MDP, 1 const) refinement=%s lambda_mode=%u const_lambda=%u refine_on_search=%u mv_only=%u avg_mvhint=%u\n",
+                   me->me_predictor_mode, me->refinement_mode ? "qpel" : "hpel", me->lambda_mode, me->const_lambda,
+                   me->refine_on_search_enable, me->mv_only_enable, me->average_mvhint_enable);
+            printf("    limit_mv: enable=%u x %d..%d y %d..%d\n", me->limit_mv.mv_limit_enable,
+                   me->limit_mv.left_mvx_int, me->limit_mv.right_mvx_int, me->limit_mv.top_mvy_int, me->limit_mv.bottom_mvy_int);
+            const nvenc_h264_me_hint_cfg_s *h = &me->predsrc;
+            printf("    hints (enable/search/refine/explicit, stamp):\n");
+            printf("      temporal %u/%u/%u/%u s%u   coloc %u/%u/%u/%u s%u   spatial %u/%u/%u/%u s%u\n",
+                   h->self_temporal_enable, h->self_temporal_search, h->self_temporal_refine, h->self_temporal_explicit, h->self_temporal_stamp_l0,
+                   h->coloc_enable, h->coloc_search, h->coloc_refine, h->coloc_explicit, h->coloc_stamp_l0,
+                   h->self_spatial_enable, h->self_spatial_search, h->self_spatial_refine, h->self_spatial_explicit, h->self_spatial_stamp_l0);
+            printf("      external %u/%u/%u/%u s%u   const_mv %u/%u/%u/%u s%u (l0_hint %d,%d)\n",
+                   h->external_enable, h->external_search, h->external_refine, h->external_explicit, h->external_stamp_l0_refidx0_stamp,
+                   h->const_mv_enable, h->const_mv_search, h->const_mv_refine, h->const_mv_explicit, h->const_mv_stamp_l0,
+                   me->l0_hint.mvx_int, me->l0_hint.mvy_int);
+            const nvenc_h264_me_stamp_s *sh = &me->shape0;
+            for (int k = 0; k < 8; k++) {
+                int pts = __builtin_popcount(sh[k].bitmask[0]) + __builtin_popcount(sh[k].bitmask[1]);
+                printf("      shape%d: %08x%08x (%2d points) adj %u/%u\n", k, sh[k].bitmask[1], sh[k].bitmask[0], pts, sh[k].hor_adjust, sh[k].ver_adjust);
+            }
+            printf("    teb K=%u N=%u P=%u S=%u mode=%u  mbc_mb_size=%u  spatial_hint_pattern=%#x temporal_hint_pattern=%#x  fbm_op_winner_num_p=%u  hint_types=%u,%u,%u,%u,%u\n",
+                   me->teb_para.teb_K, me->teb_para.teb_N, me->teb_para.teb_P, me->teb_para.teb_S, me->teb_para.teb_mode,
+                   me->mbc_mb_size, me->spatial_hint_pattern, me->temporal_hint_pattern, me->fbm_op_winner_num_p_frame,
+                   me->hint_type0, me->hint_type1, me->hint_type2, me->hint_type3, me->hint_type4);
         } else if (i == 2) {
             const nvenc_h264_md_control_s *md = (const void *)(buf + arr[i].off);
-            printf("    intra4x4=%#x intra8x8=%#x intra16x16=%#x chroma=%#x l0_16x16=%u\n",
+            printf("    intra4x4=%#x intra8x8=%#x intra16x16=%#x chroma=%#x  intra_refresh cnt=%u\n",
                    md->intra_luma4x4_mode_enable, md->intra_luma8x8_mode_enable,
-                   md->intra_luma16x16_mode_enable, md->intra_chroma_mode_enable, md->l0_part_16x16_enable);
+                   md->intra_luma16x16_mode_enable, md->intra_chroma_mode_enable, md->intra_refresh_cnt);
+            printf("    l0 parts 16x16=%u 16x8=%u 8x16=%u 8x8=%u 8x4=%u 4x8=%u 4x4=%u  pskip=%u\n",
+                   md->l0_part_16x16_enable, md->l0_part_16x8_enable, md->l0_part_8x16_enable, md->l0_part_8x8_enable,
+                   md->l0_part_8x4_enable, md->l0_part_4x8_enable, md->l0_part_4x4_enable, md->pskip_enable);
+            printf("    bias: inter16x16=%d 16x8=%d 8x16=%d 8x8=%d pskip=%d intra_over_inter=%d intra16=%d intra8=%d intra4=%d mv_cost_bias=%u\n",
+                   md->bias_inter_16x16, md->bias_inter_16x8, md->bias_inter_8x16, md->bias_inter_8x8, md->bias_pskip,
+                   md->bias_intra_over_inter, md->bias_intra_16x16, md->bias_intra_8x8, md->bias_intra_4x4, md->mv_cost_bias);
+            printf("    pskip_esc=%u early_intra_disable=%u early_intra_mode_control=%u early_ip_is_final=%u ip_search_mode=%#x mv_cost_enable=%u mv_cost_pred=%u\n",
+                   md->pskip_esc_threshold, md->early_intra_disable_mpeb_threshold, md->early_intra_mode_control,
+                   md->early_ip_is_final, md->ip_search_mode, md->mv_cost_enable, md->mv_cost_predictor_control);
+            printf("    rdo_level=%u tu_search_num=%u luma_residual_zero_eval=%u multiply_bias_with_lambda=%u inter_penalty_ip1=%u early_term_ip1=%u\n",
+                   md->rdo_level, md->tu_search_num, md->luma_residual_zero_eval, md->multiply_bias_with_lambda,
+                   md->inter_penalty_factor_for_ip1, md->early_termination_ip1);
+        } else if (i == 3) {
+            const nvenc_h264_quant_control_s *q = (const void *)(buf + arr[i].off);
+            printf("    qpp_mode=%u luma8x8_cost=%u luma16x16_cost=%u chroma_cost=%u  dz_4x4_YP[0]=%u dz_4x4_YI[0]=%u dz_8x8_YP[0]=%u\n",
+                   q->qpp_mode, q->qpp_luma8x8_cost, q->qpp_luma16x16_cost, q->qpp_chroma_cost,
+                   q->dz_4x4_YP[0], q->dz_4x4_YI[0], q->dz_8x8_YP[0]);
         }
         hex(buf + arr[i].off, arr[i].cnt * arr[i].sz);
     }

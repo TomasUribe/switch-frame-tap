@@ -1,0 +1,19 @@
+# Switch Frame Tap settings - written by the manager app; editing by hand is fine.
+# quality: high | medium | low  (high: the best picture and the most USB bandwidth)
+quality = high
+# keyframe_interval: frames between keyframes (60 = once a second at 60 fps)
+keyframe_interval = 60
+# max_resolution: 1080 (native) | 720
+max_resolution = 1080
+# start_delay: seconds after boot before streaming can start
+start_delay = 20
+# allow_untested_firmware: 1 streams on firmware this version was not tested on
+allow_untested_firmware = 0
+# screenshot: 1 = a button combo saves a native-resolution PNG to /switch/switch-frame-tap/screenshots
+screenshot = 1
+# screenshot_buttons: 0 = L3 + R3, 1 = L + R + D-pad Down, 2 = ZL + ZR + D-pad Down, 3 = Minus + D-pad Down
+screenshot_buttons = 0
+# audio: 1 = send the game's sound to the PC viewer
+audio = 1
+# usb_mode: viewer (the Switch Frame Tap viewer) | webcam (a USB camera for OBS and other apps; no sound). Read at boot.
+usb_mode = viewer

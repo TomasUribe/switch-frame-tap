@@ -129,8 +129,8 @@ RECORDING
 Press R to record, R again to stop. The recording starts at the next
 keyframe (within a second) and is saved as an MP4 in your Videos folder,
 under "Switch Frame Tap": the console's own H.264 picture, untouched, and the
-game's sound. A red dot shows while it records. 1080p is about 11 MB a second
-(~650 MB a minute); it stops by itself if the disk gets nearly full.
+game's sound. A red dot shows while it records. 1080p at High quality is about 10 MB a second
+(~600 MB a minute); it stops by itself if the disk gets nearly full.
 
 If the title bar says the Switch "has no USB driver", do the setup above.
 

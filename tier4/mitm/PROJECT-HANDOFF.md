@@ -1,4 +1,4 @@
-# switch-frame-tap: project handoff (v0.5.0)
+# switch-frame-tap: project handoff (v0.6.0)
 
 This is for whoever continues the project cold, most likely a local session
 with the SD card and the console at hand. It covers:
@@ -13,7 +13,7 @@ with the SD card and the console at hand. It covers:
 `tier4/mitm/STATUS.md` has the full evidence behind each item, newest
 milestone first. This page is the map.
 
-**Current release: v0.5.0 (2026-09-30), on GitHub.** The module streams
+**Current release: v0.6.0 (2026-09-30), on GitHub.** The module streams
 native 1080p60 (with ReverseNX-RT) or 720p60 H.264 plus the game's audio
 (grc:d PCM) over USB to a Windows or Linux viewer, whenever the viewer is
 reading and a game - or a homebrew app from a HOME-menu forwarder (vi:m) -
@@ -219,11 +219,12 @@ PC dependencies:
 
 ## 5. Open questions
 
-1. **Bitrate.** P frames are ~60% of an IDR in a fast race at QP 20 (Run K:
-   IDR 196 KB, P 117 KB). grc's own GOP is 15 and its P frames are small;
-   suspects: the zeroed first MEPRED input, ME settings in the setup, QP[P]
-   equal to QP[I]. ~40-55 Mbps fits USB 2.0 easily, so this matters most for
-   a network transport.
+1. **Bitrate.** Answered in v0.6.0 (STATUS.md, Runs AL/AM): the encoder is
+   within ~12 % of x264 at the same QP; P frames now at QP+2 with the
+   temporal motion hint (~15-20 % smaller). What is left is a bitrate cap -
+   NVENC's rate control (RCMODE 18, grc's mode, 242 bytes of state carried
+   frame to frame) with our own target - needed for the network transport.
+   The `nvab` experiment token (config `encoder_test = 1`) is the harness.
 2. **Stutters.** A handful of frames per minute take 50-200 ms (reads,
    VIC, NVENC all slow at once, around loading). System-wide contention;
    NVENC is shared with grc's background recording. Not yet attributed.

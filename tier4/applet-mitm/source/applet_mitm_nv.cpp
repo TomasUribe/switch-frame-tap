@@ -1283,6 +1283,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<s32> g_queue_slot{-1};
     constinit std::atomic<u64> g_queue_tick{0};
     constinit std::atomic<u32> g_queue_fence_n{0};
+    constinit bool g_nvab_armed = false;
     constinit std::atomic<u32> g_queue_transform{0};
     constinit std::atomic<u64> g_queue_fence[4] = {};
     constinit std::atomic<u32> g_queue_seq{0};
@@ -5501,12 +5502,42 @@ namespace ams::mitm::applet {
                 g_live_h.store(L.h, std::memory_order_relaxed);
                 g_live_state.store(LiveState_Streaming, std::memory_order_relaxed);
             }
-            if (gop != 0) {
-                std::memcpy(s.x.a + L.off_setup_p, L.p_setup, 0x1000);
-                s.x.a[L.off_setup_p + SetupRcQpP] = qp;
-                s.x.a[L.off_setup_p + SetupRcQpI] = qp;
-                armDCacheFlush(s.x.a + L.off_setup_p, 0x1000);
-            }
+            /* v0.6: the P setup, and the bitrate experiment's variants of it.
+             * grc's P setup (ours since M85) searches motion only from the
+             * zero vector and this frame's neighbours - no temporal hint (last
+             * frame's vector here) - so fast motion falls back to intra (the
+             * Run AK race: 40-45 % of each P frame). Variant bit 0: P frames
+             * at QP+2 (both QP fields of the P setup; the IDR setup keeps qp).
+             * Bit 1: the temporal hint on.
+             *
+             * Run AL (the experiment, 1080p MK8D racing, P size / I size per
+             * 10 s window): B -25 %, C -4 % (intra 27 -> 21 %), D -13 %; the
+             * temporal hint never stalled. x264 veryfast at the same QP 20 on
+             * the same frames needs 89 % of our bits: the encoder is not the
+             * problem, QP 20 is simply expensive. v0.6 streams with D. */
+            static const char *const AbName[4] = { "A grc's (baseline)", "B P QP+2", "C temporal hint", "D P QP+2 + temporal hint" };
+            constexpr u32 ProductionVariant = 3;
+            u32 ab_variant = 0;
+            auto prep_p = [&](u32 v) {
+                u8 *ps = s.x.a + L.off_setup_p;
+                std::memcpy(ps, L.p_setup, 0x1000);
+                const u8 pq = static_cast<u8>((v & 1) ? (qp + 2 > 51 ? 51 : qp + 2) : qp);
+                ps[SetupRcQpP] = pq;
+                ps[SetupRcQpI] = pq;
+                if (v & 2) {
+                    const auto *pic = reinterpret_cast<const nvenc_h264_drv_pic_setup_s *>(ps);
+                    const u32 mo = pic->pic_control.me_control_offset;
+                    if (mo != 0 && mo + sizeof(nvenc_h264_me_control_s) <= 0x1000) {
+                        auto *me = reinterpret_cast<nvenc_h264_me_control_s *>(ps + mo);
+                        me->predsrc.self_temporal_enable = 1;
+                        me->predsrc.self_temporal_search = 1;
+                        me->predsrc.self_temporal_refine = 1;
+                        me->predsrc.self_temporal_stamp_l0 = 1;    /* the 9-point shape around it */
+                    }
+                }
+                armDCacheFlush(ps, 0x1000);
+            };
+            if (gop != 0) { prep_p(g_nvab_armed && live ? 0 : ProductionVariant); }
             u32 enc_hz = 0;
             if (!s.EnsureClock("nvstream", std::addressof(enc_hz))) {
                 LogLine("   nvstream: NOT submitting - NVENC clock not established (%u Hz)", enc_hz);
@@ -5533,6 +5564,11 @@ namespace ams::mitm::applet {
             ON_SCOPE_EXIT { g_audio_active.store(false, std::memory_order_relaxed); };
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
             bool pending = false, stalled = false, need_idr = true;
+            /* v0.6: the experiment's window (one variant) */
+            u64 ab_bytes_p = 0, ab_bytes_i = 0, ab_intra = 0, ab_inter = 0, ab_qp = 0, ab_t0 = armTicksToNs(armGetSystemTick());
+            u32 ab_np = 0, ab_ni = 0, ab_frames = 0, ab_window = 0;
+            const bool ab = live && g_nvab_armed && gop != 0;
+            if (ab) { LogLine("   nvab: bitrate experiment - P-frame variants A/B/C/D, 600 frames each, repeating"); }
             const char *why = "all frames sent";
             StreamEnd end = StreamEnd::Done;
             u64 s_read = 0, s_vic = 0, s_enc = 0, s_copy = 0, s_usb = 0, s_bytes = 0, m_work = 0, m_bytes = 0;
@@ -5585,6 +5621,11 @@ namespace ams::mitm::applet {
                     return false;
                 }
                 if (f.is_idr) { ++idrs; need_idr = false; }
+                if (ab) {
+                    ++ab_frames;
+                    if (f.is_idr) { ab_bytes_i += bytes; ++ab_ni; }
+                    else { ab_bytes_p += bytes; ++ab_np; ab_intra += st.intra_mb_count; ab_inter += st.inter_mb_count; ab_qp += st.avgQP; }
+                }
                 last_pos = f.pos;
                 pos = f.pos + 1;
 
@@ -5757,6 +5798,29 @@ namespace ams::mitm::applet {
                 if (fl.active && collect(fl)) { break; }
 
                 /* this frame's place in the GOP: 0 is an IDR */
+                /* v0.6: the experiment - every 600 frames, log the window and
+                 * move to the next variant, from an IDR (the previous frame's
+                 * encode was collected above: the P setup is free) */
+                if (ab && ab_frames >= 600) {
+                    const u64 now_ab = armTicksToNs(armGetSystemTick());
+                    const u64 mbs = ab_intra + ab_inter;
+                    const u64 fps_x10 = now_ab > ab_t0 ? static_cast<u64>(ab_frames) * UINT64_C(10000000000) / (now_ab - ab_t0) : 0;
+                    LogLine("   nvab #%u %s: %u P avg %llu KB, %u I avg %llu KB, P intra %llu.%llu%%, P avgQP %llu, %llu.%llu fps -> %llu Mbps at 60",
+                            ab_window, AbName[ab_variant],
+                            ab_np, static_cast<unsigned long long>(ab_np ? ab_bytes_p / ab_np / 1024 : 0),
+                            ab_ni, static_cast<unsigned long long>(ab_ni ? ab_bytes_i / ab_ni / 1024 : 0),
+                            static_cast<unsigned long long>(mbs ? ab_intra * 1000 / mbs / 10 : 0), static_cast<unsigned long long>(mbs ? ab_intra * 1000 / mbs % 10 : 0),
+                            static_cast<unsigned long long>(ab_np ? ab_qp / ab_np : 0),
+                            static_cast<unsigned long long>(fps_x10 / 10), static_cast<unsigned long long>(fps_x10 % 10),
+                            static_cast<unsigned long long>((ab_bytes_p + ab_bytes_i) * 8 * 60 / ab_frames / 1000000));
+                    ab_bytes_p = ab_bytes_i = ab_intra = ab_inter = ab_qp = 0;
+                    ab_np = ab_ni = ab_frames = 0;
+                    ab_t0 = now_ab;
+                    ++ab_window;
+                    ab_variant = (ab_variant + 1) & 3;
+                    prep_p(ab_variant);
+                    need_idr = true;
+                }
                 if (gop == 0 || need_idr || pos >= gop) { pos = 0; }
                 NvfJob j;
                 j.setup = L.off_setup;

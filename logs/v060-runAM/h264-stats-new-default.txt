@@ -1,0 +1,6 @@
+switch_2026-09-30_11-14-56.mp4: 1920x1080, 2616 frames (44 I, 2572 P)
+I frames: avg 278 KB, slice QP 20.1
+P frames: avg 165 KB (60% of an I frame), slice QP 22.1
+P frames: 67.5% of the picture predicted from the previous frame (the rest coded from scratch),
+          7.7% of that with a zero vector, avg vector 18.9 px
+average 82.2 Mbps at 60 fps

@@ -29,7 +29,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.5.0";
+    constexpr const char *AppVersion  = "0.6.0";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -458,8 +458,9 @@ namespace {
             rows.push_back({ Kind::Header, "Picture", nullptr, nullptr, nullptr, "" });
             rows.push_back({ Kind::Setting, "Quality", [this] { return std::string(QualityNames[set.quality]); }, nullptr,
                 [this](int d) { set.quality = (set.quality + (d > 0 ? 1 : 2)) % 3; Saved(); },
-                "High is the sharpest picture and uses the most USB bandwidth (about 90 Mbps at 1080p in a race). "
-                "Lower it if the stream stutters on a slow cable or PC." });
+                "High is the sharpest picture: about 80 Mbps in a fast 1080p race, so a recording from the PC viewer "
+                "takes about 600 MB a minute. Medium is roughly half that and Low about a third, still clean. "
+                "Calm games and 720p need much less. Lower it if the stream stutters on a slow cable or PC." });
             rows.push_back({ Kind::Setting, "Keyframes", [this] { return std::string(KeyframeNames[set.keyframe]); }, nullptr,
                 [this](int d) { set.keyframe = (set.keyframe + (d > 0 ? 1 : 3)) % 4; Saved(); },
                 "A keyframe is a complete picture; the frames between only carry changes. More keyframes recover faster "
