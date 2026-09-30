@@ -618,7 +618,7 @@ genuinely like to hear about it.
 - **Issues:** [GitHub issues](https://github.com/TomasUribe/switch-frame-tap/issues)
 - **Forum:** [the GBAtemp thread](https://gbatemp.net/threads/im-trying-to-build-a-native-res-capture-program-that-streams-1080p-60hz-video-to-any-pc-through-usb-this-is-my-progress-so-far.684344/)
 
-[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](buymeacoffee.com/papux200)
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/papux200)
 
 
 Forks are welcome and no permission is needed.
