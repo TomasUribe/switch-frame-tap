@@ -1,8 +1,10 @@
 # switch-frame-tap
 
-A Nintendo Switch sysmodule that streams the game you are playing to a PC
-with no capture card, compressed with the console's own hardware H.264
-encoder. Homebrew, built on and for the author's own console.
+A Nintendo Switch sysmodule that streams the game you are playing - picture
+and sound - to a Windows or Linux PC over a USB cable, with no capture card,
+compressed with the console's own hardware H.264 encoder. With a manager app,
+an overlay, and native-resolution screenshots. Homebrew, built on and for the
+author's own console. **[Download the latest release](https://github.com/TomasUribe/switch-frame-tap/releases/latest)**.
 
 **The goal of this project is 1080p at 60 fps**: the game's native docked
 resolution, at full frame rate, on any PC.
@@ -16,13 +18,15 @@ render its docked picture in handheld (Run W: 59.5-59.9 fps sent per 20 s
 window against the game's ~59.2, 0 errors). See
 [the road to 1080p60](#the-road-to-1080p60) for what is left.
 
-> **It works, and it is playable.** Live mode streams whenever the PC viewer is
-> open and a game is running, reattaches by itself when you close the viewer,
-> close the game or start another one, and has been tested for several minutes
-> at a time with Mario Kart 8 Deluxe (60 fps) and Zelda: Breath of the Wild
-> (30 fps). Measured on the last run: **0 frames lost, 0 undecodable, 0 stale
-> or torn frames in 6,965**; about **45 ms** from the game presenting a frame to
-> it being on the PC screen (monitor not included).
+> **It works, and it is playable.** Live mode streams whenever the PC viewer
+> (Windows or Linux) is open and a game is running - with its sound -
+> reattaches by itself when you close the viewer, close the game or start
+> another one, and has been played with Mario Kart 8 Deluxe (60 fps), Zelda:
+> Breath of the Wild and Ocarina of Time on Nintendo Switch Online (30 fps),
+> and homebrew apps started from HOME-menu forwarders. **0 frames lost, 0
+> undecodable, 0 stale or torn frames** in the measured runs; about **45 ms**
+> (720p) to **60 ms** (1080p) from the game presenting a frame to it being on
+> the PC screen (monitor not included).
 >
 > It is still **experimental**: USB only (so 1080p needs ReverseNX-RT in
 > handheld), one console tested. Read
@@ -79,14 +83,18 @@ VIC: RGBA block-linear -> BT.709 NV12 (the Tegra's video compositor)
   v
 NVENC: H.264, IDR + P frames (the job the system's own recorder builds)
   v
-USB bulk -> tools/raw-recv/raw-view on the PC: libusb + libavcodec + SDL2
+USB bulk -> the viewer on the PC (Windows / Linux): libusb + libavcodec + SDL2
+
+grc:d (the console's own recorder): the game's sound, 48 kHz stereo PCM
+  -> the same USB stream, a packet before each frame -> played in step
 ```
 
 The sysmodule never touches the GPU or the display stack's buffers directly.
 It watches the game's display traffic through a `vi:u` mitm (and homebrew's
 through `vi:m`, for the running application only), reads the
 finished frame with the same debug SVCs Atmosphère's cheat engine uses, and
-drives the VIC and NVENC engines itself over raw `nvdrv` ioctls.
+drives the VIC and NVENC engines itself over raw `nvdrv` ioctls. The sound
+comes from `grc:d`, the recorder behind the console's own video clips.
 
 ## What you need
 
@@ -97,7 +105,7 @@ manager app:
 |---|---|
 | A Switch running **Atmosphère** custom firmware | [Atmosphère releases](https://github.com/Atmosphere-NX/Atmosphere/releases) - tested with 1.11.2 on firmware 22.5.0 (Mariko). New to custom firmware: the [NH Switch Guide](https://switch.hacks.guide/). Keep a NAND backup. |
 | The **homebrew menu** | Comes with Atmosphère (`hbmenu.nro`); also [nx-hbmenu releases](https://github.com/switchbrew/nx-hbmenu/releases). It opens the manager app. |
-| A **Windows or Linux PC** | Windows 10/11: the viewer zip, plus the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie/). Linux: `libusb`, `SDL2`, `libavcodec` - one `apt install` line. Both [below](#install-v020). |
+| A **Windows or Linux PC** | Windows 10/11: the viewer zip, plus the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie/). Linux: `libusb`, `SDL2`, `libavcodec` - one `apt install` line. Both [below](#install-v030). |
 | A **USB-C cable** | USB 2.0 is plenty; the Switch stays in handheld (the dock owns the port). |
 
 **Optional** - one per feature:
@@ -250,10 +258,10 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   are not streamed - use a forwarder or title override. Apps with anti-debug
   protection (TiCo) cannot be streamed; exclude them. Homebrew cannot be
   forced into docked mode.
-- **Two games tested:** Mario Kart 8 Deluxe (three 1920x1080 buffers) and
-  Zelda: Breath of the Wild (two). Other games should work if their swapchain
-  is block-linear RGBA, at most 1920x1080, in one memory object; the log says
-  so if not. Colours are verified for the A8B8G8R8 format those two use.
+- **A handful of games tested:** Mario Kart 8 Deluxe, Zelda: Breath of the
+  Wild, Ocarina of Time (Nintendo Switch Online) and several homebrew apps.
+  Others should work if their swapchain is block-linear RGBA or BGRA, at most
+  1920x1088 and 10.5 MB a buffer; the log says so if not.
 - **Game audio** comes from the console's own video recorder (as with SysDVR):
   games that turn video capture off have no sound in the stream.
 - **PC viewer: Windows and Linux** (x86_64). No macOS viewer yet. On Windows
@@ -474,8 +482,8 @@ transport** for streaming from the dock, where the dock owns the USB port
 
 | path | what |
 |---|---|
-| `tier4/applet-mitm/` | The sysmodule: `vi:u` mitm, binder intercept, debug-SVC capture and event pump, VIC and NVENC over raw nvdrv, USB. |
-| `tools/raw-recv/` | `raw-view`, the PC viewer, and `install-launcher.sh`, its desktop app (and `raw-recv`, the raw-frame receiver it grew out of). |
+| `tier4/applet-mitm/` | The sysmodule: `vi:u` / `vi:m` mitm, binder intercept, debug-SVC capture and event pump, VIC and NVENC over raw nvdrv, USB, game audio (grc:d), screenshots, the `sftap` control service. |
+| `tools/raw-recv/` | `raw-view`, the PC viewer (Linux, and Windows via `build-windows.sh`), and `install-launcher.sh`, its Linux desktop app (and `raw-recv`, the raw-frame receiver it grew out of). |
 | `manager/` | The manager app for the homebrew menu (SDL2): settings, status, setup check, screenshot gallery. |
 | `overlay/` | The Tesla/Ultrahand overlay: stream on/off, status, handheld/docked through ReverseNX-RT. |
 | `tools/` | `make_release.sh` (the release zip), and PC-side analysis and self-tests: `sft_tool.py`, `nvframe_check.py`, `nvp_check.py`, `vic_csc.py`, `nvenc_replay.py`, `nvrec.py`. |
@@ -493,6 +501,7 @@ genuinely like to hear about it.
 - **Email:** Some_Potato_1@protonmail.com
 - **Reddit:** [u/Papux200](https://www.reddit.com/user/Papux200)
 - **Issues:** [GitHub issues](https://github.com/TomasUribe/switch-frame-tap/issues)
+- **Forum:** [the GBAtemp thread](https://gbatemp.net/threads/im-trying-to-build-a-native-res-capture-program-that-streams-1080p-60hz-video-to-any-pc-through-usb-this-is-my-progress-so-far.684344/)
 
 Forks are welcome and no permission is needed.
 

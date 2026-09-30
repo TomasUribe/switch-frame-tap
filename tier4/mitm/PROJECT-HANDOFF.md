@@ -1,4 +1,4 @@
-# switch-frame-tap: project handoff (after M89)
+# switch-frame-tap: project handoff (v0.3.0)
 
 This is for whoever continues the project cold, most likely a local session
 with the SD card and the console at hand. It covers:
@@ -13,13 +13,18 @@ with the SD card and the console at hand. It covers:
 `tier4/mitm/STATUS.md` has the full evidence behind each item, newest
 milestone first. This page is the map.
 
-**Current build: M89, run on hardware (Run P, 2026-09-25).** Live mode: the
-module streams native 1280x720 H.264 (IDR + P) over USB whenever the PC
-viewer is reading and a game is presenting, and reattaches by itself when the
-viewer, the game or the game title changes. Tested with MK8D (60 fps) and
-BOTW (30 fps): 0 lost, 0 undecodable, 0 stale and 0 torn frames in 6965;
-~22 ms console + ~24 ms PC latency. The user plays from the PC window. The
-README's quick start is the install procedure; `STATUS.md` has every run.
+**Current release: v0.3.0 (2026-09-29), on GitHub.** The module streams
+native 1080p60 (with ReverseNX-RT) or 720p60 H.264 plus the game's audio
+(grc:d PCM) over USB to a Windows or Linux viewer, whenever the viewer is
+reading and a game - or a homebrew app from a HOME-menu forwarder (vi:m) -
+is presenting. A release install is configured from
+`sdmc:/config/switch-frame-tap/config.ini` through the manager app (hbmenu)
+and the overlay (Tesla/Ultrahand); native-resolution PNG screenshots on a
+button combo; a never-attach list for anti-debug apps. Releases are built by
+`tools/make_release.sh VERSION` (Switch zip, Linux and Windows viewers). The
+README's install section is the procedure; `STATUS.md` has every run, newest
+milestone first. Sections below that describe M85-M89 are the history of
+the capture pipeline, still accurate for how it works.
 
 ---
 
@@ -34,7 +39,9 @@ ReverseNX-RT making the game render docked in handheld and the CPU at
 takes the newest FINISHED present from an 8-entry ring (M96). What remains:
 1080p60 at stock clocks (CPU 1020), a network transport for play from the
 dock (question 4 below; questions 3's 1080p setup is solved - see STATUS.md
-M90-M92), bitrate tuning and audio.
+M90-M92) and bitrate tuning. Since then: release v0.1.0 (manager, overlay,
+screenshots), v0.1.1 (homebrew via vi:m), v0.2.0 (the Windows viewer and a
+paced reader/decoder/vsync display), v0.3.0 (game audio).
 
 **The live pipeline (M86-M89)**, entered from `TryDebugCapture` when `live` is
 armed (`RunLive`):
