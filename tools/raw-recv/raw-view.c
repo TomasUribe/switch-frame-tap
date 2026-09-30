@@ -38,7 +38,15 @@
 #include <string.h>
 #include <stdint.h>
 #include <signal.h>
+#ifdef _WIN32
+/* v0.2: the Windows build (tools/raw-recv/build-windows.sh). libusb's Windows
+ * package puts libusb.h at the top of its include dir; SDL must not replace
+ * main (the entry point stays mainCRTStartup -> main, GUI subsystem). */
+#include <libusb.h>
+#define SDL_MAIN_HANDLED
+#else
 #include <libusb-1.0/libusb.h>
+#endif
 #include <SDL2/SDL.h>
 #ifdef SFT_H264
 #include <libavcodec/avcodec.h>
@@ -164,10 +172,43 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
     }
 }
 
+/* v0.2: is the Switch on the bus, and if so why can it not be opened? A
+ * present device that will not open is a missing driver on Windows (WinUSB,
+ * installed once with Zadig) or a missing udev rule on Linux. */
+static int switch_on_bus(libusb_context *ctx, int *open_err)
+{
+    libusb_device **list = NULL;
+    const ssize_t n = libusb_get_device_list(ctx, &list);
+    int found = 0;
+    for (ssize_t i = 0; i < n && !found; i++) {
+        struct libusb_device_descriptor dd;
+        if (libusb_get_device_descriptor(list[i], &dd) == 0 && dd.idVendor == SFT_VID && dd.idProduct == SFT_PID) {
+            libusb_device_handle *h = NULL;
+            *open_err = libusb_open(list[i], &h);
+            if (h) libusb_close(h);
+            found = 1;
+        }
+    }
+    if (list) libusb_free_device_list(list, 1);
+    return found;
+}
+
+static void app_title_cannot_open(SDL_Window *win, int err)
+{
+    char t[256];
+#ifdef _WIN32
+    snprintf(t, sizeof(t), "Switch Frame Tap - the Switch is connected but has no USB driver: install WinUSB for it once with Zadig (see README.txt)  [%s]", libusb_error_name(err));
+#else
+    snprintf(t, sizeof(t), "Switch Frame Tap - the Switch is connected but cannot be opened: install the udev rule (see the README)  [%s]", libusb_error_name(err));
+#endif
+    SDL_SetWindowTitle(win, t);
+}
+
 /* --app: open and claim the console, keeping the window alive meanwhile */
 static libusb_device_handle *app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
 {
     SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)");
+    int said = 0;
     for (;;) {
         app_events(win, ren, tex);
         if (g_quit) return NULL;
@@ -179,7 +220,12 @@ static libusb_device_handle *app_wait_device(libusb_context *ctx, SDL_Window *wi
                 return h;
             }
             libusb_close(h);
-            SDL_SetWindowTitle(win, "Switch Frame Tap - the Switch is connected but cannot be opened (udev rule installed?)");
+            app_title_cannot_open(win, LIBUSB_ERROR_BUSY);
+            said = 1;
+        } else {
+            int err = 0;
+            if (switch_on_bus(ctx, &err)) { app_title_cannot_open(win, err); said = 1; }
+            else if (said) { SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)"); said = 0; }
         }
         SDL_Delay(250);
     }
@@ -204,6 +250,11 @@ int main(int argc, char **argv)
         else { fprintf(stderr, "unknown option %s (see the comment at the top of raw-view.c)\n", argv[i]); return 2; }
     }
     if (scale < 1) scale = 1;
+#ifdef _WIN32
+    /* double-clicked from Explorer: the app mode */
+    if (argc == 1) g_app = 1;
+    SDL_SetMainReady();
+#endif
     /* Ctrl-C before the first frame still ends with the summary below */
     signal(SIGINT, on_sigint);
 
@@ -211,14 +262,27 @@ int main(int argc, char **argv)
     SDL_Window *win = NULL; SDL_Renderer *ren = NULL; SDL_Texture *tex = NULL;
     if (g_app && !file) {
         headless = 0;
-        if (libusb_init(&ctx) != 0) { fprintf(stderr, "libusb_init failed\n"); return 1; }
-        if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+        /* a double-clicked program has no console: say it in a box */
+        if (libusb_init(&ctx) != 0) {
+            fprintf(stderr, "libusb_init failed\n");
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Switch Frame Tap", "USB support could not be started (libusb_init failed).", NULL);
+            return 1;
+        }
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+            fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Switch Frame Tap", SDL_GetError(), NULL);
+            return 1;
+        }
         SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
         win = SDL_CreateWindow("Switch Frame Tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                1280, 720, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
         ren = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED) : NULL;
-        if (!ren) { fprintf(stderr, "SDL window: %s\n", SDL_GetError()); return 1; }
+        if (!ren) {
+            fprintf(stderr, "SDL window: %s\n", SDL_GetError());
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Switch Frame Tap", SDL_GetError(), NULL);
+            return 1;
+        }
         SDL_RenderSetLogicalSize(ren, 1280, 720);
         SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_RenderClear(ren);

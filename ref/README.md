@@ -56,3 +56,15 @@ git clone --depth 1 https://github.com/switchbrew/libnx ref/libnx
 The `nvjpg_drv.h` row above is **superseded**: whether T210 NVJPG can encode is
 still open, but it certainly decodes, and a decode is what M76 uses as a
 known-good control job.
+
+## ref/win - the Windows viewer toolchain (v0.2)
+
+`tools/raw-recv/build-windows.sh` cross-compiles the viewer for Windows from
+Linux with no sudo. Put these here (none of it is committed):
+
+| dir | what | from |
+|---|---|---|
+| `zig/` | Zig 0.16.0, the C cross-compiler (`zig-x86_64-linux-0.16.0.tar.xz`) | https://ziglang.org/download/ |
+| `sdl2/` | `SDL2-devel-2.32.10-mingw.tar.gz`, its `x86_64-w64-mingw32/` and `LICENSE.txt` | https://github.com/libsdl-org/SDL/releases |
+| `libusb/` | `libusb-1.0.30.7z`, unpacked (`include/`, `MinGW64/`) | https://github.com/libusb/libusb/releases |
+| `ffmpeg/` | `ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip`, unpacked (LGPL build) | https://github.com/BtbN/FFmpeg-Builds/releases |

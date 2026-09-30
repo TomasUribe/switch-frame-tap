@@ -73,3 +73,12 @@ tar -C "$OUT/stage-linux" -czf "$TGZ" "switch-frame-tap-$VER-linux-viewer"
 rm -rf "$OUT/stage-linux"
 echo "== $TGZ"
 tar -tzf "$TGZ"
+
+# the Windows viewer, when its toolchain is in ref/win (tools/raw-recv/build-windows.sh)
+if [ -x "$REPO/ref/win/zig/zig" ]; then
+    echo "== windows viewer"
+    bash "$REPO/tools/raw-recv/build-windows.sh" "$VER" | tail -1
+    rm -rf "$OUT/build-windows"
+else
+    echo "== windows viewer skipped (no ref/win toolchain)"
+fi
