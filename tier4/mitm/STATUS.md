@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 109 hardware test cycles (through Run AM). Current build: **v0.6.0** (smaller P frames - Runs AL, AM). Released: v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 109 hardware test cycles (through Run AM). Current build: **v0.6.1** (a 2 MB Windows download). Released: v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,23 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.6.1: the Windows download, 50 MB -> 2 MB ***
+
+PC side only. The Windows zip carried BtbN's full LGPL FFmpeg DLLs (136 MB
+unpacked); the viewer uses the H.264 decoder, the AAC encoder and the MP4
+muxer. `tools/raw-recv/build-ffmpeg-min.sh` builds FFmpeg 8.1 (the same
+version) with only those, static, cross-compiled by Zig through three
+wrapper scripts (configure wants gcc/ar/ranlib names), with nasm for the
+decoder's SIMD; `build-windows.sh` links it into SwitchFrameTap.exe when
+`ref/win/ffmpeg-min` exists (+ -lbcrypt) and ships only SDL2.dll and
+libusb-1.0.dll. LGPL inside GPL-2.0, notes in licenses/NOTICE.txt.
+
+- zip 1.98 MB (was 50.7), 5.2 MB unpacked (was 136), exe 3.1 MB.
+- Decode speed matters: a trial without nasm took 11.5 ms per 1080p racing
+  frame under Wine against the old build's 7.1; with nasm 6.9 ms (146 fps).
+  300/300 frames of Run AK's race (as .sft), the recording test (441 Hz) and
+  a 1080p re-recording (300/300, 60.0 fps, 0 errors) under Wine.
 
 ## *** v0.6.0: bitrate tuning (Runs AL, AM) ***
 

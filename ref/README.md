@@ -67,4 +67,5 @@ Linux with no sudo. Put these here (none of it is committed):
 | `zig/` | Zig 0.16.0, the C cross-compiler (`zig-x86_64-linux-0.16.0.tar.xz`) | https://ziglang.org/download/ |
 | `sdl2/` | `SDL2-devel-2.32.10-mingw.tar.gz`, its `x86_64-w64-mingw32/` and `LICENSE.txt` | https://github.com/libsdl-org/SDL/releases |
 | `libusb/` | `libusb-1.0.30.7z`, unpacked (`include/`, `MinGW64/`) | https://github.com/libusb/libusb/releases |
-| `ffmpeg/` | `ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip`, unpacked (LGPL build) | https://github.com/BtbN/FFmpeg-Builds/releases |
+| `ffmpeg/` | `ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip`, unpacked (LGPL build) - only needed without `ffmpeg-min/` | https://github.com/BtbN/FFmpeg-Builds/releases |
+| `ffmpeg-min/` | v0.6.1: FFmpeg 8.1 built with only the H.264 decoder, the AAC encoder and the MP4 muxer, static - made by `tools/raw-recv/build-ffmpeg-min.sh` from `ref/ffmpeg-8.1.tar.xz`; needs `nasm` (`sudo apt install nasm`). With it the viewer is one 3 MB exe and the zip 2 MB instead of 50. | https://ffmpeg.org/releases/ffmpeg-8.1.tar.xz |

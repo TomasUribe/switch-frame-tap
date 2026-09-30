@@ -128,12 +128,12 @@ manager app:
 
 Nothing else: no other sysmodule, no sigpatches, no capture card.
 
-## Install (v0.6.0)
+## Install (v0.6.1)
 
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.6.0-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.6.1-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -147,11 +147,11 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.6.0-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.6.1-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
-`SwitchFrameTap.exe` (keep the DLLs next to it). Windows may warn about an
+`SwitchFrameTap.exe` (keep the two DLLs next to it; the zip is 2 MB). Windows may warn about an
 unknown publisher: **More info -> Run anyway**.
 
 **2b. The PC viewer on Linux.** Install the build dependencies and the udev
@@ -166,7 +166,7 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.6.0-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.6.1-linux-viewer.tar.gz` with the same files.
 
 On both, the viewer opens a window that says what it is waiting for (the
 Switch, its USB driver, or a game) and lists its keys; the same screen comes
@@ -292,14 +292,15 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.6.0       # -> dist/switch-frame-tap-0.6.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.6.1       # -> dist/switch-frame-tap-0.6.1-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
 Everything builds in the `devkitpro/devkita64` Docker image (the first build
 compiles libstratosphere, ~15 minutes). The PC viewer: `make -C tools/raw-recv`;
 the Windows viewer is cross-compiled from Linux with Zig -
-`bash tools/raw-recv/build-windows.sh VERSION`, toolchain listed in
+`bash tools/raw-recv/build-windows.sh VERSION` (after `build-ffmpeg-min.sh`
+once, for FFmpeg built into the exe), toolchain listed in
 [`ref/README.md`](ref/README.md). `raw-view --file REC.sft --paced` runs a
 recording through the live pipeline (no console needed).
 

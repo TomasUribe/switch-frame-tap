@@ -53,13 +53,29 @@ BEGIN
 END
 RC
 
+# v0.6.1: FFmpeg built in - ref/win/ffmpeg-min from build-ffmpeg-min.sh (only
+# the H.264 decoder, the AAC encoder and the MP4 muxer, statically linked);
+# without it, the full prebuilt DLLs as before
+MIN="$W/ffmpeg-min"
+if [ -f "$MIN/lib/libavcodec.a" ]; then
+    FF_INC="$MIN/include"
+    FF_LIBS=("$MIN/lib/libavformat.a" "$MIN/lib/libavcodec.a" "$MIN/lib/libavutil.a" -lbcrypt)
+    FF_DLLS=()
+    echo "== FFmpeg: built in (ref/win/ffmpeg-min)"
+else
+    FF_INC="$W/ffmpeg/include"
+    FF_LIBS=("$W/ffmpeg/lib/libavcodec.dll.a" "$W/ffmpeg/lib/libavutil.dll.a" "$W/ffmpeg/lib/libavformat.dll.a")
+    FF_DLLS=("$W/ffmpeg/bin/avcodec-62.dll" "$W/ffmpeg/bin/avutil-60.dll" "$W/ffmpeg/bin/avformat-62.dll" "$W/ffmpeg/bin/swresample-6.dll")
+    echo "== FFmpeg: the prebuilt DLLs (run build-ffmpeg-min.sh for a small download)"
+fi
+
 echo "== compiling"
 "$ZIG" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 \
-    -I "$W/sdl2/x86_64-w64-mingw32/include" -I "$W/libusb/include" -I "$W/ffmpeg/include" \
+    -I "$W/sdl2/x86_64-w64-mingw32/include" -I "$W/libusb/include" -I "$FF_INC" \
     "$REPO/tools/raw-recv/raw-view.c" "$B/raw-view.rc" \
     "$W/sdl2/x86_64-w64-mingw32/lib/libSDL2.dll.a" \
     "$W/libusb/MinGW64/static/libusb-1.0.dll.a" \
-    "$W/ffmpeg/lib/libavcodec.dll.a" "$W/ffmpeg/lib/libavutil.dll.a" "$W/ffmpeg/lib/libavformat.dll.a" \
+    "${FF_LIBS[@]}" \
     -lshell32 \
     -Wl,--subsystem,windows \
     -o "$B/SwitchFrameTap.exe"
@@ -68,25 +84,36 @@ PKG="$B/switch-frame-tap-$VER-windows-viewer"
 mkdir -p "$PKG/licenses"
 cp "$B/SwitchFrameTap.exe" "$PKG/"
 cp "$W/sdl2/x86_64-w64-mingw32/bin/SDL2.dll" "$W/libusb/MinGW64/dll/libusb-1.0.dll" "$PKG/"
-cp "$W/ffmpeg/bin/avcodec-62.dll" "$W/ffmpeg/bin/avutil-60.dll" "$W/ffmpeg/bin/avformat-62.dll" "$W/ffmpeg/bin/swresample-6.dll" "$PKG/"
+[ ${#FF_DLLS[@]} -gt 0 ] && cp "${FF_DLLS[@]}" "$PKG/"
 cp "$REPO/LICENSE" "$PKG/licenses/switch-frame-tap-GPL-2.0.txt"
 cp "$W/sdl2/LICENSE.txt" "$PKG/licenses/SDL2-zlib.txt"
-cp "$W/ffmpeg/LICENSE.txt" "$PKG/licenses/FFmpeg-LGPL.txt"
+if [ ${#FF_DLLS[@]} -gt 0 ]; then cp "$W/ffmpeg/LICENSE.txt" "$PKG/licenses/FFmpeg-LGPL.txt"; else cp "$MIN/COPYING.LGPLv2.1" "$PKG/licenses/FFmpeg-LGPL-2.1.txt"; fi
 cp /usr/share/doc/fonts-dejavu-core/copyright "$PKG/licenses/DejaVu-fonts.txt"
 cp /usr/share/common-licenses/LGPL-2.1 "$PKG/licenses/libusb-LGPL-2.1.txt"
+if [ ${#FF_DLLS[@]} -gt 0 ]; then
+FF_NOTE="  avcodec-62.dll,
+  avformat-62.dll,
+  avutil-60.dll,
+  swresample-6.dll        FFmpeg 8.1, LGPL build (BtbN FFmpeg-Builds, ffmpeg-n8.1-latest-win64-lgpl-shared-8.1)
+                                    LGPL-2.1+      https://ffmpeg.org  https://github.com/BtbN/FFmpeg-Builds
+The LGPL libraries' source is at those addresses; being DLLs, they can be
+replaced with other builds of the same version."
+else
+FF_NOTE="FFmpeg 8.1 (libavcodec, libavformat, libavutil; LGPL-2.1+, https://ffmpeg.org) is
+built into SwitchFrameTap.exe, configured with only the H.264 decoder, the AAC
+encoder and the MP4 muxer (tools/raw-recv/build-ffmpeg-min.sh in the source).
+FFmpeg's source is at https://ffmpeg.org/releases/ffmpeg-8.1.tar.xz; this
+program's full source, with the build scripts to relink it against another
+FFmpeg, is at the address above (GPL-2.0)."
+fi
 cat > "$PKG/licenses/NOTICE.txt" <<TXT
 Switch Frame Tap $VER - Windows viewer. GPL-2.0, https://github.com/TomasUribe/switch-frame-tap
 
 It ships these libraries, unmodified, as DLLs:
   SDL2.dll                2.32.10   zlib license   https://github.com/libsdl-org/SDL
   libusb-1.0.dll          1.0.30    LGPL-2.1       https://github.com/libusb/libusb
-  avcodec-62.dll,
-  avformat-62.dll,
-  avutil-60.dll,
-  swresample-6.dll        FFmpeg 8.1, LGPL build (BtbN FFmpeg-Builds, ffmpeg-n8.1-latest-win64-lgpl-shared-8.1)
-                                    LGPL-2.1+      https://ffmpeg.org  https://github.com/BtbN/FFmpeg-Builds
-The LGPL libraries' source is at those addresses; being DLLs, they can be
-replaced with other builds of the same version.
+
+$FF_NOTE
 
 The menu's text is drawn from DejaVu Sans and DejaVu Sans Bold glyphs built
 into SwitchFrameTap.exe (Bitstream Vera licence, DejaVu changes public domain;

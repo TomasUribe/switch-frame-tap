@@ -46,7 +46,7 @@ ROMFS		:=
 
 APP_TITLE   := Switch Frame Tap
 APP_AUTHOR  := TomasUribe
-APP_VERSION := 0.6.0
+APP_VERSION := 0.6.1
 ICON        := icon.jpg
 
 #---------------------------------------------------------------------------------
