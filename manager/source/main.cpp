@@ -29,7 +29,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.6.1";
+    constexpr const char *AppVersion  = "0.7.0";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -129,6 +129,8 @@ namespace {
     /* ---- settings (config.ini) ------------------------------------------ */
 
     const char *const QualityNames[]  = { "High", "Medium", "Low" };
+    const char *const ConnKeys[]      = { "usb", "webcam", "network" };
+    const char *const ConnNames[]     = { "USB - PC viewer", "USB - webcam", "Network" };
     const char *const QualityKeys[]   = { "high", "medium", "low" };
     const int KeyframeFrames[]        = { 30, 60, 120, 240 };
     const char *const KeyframeNames[] = { "Every 0.5 s", "Every second", "Every 2 s", "Every 4 s" };
@@ -144,7 +146,7 @@ namespace {
         bool shot = false;
         int shot_combo = 0;     /* index into ComboNames */
         bool audio = true;      /* v0.3 */
-        bool webcam = false;    /* v0.4: usb_mode = webcam, from the next boot */
+        int conn = 0;           /* v0.7: connection - 0 USB (PC viewer), 1 USB webcam, 2 network; from the next boot */
     };
 
     bool IniGet(const std::string &ini, const char *key, std::string *out) {
@@ -187,7 +189,10 @@ namespace {
         if (IniGet(ini, "allow_untested_firmware", &v)) { s.any_fw = v == "1"; }
         if (IniGet(ini, "screenshot", &v)) { s.shot = v == "1"; }
         if (IniGet(ini, "audio", &v)) { s.audio = v != "0"; }
-        if (IniGet(ini, "usb_mode", &v)) { s.webcam = v == "webcam"; }
+        /* the v0.4-v0.7 keys first, then the one that replaced them */
+        if (IniGet(ini, "usb_mode", &v) && v == "webcam") { s.conn = 1; }
+        if (IniGet(ini, "network", &v) && v == "1") { s.conn = 2; }
+        if (IniGet(ini, "connection", &v)) { s.conn = v == "network" ? 2 : v == "webcam" ? 1 : 0; }
         if (IniGet(ini, "screenshot_buttons", &v)) { const int k = std::atoi(v.c_str()); if (k >= 0 && k <= 3) { s.shot_combo = k; } }
         return s;
     }
@@ -215,10 +220,11 @@ namespace {
             "screenshot_buttons = %d\n"
             "# audio: 1 = send the game's sound to the PC viewer\n"
             "audio = %d\n"
-            "# usb_mode: viewer (the Switch Frame Tap viewer) | webcam (a USB camera for OBS and other apps; no sound). Read at boot.\n"
-            "usb_mode = %s\n",
+            "# connection: usb (the PC viewer over USB) | webcam (a USB camera for OBS; no sound) |\n"
+            "#             network (the PC viewer over Wi-Fi or the dock's LAN port - play docked). Read at boot.\n"
+            "connection = %s\n",
             QualityKeys[s.quality], KeyframeFrames[s.keyframe], s.cap720 ? "720" : "1080",
-            DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo, s.audio ? 1 : 0, s.webcam ? "webcam" : "viewer");
+            DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo, s.audio ? 1 : 0, ConnKeys[s.conn]);
         std::fclose(f);
         return true;
     }
@@ -333,8 +339,9 @@ namespace {
                 case 0: return "Starting - waits for a game";
                 case 1: return "Off";
                 case 2: return RunningWebcam() ? "Waiting for a camera app on the PC" : "Waiting for the PC viewer";
+                case 4: if (NetworkViewer()) { std::snprintf(b, sizeof(b), "Streaming %ux%u over the network, %u.%u fps", st.width, st.height, st.fps_x10 / 10, st.fps_x10 % 10); return b; }
+                        std::snprintf(b, sizeof(b), "Streaming %ux%u, %u.%u fps", st.width, st.height, st.fps_x10 / 10, st.fps_x10 % 10); return b;
                 case 3: return "Waiting for a game";
-                case 4: std::snprintf(b, sizeof(b), "Streaming %ux%u, %u.%u fps", st.width, st.height, st.fps_x10 / 10, st.fps_x10 % 10); return b;
                 case 5: return "Encoder stalled - reboot to stream again";
                 case 6: return "Test install without live mode";
                 case 7: return "Firmware not tested - streaming is off";
@@ -350,7 +357,19 @@ namespace {
         }
 
         /* v0.4: the mode this boot is in (the sysmodule's word), else config.ini */
-        bool RunningWebcam() { return have_status ? (st.reserved3 & 1) != 0 : set.webcam; }
+        /* the connection this boot runs with (the sysmodule's word), else config.ini */
+        int RunningConn() { return have_status ? ((st.reserved3 & 2) ? 2 : (st.reserved3 & 1) ? 1 : 0) : set.conn; }
+        bool RunningWebcam() { return RunningConn() == 1; }
+        /* v0.7: the network transport this boot, and whether a viewer is on it */
+        bool RunningNetwork() { return RunningConn() == 2; }
+        bool NetworkViewer() { return have_status && (st.reserved3 & 4) != 0; }
+        std::string IpString() {
+            u32 ip = 0;
+            if (R_FAILED(nifmGetCurrentIpAddress(&ip)) || ip == 0) { return "offline"; }
+            char b[20];
+            std::snprintf(b, sizeof(b), "%u.%u.%u.%u", ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, ip >> 24);
+            return b;
+        }
 
         bool StreamOn() { return have_status ? st.enabled != 0 : stream_file_on; }
 
@@ -408,20 +427,23 @@ namespace {
                 [this] { return boot ? ColGood : ColDim; }, [this](int) { SetBoot(!boot); },
                 "Whether Atmosphere starts the sysmodule at boot. Takes effect at the next boot. "
                 "Off is the clean way to disable it completely." });
-            rows.push_back({ Kind::Setting, "USB mode", [this] {
-                    std::string v = set.webcam ? "Webcam" : "PC viewer";
-                    if (have_status && RunningWebcam() != set.webcam) { v += " - after a reboot"; }
+            rows.push_back({ Kind::Setting, "Connection", [this] {
+                    std::string v = ConnNames[set.conn];
+                    if (have_status && RunningConn() != set.conn) { v += " - after a reboot"; }
+                    else if (set.conn == 2) { v += " - " + IpString(); }
                     return v;
-                }, [this] { return (have_status && RunningWebcam() != set.webcam) ? ColWarn : ColText; },
-                [this](int) {
-                    set.webcam = !set.webcam;
+                }, [this] { return (have_status && RunningConn() != set.conn) ? ColWarn : ColText; },
+                [this](int d) {
+                    set.conn = (set.conn + (d > 0 ? 1 : 2)) % 3;
                     if (!SaveSettings(set)) { Toast("Could not write config.ini"); return; }
                     Toast(test_install ? "Saved - but a test arm file is installed, so the sysmodule ignores config.ini"
-                                       : "Saved - restart the console to switch the USB mode");
+                                       : "Saved - restart the console to switch the connection");
                 },
-                "PC viewer: the Switch Frame Tap viewer app (sound, lowest latency). Webcam: the Switch shows up as a "
-                "USB camera, so OBS, Discord or a browser use it with no viewer and no driver - picture only, 1080p or "
-                "720p at 60 fps, the size the camera app asks for. Changes need a reboot." });
+                "How the stream reaches the PC - one at a time. USB - PC viewer: the viewer app over the USB-C cable "
+                "(handheld; sound, the lowest latency). USB - webcam: the Switch shows up as a USB camera for OBS - "
+                "picture only. Network: the viewer app over Wi-Fi or the dock's LAN port, so you can play docked; set "
+                "the viewer to Network too (Tab in the viewer). A LAN adapter or strong 5 GHz Wi-Fi at Medium quality "
+                "works best. Changes need a reboot." });
 
             rows.push_back({ Kind::Setting, "Apps never streamed", [this] {
                     char b[32];
@@ -810,6 +832,7 @@ namespace {
 int main(int, char **) {
     plInitialize(PlServiceType_User);
     pmdmntInitialize();
+    nifmInitialize(NifmServiceType_User);   /* v0.7: the console's IP, shown with Network streaming */
     splInitialize();
 
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
@@ -914,6 +937,7 @@ int main(int, char **) {
     SDL_Quit();
     if (g_sftap_open) { serviceClose(&g_sftap); }
     splExit();
+    nifmExit();
     pmdmntExit();
     plExit();
     return 0;

@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 109 hardware test cycles (through Run AM). Current build: **v0.6.1** (a 2 MB Windows download). Released: v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.0** (network streaming, docked play - Runs AN-AP). Released: v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,44 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.7.0: network streaming - play docked (Runs AN, AO, AP) ***
+
+The dock owns the USB port, so docked play needs the network.
+
+- **Sockets in the sysmodule** (`applet_mitm_net.cpp`): nifm:u for the
+  address, bsd:u with a static 440 KB transfer-memory block and SysDVR's
+  buffer sizes (TCP tx 16 KB growing to 200 KB); NPDM gains bsd:u, nifm:u.
+  TCP 9950, one viewer; a UDP beacon on 9951 (255.255.255.255 and the subnet
+  broadcast) while none is connected; the listener is recreated when the
+  address changes or accept fails (sleep). The five transport calls the stream
+  makes (ready, viewer present, send, post, wait) route to the network when
+  `g_tx_net` (a network viewer at stream start); frames go out from a sender
+  thread, as USB's async post.
+- **One connection at a time** (the user, after Run AN): `connection = usb |
+  webcam | network` (manager: Connection); network drops the `usb` token, so
+  USB is never touched. The older `usb_mode` / `network` keys still map.
+- **Run AN:** sockets fine (bsd rc 0, online, listening, beacon sent), but the
+  PC never heard the beacon: both on the home Wi-Fi, firewall off - the access
+  point drops broadcasts between wireless clients. So the viewer (Network
+  mode, Tab, remembered in viewer.ini) finds the console by the last address,
+  the beacon, or a scan of its /24 (64 non-blocking connects at a time, 600
+  ms each, ~2.5 s worst case, in a thread); I types the address. Tested
+  against a fake console with no beacon: found in ~250 ms (Linux, Windows
+  under Wine).
+- **Run AO** (connected by the remembered address 0.7 s after boot; docked
+  and handheld both stream): 720p 59 fps; 1080p docked on home Wi-Fi the
+  link carried 20-29 Mbps (viewer), a fast race at Medium wanted ~40 - frames
+  queued behind the sender: 7-30 fps, console-side age 100-350 ms.
+- **Rate control:** every 12 frames the stream reads how much of the time the
+  network sender was busy (`NetBusyPercent`): >97 % QP +3, >85 % +1, <55 %
+  -1 back towards the quality setting (cap 44); both setups rewritten only
+  between encodes. Logged per 20 s window.
+- **Run AP** (phone hotspot, docked 1080p): the user - "ran smooth, latency a
+  tad worse than usb but it is very playable. Quality drops sometimes but
+  latency and fps seem fine."
+  (No log: a later boot rewrote it before the card came back. The next
+  network run's log will show the rate control's per-window QP range.)
 
 ## *** v0.6.1: the Windows download, 50 MB -> 2 MB ***
 

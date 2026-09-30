@@ -1,8 +1,9 @@
 # switch-frame-tap
 
 A Nintendo Switch sysmodule that streams the game you are playing - picture
-and sound - to a Windows or Linux PC over a USB cable, with no capture card,
-compressed with the console's own hardware H.264 encoder. With a manager app,
+and sound - to a Windows or Linux PC over a USB cable, or over the network so
+you can play docked, with no capture card, compressed with the console's own
+hardware H.264 encoder. With a manager app,
 an overlay, native-resolution screenshots, **recording to MP4** from the
 viewer, and a **webcam mode** that makes the Switch a plain USB camera for OBS. Homebrew, built on and for the
 author's own console. **[Download the latest release](https://github.com/TomasUribe/switch-frame-tap/releases/latest)**.
@@ -29,9 +30,12 @@ window against the game's ~59.2, 0 errors). See
 > (720p) to **60 ms** (1080p) from the game presenting a frame to it being on
 > the PC screen (monitor not included).
 >
-> It is still **experimental**: USB only (so 1080p needs ReverseNX-RT in
-> handheld), one console tested. Read
-> [Limitations](#limitations) before installing it.
+> Since v0.7.0 it also streams **over the network** - Wi-Fi or the dock's
+> LAN port - so a docked console streams its native 1080p too, with the
+> quality adapting to what the network carries.
+>
+> It is still **experimental**: tested on the author's console (and a Switch
+> Lite by a user). Read [Limitations](#limitations) before installing it.
 
 | | |
 |---|---|
@@ -115,25 +119,25 @@ manager app:
 | A Switch running **Atmosphère** custom firmware | [Atmosphère releases](https://github.com/Atmosphere-NX/Atmosphere/releases) - tested with 1.11.2 on firmware 22.5.0 (Mariko). New to custom firmware: the [NH Switch Guide](https://switch.hacks.guide/). Keep a NAND backup. |
 | The **homebrew menu** | Comes with Atmosphère (`hbmenu.nro`); also [nx-hbmenu releases](https://github.com/switchbrew/nx-hbmenu/releases). It opens the manager app. |
 | A **Windows or Linux PC** | Windows 10/11: the viewer zip, plus the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie/). Linux: `libusb`, `SDL2`, `libavcodec` - one `apt install` line. Both [below](#install-v040). In [webcam mode](#webcam-mode), no viewer or driver: OBS reads it as a camera. |
-| A **USB-C cable** | USB 2.0 is plenty; the Switch stays in handheld (the dock owns the port). |
+| A **USB-C cable**, or a **network** | USB 2.0 is plenty; over USB the Switch stays in handheld (the dock owns the port). [Network streaming](#network-streaming-play-docked) needs no cable and works docked: Wi-Fi or the dock's LAN port, the PC on the same network. |
 
 **Optional** - one per feature:
 
 | for | install | notes |
 |---|---|---|
 | **The overlay** (stream on/off, "Stream this app" and handheld/docked from inside a game) | an overlay menu: [Ultrahand Overlay](https://github.com/ppkantorski/Ultrahand-Overlay/releases) (its `sdout.zip` includes the loader, nx-ovlloader), **or** [Tesla Menu](https://github.com/WerWolv/Tesla-Menu/releases) with [nx-ovlloader](https://github.com/WerWolv/nx-ovlloader/releases) | Without one, everything is still in the manager app except handheld/docked. |
-| **1080p** over USB | [SaltyNX](https://github.com/masagrator/SaltyNX/releases) and [ReverseNX-RT](https://github.com/masagrator/ReverseNX-RT/releases) (tested: SaltyNX 2.0.0) | ReverseNX-RT makes the game render its docked (1080p) picture in handheld; it needs an overlay menu too. Official games only. |
+| **1080p** over USB in handheld (docked over the network is 1080p by itself) | [SaltyNX](https://github.com/masagrator/SaltyNX/releases) and [ReverseNX-RT](https://github.com/masagrator/ReverseNX-RT/releases) (tested: SaltyNX 2.0.0) | ReverseNX-RT makes the game render its docked (1080p) picture in handheld; it needs an overlay menu too. Official games only. |
 | **1080p at a full 60 fps** | a clock tool: [sys-clk](https://github.com/retronx-team/sys-clk/releases) or [Horizon OC](https://github.com/Horizon-OC/Horizon-OC) | CPU 1785 MHz (Nintendo's boost clock). At the stock clock 1080p runs a little below 60. |
 | **Screenshot notifications** | [Ultrahand Overlay](https://github.com/ppkantorski/Ultrahand-Overlay/releases) | Screenshots work without it; Ultrahand only shows the "Screenshot saved" toast. |
 
 Nothing else: no other sysmodule, no sigpatches, no capture card.
 
-## Install (v0.6.1)
+## Install (v0.7.0)
 
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.6.1-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.7.0-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -147,7 +151,7 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.6.1-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.7.0-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -166,7 +170,7 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.6.1-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.7.0-linux-viewer.tar.gz` with the same files.
 
 On both, the viewer opens a window that says what it is waiting for (the
 Switch, its USB driver, or a game) and lists its keys; the same screen comes
@@ -180,6 +184,8 @@ default audio device.
 | **M** | mute / unmute the game's sound |
 | **F11** or a double-click | fullscreen |
 | **Esc** | leave fullscreen / close |
+| **Tab** | the connection: USB / Network (v0.7.0; remembered) |
+| **I** | type the Switch's IP address (Network, if it is not found by itself) |
 
 It reads USB, decodes and draws on separate threads and shows the frames in
 order, one per screen refresh (vsync), so the picture stays smooth. Its
@@ -259,6 +265,38 @@ The USB camera side follows Insektaure's
 [SysDVR-UVC-Capture](https://github.com/Insektaure/SysDVR-UVC-Capture)
 (GPL-2.0), whose research into `usb:ds` control transfers made it possible.
 
+### Network streaming (play docked)
+
+Set **Connection** to **Network** in the manager and restart the Switch; in
+the viewer, press **Tab** until it says **Connection: Network** (it is
+remembered). With the Switch and the PC on the same network - Wi-Fi, a phone
+hotspot or the dock's LAN port - the viewer finds the console by itself: the
+address that worked last time, the console's broadcast, or a quick scan of the
+network (many Wi-Fi routers drop broadcasts between wireless devices, so the
+scan is what finds it there). **I** in the viewer types the Switch's IP by hand
+(the manager shows it). One connection at a time: in Network mode the Switch
+leaves USB alone.
+
+The stream is the same as over USB - sound, recording, the menu - with one
+addition: **the quality adapts to the network**. Five times a second the
+Switch checks how busy its network sender is; when the link is full it codes
+the next frames coarser, and when there is room again it steps back to your
+quality setting. Frames never pile up, so the frame rate and the delay stay
+steady and the picture gets softer in fast scenes instead.
+
+- Latency is a little above USB (a 1080p frame takes a few ms to cross even a
+  fast network).
+- The network decides the picture: a close hotspot or a LAN adapter in the
+  dock is best; a far-away or busy home Wi-Fi drops the quality more often.
+  **Max resolution 720p** halves what the network has to carry.
+- Windows asks once whether to allow the viewer through the firewall on
+  private networks - allow it.
+
+Measured (Run AO, before the rate control): docked 1080p on home Wi-Fi, the
+Switch's link carried 20-29 Mbps; a fast race at Medium needed ~40, so frames
+queued - 7-30 fps and 100-350 ms of delay. With the rate control on a phone
+hotspot: smooth 60 fps, "very playable", latency a little above USB.
+
 ### Homebrew
 
 Homebrew apps stream too - forwarders on the HOME menu, and the homebrew menu
@@ -292,7 +330,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.6.1       # -> dist/switch-frame-tap-0.6.1-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.7.0       # -> dist/switch-frame-tap-0.7.0-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -311,9 +349,9 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
 
 ## Limitations
 
-- **Handheld only.** It streams through the Switch's USB-C port in device mode,
-  and docked, the dock owns that port. 1080p works in handheld through
-  ReverseNX-RT; streaming from the dock needs a network transport (not started).
+- **USB is handheld only** (docked, the dock owns the USB-C port); docked play
+  streams over the network (v0.7.0), where the picture quality depends on the
+  network. One viewer at a time, and one connection (USB or network) per boot.
 - **1080p60 wants CPU 1785 MHz.** The frame copy runs on the CPU; at the stock
   1020 MHz it is slower and 1080p runs a little below 60 (still playable).
 - **Homebrew:** apps that run as applets (the homebrew menu from the album)
@@ -468,6 +506,12 @@ decoded on the PC: 42 dB against the console's own picture of it.*
 
 ### The transport
 
+**The network (v0.7.0).** `bsd:u` from a sysmodule, with a static 440 KB
+transfer-memory block as SysDVR's sysmodule does (libnx's default wants MB a
+sysmodule does not have); TCP on port 9950, one viewer; a UDP beacon on 9951.
+Frames go out from their own thread, so the network never stalls the capture;
+the QP follows how busy that thread is.
+
 USB 2.0 bulk through `usb:ds` saturates at ~37 MB/s from this module (measured
 across five resolutions), which is why raw pixels stopped at 768x432 and the
 stream is H.264. Transfers that time out are cancelled, so a newly opened
@@ -522,9 +566,8 @@ frames in 9,090. How it got there:
    queued (M96: waiting on the latest queued frame skipped 20% of frames; now
    1.6%).
 
-What is left: **stock clocks** (1080p60 at CPU 1020 MHz), and a **network
-transport** for streaming from the dock, where the dock owns the USB port
-(1080p60 at ~90 Mbps needs a LAN adapter or bitrate tuning for Wi-Fi).
+What is left: **stock clocks** (1080p60 at CPU 1020 MHz). Streaming from the
+dock works over the network since v0.7.0, with the quality adapting to the link.
 
 ## Roadmap
 
@@ -542,8 +585,7 @@ transport** for streaming from the dock, where the dock owns the USB port
 | **Releases**: v0.1.0 (config file, manager app, overlay, native screenshots); v0.1.1 (homebrew) | **done, on hardware** (M97-v0.1.1) |
 | Homebrew apps (forwarders and title override: a `vi:m` mitm for the running application only; larger and offset swapchains, BGRA, 1080p for any layout; a never-attach list) | **done, on hardware** (v0.1.1) |
 | Bitrate tuning (better P frames, QP) | **done** (v0.6.0): P frames at QP+2 and the temporal motion hint, ~15-20 % smaller; the encoder measured against x264 (89 % of our bits at the same QP) |
-| A bitrate cap (NVENC's own rate control) | with the network transport |
-| 1080p60 from the dock, over the network | not started: needs a network transport, see [above](#the-road-to-1080p60) |
+| **Network streaming, docked play** (TCP from the sysmodule, discovery by last address / beacon / subnet scan, rate control from the sender's busy time) | **done, on hardware** (v0.7.0) |
 | Game audio (grc:d PCM alongside the video; paced playback) | **done** (v0.3.0) |
 | Windows viewer, and paced display (reader / decoder / vsync threads) on both | **done** (v0.2.0) |
 | Recording from the viewer (MP4: the console's H.264 untouched + AAC) | **done, on hardware** (v0.5.0) |
@@ -555,7 +597,7 @@ transport** for streaming from the dock, where the dock owns the USB port
 
 | path | what |
 |---|---|
-| `tier4/applet-mitm/` | The sysmodule: `vi:u` / `vi:m` mitm, binder intercept, debug-SVC capture and event pump, VIC and NVENC over raw nvdrv, USB (the viewer's bulk transport, or a UVC camera), game audio (grc:d), screenshots, the `sftap` control service. |
+| `tier4/applet-mitm/` | The sysmodule: `vi:u` / `vi:m` mitm, binder intercept, debug-SVC capture and event pump, VIC and NVENC over raw nvdrv, USB (the viewer's bulk transport, or a UVC camera) or the network (TCP, `applet_mitm_net.cpp`), game audio (grc:d), screenshots, the `sftap` control service. |
 | `tools/raw-recv/` | `raw-view`, the PC viewer (Linux, and Windows via `build-windows.sh`), and `install-launcher.sh`, its Linux desktop app; `record.h` (MP4 recording) and `menu.h` (the main screen, with a built-in DejaVu font from `gen_font.py`); `uvc-check`, the webcam-mode tester; `mp4-check`, `mp4-frames` and `h264-stats` (checking a recording, frames for the docs, the encoder's efficiency: frame sizes, coded QP, motion vectors) (and `raw-recv`, the raw-frame receiver it grew out of). |
 | `manager/` | The manager app for the homebrew menu (SDL2): settings, status, setup check, screenshot gallery. |
 | `overlay/` | The Tesla/Ultrahand overlay: stream on/off, status, handheld/docked through ReverseNX-RT. |

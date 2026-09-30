@@ -86,6 +86,7 @@ static int key_cap(SDL_Renderer *ren, const char *k, int x, int y)
 }
 
 static const char *rec_dir_for_menu(void);
+static const char *net_peer_for_menu(void);
 
 static void menu_draw(SDL_Renderer *ren)
 {
@@ -97,16 +98,45 @@ static void menu_draw(SDL_Renderer *ren)
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
     fill(ren, 0, 0, 1280, 720, bg);
 
-    text_draw(ren, "Switch Frame Tap", 640, 62, 56, 1, ink, 1);
+    text_draw(ren, "Switch Frame Tap", 640, 34, 56, 1, ink, 1);
+
+    /* v0.7: the connection, one at a time (Tab) */
+    {
+        const int net = conn_for_menu();
+        const int y = 112;
+        const int wl = text_width("Connection:", 22, 0), wu = text_width("USB", 22, 1), wn = text_width("Network", 22, 1);
+        int x = 640 - (wl + 24 + wu + 44 + wn + 24 + 44 + 60) / 2;
+        text_draw(ren, "Connection:", x, y + 7, 22, 0, dim, 0);
+        x += wl + 24;
+        const SDL_Color on_bg = { 0, 120, 150, 255 }, off_bg = { 36, 40, 48, 255 };
+        fill(ren, x - 12, y, wu + 24, 38, net ? off_bg : on_bg);
+        text_draw(ren, "USB", x, y + 6, 22, 1, net ? dim : ink, 0);
+        x += wu + 44;
+        fill(ren, x - 12, y, wn + 24, 38, net ? on_bg : off_bg);
+        text_draw(ren, "Network", x, y + 6, 22, 1, net ? ink : dim, 0);
+        x += wn + 44;
+        text_draw(ren, "(Tab)", x, y + 8, 20, 0, dim, 0);
+    }
 
     const char *head = "", *l1 = "", *l2 = "";
     SDL_Color hc = accent;
-    char errline[128];
+    char errline[200];
     switch (g_menu_state) {
     case MENU_WAITING:
-        head = "Waiting for the Switch";
-        l1 = "Connect it to this PC with the USB-C cable (handheld mode).";
-        l2 = "The picture appears as soon as a game is running.";
+        if (conn_for_menu()) {
+            head = "Looking for the Switch on the network";
+            l1 = "Set Connection to Network in the Switch's manager app (then restart the Switch).";
+            if (ip_edit_for_menu()) {
+                snprintf(errline, sizeof(errline), "Switch IP: %s_     (Enter to connect, Esc to cancel)", ip_edit_for_menu());
+            } else {
+                snprintf(errline, sizeof(errline), "%s  Not found? Press I to type its IP address.", net_status_for_menu());
+            }
+            l2 = errline;
+        } else {
+            head = "Waiting for the Switch";
+            l1 = "Connect it with the USB-C cable (handheld mode).";
+            l2 = "For docked play: Connection = Network, here and in the Switch's manager app.";
+        }
         break;
     case MENU_NODRIVER:
         hc = warn;
@@ -128,17 +158,17 @@ static void menu_draw(SDL_Renderer *ren)
         break;
     default:
         hc = good;
-        head = "Connected - waiting for a game";
+        head = net_peer_for_menu()[0] ? "Connected over the network - waiting for a game" : "Connected - waiting for a game";
         l1 = "Start a game on the Switch and the picture appears here.";
         l2 = "Nothing? Check that streaming is on in the overlay or the manager app.";
         break;
     }
-    text_draw(ren, head, 640, 160, 32, 1, hc, 1);
-    text_draw(ren, l1, 640, 212, 22, 0, dim, 1);
-    text_draw(ren, l2, 640, 242, 22, 0, dim, 1);
+    text_draw(ren, head, 640, 170, 32, 1, hc, 1);
+    text_draw(ren, l1, 640, 220, 22, 0, dim, 1);
+    text_draw(ren, l2, 640, 250, 22, 0, ip_edit_for_menu() ? ink : dim, 1);
 
     /* the keys */
-    const int px0 = 250, pw = 780, py0 = 300, ph = 260;
+    const int px0 = 250, pw = 780, py0 = 296, ph = 320;
     fill(ren, px0, py0, pw, ph, panel);
     text_draw(ren, "KEYS", px0 + 30, py0 + 18, 18, 1, dim, 0);
     struct { const char *k, *what; } rows[] = {
@@ -146,27 +176,34 @@ static void menu_draw(SDL_Renderer *ren)
         { "M", "Mute / unmute the game sound" },
         { "F11", "Fullscreen - or double-click the window" },
         { "Esc", "Leave fullscreen / close" },
+        { "Tab", "Switch the connection: USB / Network" },
+        { "I", "Type the Switch's IP address (Network)" },
     };
-    for (int i = 0; i < 4; i++) {
-        const int y = py0 + 54 + i * 50;
+    for (int i = 0; i < 6; i++) {
+        const int y = py0 + 48 + i * 44;
         key_cap(ren, rows[i].k, px0 + 30, y);
-        text_draw(ren, rows[i].what, px0 + 140, y + 5, 24, 0, ink, 0);
+        text_draw(ren, rows[i].what, px0 + 140, y + 5, 24, 0, (i == 5 && !conn_for_menu()) ? dim : ink, 0);
     }
     /* live state next to R and M */
     {
         char rs[200];
         rec_status(rs, sizeof(rs));
         const char *r = rs[0] ? rs + 5 : "";             /* rec_status starts with "  |  " */
-        if (rec_active()) text_draw(ren, r, px0 + pw - 30, py0 + 59, 22, 1, red, 2);
-        if (g_mute) text_draw(ren, "muted", px0 + pw - 30, py0 + 109, 22, 1, warn, 2);
-        if (!rec_active() && r[0]) text_draw(ren, r, 640, 640, 18, 0, dim, 1);
+        if (rec_active()) text_draw(ren, r, px0 + pw - 30, py0 + 53, 22, 1, red, 2);
+        if (g_mute) text_draw(ren, "muted", px0 + pw - 30, py0 + 97, 22, 1, warn, 2);
+        if (!rec_active() && r[0]) text_draw(ren, r, 640, 690, 18, 0, dim, 1);
     }
 
+    if (net_peer_for_menu()[0] && g_menu_state != MENU_WAITING && g_menu_state != MENU_NODRIVER) {
+        char nl[128];
+        snprintf(nl, sizeof(nl), "Network: the Switch at %s", net_peer_for_menu());
+        text_draw(ren, nl, 640, 662, 18, 0, dim, 1);
+    }
     const char *dir = rec_dir_for_menu();
     if (dir[0]) {
         char line[1200];
         snprintf(line, sizeof(line), "Recordings (MP4 with sound) are saved in %s", dir);
-        text_draw(ren, line, 640, 600, 18, 0, dim, 1);
+        text_draw(ren, line, 640, 634, 18, 0, dim, 1);
     }
     SDL_RenderPresent(ren);
 }

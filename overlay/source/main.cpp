@@ -190,7 +190,7 @@ namespace {
         switch (st.state) {
             case LiveState_Starting:   return "Starting (waits for a game)";
             case LiveState_Off:        return "Off";
-            case LiveState_WaitViewer: return (st.reserved3 & 1) ? "Waiting for a camera app" : "Waiting for the PC viewer";   /* v0.4: webcam mode */
+            case LiveState_WaitViewer: return (st.reserved3 & 1) ? "Waiting for a camera app" : (st.reserved3 & 2) ? "Waiting for the viewer (USB/network)" : "Waiting for the PC viewer";   /* v0.4 webcam, v0.7 network */
             case LiveState_WaitGame:   return "Waiting for a game";
             case LiveState_Streaming:
                 std::snprintf(b, sizeof(b), "Streaming %ux%u, %u.%u fps", st.width, st.height, st.fps_x10 / 10, st.fps_x10 % 10);
@@ -206,7 +206,7 @@ namespace {
     class MainGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("Switch Frame Tap", "v0.6.1");
+                auto *frame = new tsl::elm::OverlayFrame("Switch Frame Tap", "v0.7.0");
                 auto *list = new tsl::elm::List();
 
                 list->addItem(new tsl::elm::CategoryHeader("Stream to PC"));

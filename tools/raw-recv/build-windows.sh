@@ -76,7 +76,7 @@ echo "== compiling"
     "$W/sdl2/x86_64-w64-mingw32/lib/libSDL2.dll.a" \
     "$W/libusb/MinGW64/static/libusb-1.0.dll.a" \
     "${FF_LIBS[@]}" \
-    -lshell32 \
+    -lshell32 -lws2_32 \
     -Wl,--subsystem,windows \
     -o "$B/SwitchFrameTap.exe"
 
@@ -150,6 +150,16 @@ Double-click SwitchFrameTap.exe. The window shows what it is waiting for and
 the keys, and shows the game as soon as one is running. It reconnects by itself when the Switch
 reboots or the cable is unplugged. F11 or a double-click: fullscreen. Esc
 leaves fullscreen or closes the window. M mutes the game's sound.
+
+NETWORK (play docked)
+---------------------
+Turn on "Network streaming" in the Switch Frame Tap manager app and restart
+the Switch. With the Switch and this PC on the same network (Wi-Fi or the
+dock's LAN port), SwitchFrameTap.exe finds the console by itself - no cable,
+no driver. The first time, Windows Firewall asks whether to allow it on
+private networks: allow it, or it cannot hear the Switch. A cable-free
+stream needs a good network: the dock's LAN port, or strong 5 GHz Wi-Fi at
+Medium quality.
 
 RECORDING
 ---------

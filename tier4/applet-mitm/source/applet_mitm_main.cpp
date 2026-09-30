@@ -23,6 +23,7 @@
 #include "applet_mitm_shot.hpp"
 #include "applet_mitm_audio.hpp"
 #include "applet_mitm_uvc.hpp"
+#include "applet_mitm_net.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -673,7 +674,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.6.1: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm v0.7.0: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -682,6 +683,7 @@ namespace ams {
         mitm::applet::g_dump_armed  = ArmFileContains("dump");
         g_usb_armed                 = ArmFileContains("usb");
         mitm::applet::g_uvc_mode    = ArmFileContains("uvc");
+        mitm::applet::g_net_armed   = ArmFileContains("net");
         mitm::applet::g_bench_armed   = ArmFileContains("bench");
         mitm::applet::g_nvenc_armed   = ArmFileContains("nvenc");
         mitm::applet::g_nvjpg_armed   = ArmFileContains("jpg");
@@ -797,7 +799,8 @@ namespace ams {
         mitm::applet::StartControlService();
         mitm::applet::StartAppWatch();
         mitm::applet::StartShotInput();   /* idle, and hid untouched, until screenshots are on */
-        mitm::applet::StartAudio();       /* idle, and grc:d untouched, until audio is on */
+        mitm::applet::StartAudio();
+        mitm::applet::StartNet();         /* v0.7: only with "net"; waits for the console to be online */       /* idle, and grc:d untouched, until audio is on */
         mitm::applet::StartVicWorker();
         /* M76: its own thread, so an mm:u or clkrst call that blocks can never
          * hold up vi:u registration below. Holds the clocks past the survey
@@ -863,6 +866,8 @@ namespace ams::mitm::applet {
     void UsbCancelIn();
 
     bool UsbViewerPresent(u32 timeout_ms) {
+        /* v0.7: a viewer connected over the network counts, and goes first */
+        if (NetClientPresent()) { return true; }
         if (!UsbReady()) { return false; }
         /* v0.4: a webcam's "viewer" is a host that committed a stream */
         if (g_uvc_mode) {
@@ -899,6 +904,11 @@ namespace ams::mitm::applet {
 
     bool UsbPostAsync(const void *buf, size_t len, u32 *out_urb) {
         if (out_urb != nullptr) { *out_urb = 0; }
+        if (g_tx_net.load(std::memory_order_relaxed)) {        /* v0.7: this stream is on the network */
+            if (NetPostAsync(buf, len)) { return true; }
+            NetDropClient("send failed");
+            return false;
+        }
         if (::ams::g_usb_ep_in == nullptr) { return false; }
 
         u32 urb_id = 0;
@@ -926,6 +936,11 @@ namespace ams::mitm::applet {
 
     bool UsbWaitAsync(u32 urb, size_t *out_sent) {
         if (out_sent != nullptr) { *out_sent = 0; }
+        if (g_tx_net.load(std::memory_order_relaxed)) {
+            if (NetWaitAsync(out_sent)) { return true; }
+            NetDropClient("the connection dropped");
+            return false;
+        }
         if (::ams::g_usb_ep_in == nullptr) { return false; }
 
         ::Result rc = eventWait(std::addressof(::ams::g_usb_ep_in->CompletionEvent), ::ams::UsbTimeoutNs);
@@ -950,6 +965,11 @@ namespace ams::mitm::applet {
 
     bool UsbSendBuffer(const void *buf, size_t len, size_t *out_sent) {
         if (out_sent != nullptr) { *out_sent = 0; }
+        if (g_tx_net.load(std::memory_order_relaxed)) {
+            if (NetSendBuffer(buf, len)) { if (out_sent != nullptr) { *out_sent = len; } return true; }
+            NetDropClient("the connection dropped");
+            return false;
+        }
         if (::ams::g_usb_ep_in == nullptr) { return false; }
 
         const u8 *p = static_cast<const u8 *>(buf);

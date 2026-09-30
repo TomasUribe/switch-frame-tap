@@ -1,4 +1,4 @@
-# switch-frame-tap: project handoff (v0.6.0)
+# switch-frame-tap: project handoff (v0.7.0)
 
 This is for whoever continues the project cold, most likely a local session
 with the SD card and the console at hand. It covers:
@@ -13,7 +13,7 @@ with the SD card and the console at hand. It covers:
 `tier4/mitm/STATUS.md` has the full evidence behind each item, newest
 milestone first. This page is the map.
 
-**Current release: v0.6.0 (2026-09-30), on GitHub.** The module streams
+**Current release: v0.7.0 (2026-09-30), on GitHub.** The module streams
 native 1080p60 (with ReverseNX-RT) or 720p60 H.264 plus the game's audio
 (grc:d PCM) over USB to a Windows or Linux viewer, whenever the viewer is
 reading and a game - or a homebrew app from a HOME-menu forwarder (vi:m) -
@@ -239,9 +239,11 @@ PC dependencies:
 
    Build it on the PC with `nvsetup-dump` side by side, then test it with
    nvframe first.
-4. **Docked transport.** USB device mode is impossible docked: the dock owns
-   the port. 1080p60 with P frames suggests Wi-Fi or a LAN adapter, and
-   `switch-stream/` has a TCP receiver to start from.
+4. **Docked transport.** Done in v0.7.0: TCP from the sysmodule
+   (`applet_mitm_net.cpp`), discovery by the viewer (last address, beacon,
+   subnet scan), and a rate control driven by the network sender's busy time.
+   Open: nifm's view of sleep/wake is handled only by recreating sockets;
+   a LAN adapter in the dock is untested.
 5. **The VIC's completion check can be fooled.** It shares syncpoint 12 with
    the compositor, so a fence can fire before our job finished. No artifact
    has been attributed to it since M89 (0 torn in 6965), but a marker the

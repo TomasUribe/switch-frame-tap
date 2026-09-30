@@ -34,7 +34,8 @@ namespace ams::mitm::applet {
         /* version 3 (v0.1.1b) */
         u64 app_tid;         /* the running application, 0 = none */
         u32 app_excluded;
-        u32 reserved3;       /* v0.4: bit 0 - this boot is in webcam (UVC) mode */
+        u32 reserved3;       /* v0.4: bit 0 - this boot is in webcam (UVC) mode; v0.7: bit 1 - network
+                                transport on, bit 2 - a viewer is connected over the network */
     };
     static_assert(sizeof(StreamStatus) == 64);
 

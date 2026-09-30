@@ -45,6 +45,7 @@
 #include "applet_mitm_shot.hpp"
 #include "applet_mitm_audio.hpp"
 #include "applet_mitm_uvc.hpp"
+#include "applet_mitm_net.hpp"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -5457,9 +5458,19 @@ namespace ams::mitm::applet {
                 LogLine("   ---- H.264 STREAM OVER USB (M83): %u frames, IDR-only, QP %u, BT.709 ----", nframes, qp);
             }
             if (g_stream_stage[0] == nullptr || g_stream_stage[1] == nullptr) { LogLine("   nvstream: no stage buffers"); return StreamEnd::Failed; }
+            /* v0.7: a viewer on the network takes this stream (docked, there is
+             * no USB at all); the transport functions follow g_tx_net */
+            g_tx_net = live && !g_uvc_mode && NetClientPresent();
+            ON_SCOPE_EXIT { if (g_tx_net.exchange(false)) { NetLogStats("nvstream"); } };
+            if (g_tx_net) {
+                char ips[20];
+                const u32 ip = NetIp();
+                std::snprintf(ips, sizeof(ips), "%u.%u.%u.%u", ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, ip >> 24);
+                LogLine("   nvstream: to the network viewer (the console is %s)", ips);
+            }
             /* the receiver should already be running; give a late one 5 s */
-            for (u32 t = 0; t < 50 && !UsbReady(); ++t) { os::SleepThread(TimeSpan::FromMilliSeconds(100)); }
-            if (!UsbReady()) { LogLine("   nvstream: USB not Configured (no host, or \"usb\" absent from the arm file) - not streaming"); VicStage("ns:no_usb"); return StreamEnd::ViewerGone; }
+            for (u32 t = 0; t < 50 && !g_tx_net && !UsbReady(); ++t) { os::SleepThread(TimeSpan::FromMilliSeconds(100)); }
+            if (!g_tx_net && !UsbReady()) { LogLine("   nvstream: USB not Configured (no host, or \"usb\" absent from the arm file) - not streaming"); VicStage("ns:no_usb"); return StreamEnd::ViewerGone; }
             ON_SCOPE_EXIT { ClockWatchStop(); };
             NvfSession s;
             if (geo != nullptr && !s.SetGeometry(*geo, "nvstream")) { VicStage("ns:geometry"); return StreamEnd::Failed; }
@@ -5518,10 +5529,13 @@ namespace ams::mitm::applet {
             static const char *const AbName[4] = { "A grc's (baseline)", "B P QP+2", "C temporal hint", "D P QP+2 + temporal hint" };
             constexpr u32 ProductionVariant = 3;
             u32 ab_variant = 0;
+            /* v0.7: the QP this stream codes at now - the quality setting, or
+             * higher while the network rate control needs it (below) */
+            u8 cur_qp = qp;
             auto prep_p = [&](u32 v) {
                 u8 *ps = s.x.a + L.off_setup_p;
                 std::memcpy(ps, L.p_setup, 0x1000);
-                const u8 pq = static_cast<u8>((v & 1) ? (qp + 2 > 51 ? 51 : qp + 2) : qp);
+                const u8 pq = static_cast<u8>((v & 1) ? (cur_qp + 2 > 51 ? 51 : cur_qp + 2) : cur_qp);
                 ps[SetupRcQpP] = pq;
                 ps[SetupRcQpI] = pq;
                 if (v & 2) {
@@ -5567,6 +5581,9 @@ namespace ams::mitm::applet {
             /* v0.6: the experiment's window (one variant) */
             u64 ab_bytes_p = 0, ab_bytes_i = 0, ab_intra = 0, ab_inter = 0, ab_qp = 0, ab_t0 = armTicksToNs(armGetSystemTick());
             u32 ab_np = 0, ab_ni = 0, ab_frames = 0, ab_window = 0;
+            /* v0.7: the network rate control's state, and what it did per window */
+            u32 rc_frames = 0, rc_busy_sum = 0, rc_busy_n = 0;
+            u8 rc_qp_min = 51, rc_qp_max = 0;
             const bool ab = live && g_nvab_armed && gop != 0;
             if (ab) { LogLine("   nvab: bitrate experiment - P-frame variants A/B/C/D, 600 frames each, repeating"); }
             const char *why = "all frames sent";
@@ -5801,6 +5818,29 @@ namespace ams::mitm::applet {
                 /* v0.6: the experiment - every 600 frames, log the window and
                  * move to the next variant, from an IDR (the previous frame's
                  * encode was collected above: the P setup is free) */
+                /* v0.7: network rate control. Run AO (docked 1080p on Wi-Fi):
+                 * the link carried 20-29 Mbps; a fast race at Medium wants
+                 * ~40, so frames queued - 7-30 fps and 100-350 ms of delay.
+                 * Every 12 frames: the sender busy most of the time means the
+                 * link is full - code coarser (QP up, faster the fuller);
+                 * mostly idle, step back towards the chosen quality. Both
+                 * setups change only here, between encodes. */
+                if (g_tx_net && ++rc_frames >= 12) {
+                    rc_frames = 0;
+                    const u32 busy = NetBusyPercent();
+                    u8 nq = cur_qp;
+                    if (busy > 97 && nq < 44) { nq = static_cast<u8>(nq + 3 > 44 ? 44 : nq + 3); }
+                    else if (busy > 85 && nq < 44) { nq = static_cast<u8>(nq + 1); }
+                    else if (busy < 55 && nq > qp) { nq = static_cast<u8>(nq - 1); }
+                    rc_busy_sum += busy; ++rc_busy_n;
+                    if (nq < rc_qp_min) { rc_qp_min = nq; }
+                    if (nq > rc_qp_max) { rc_qp_max = nq; }
+                    if (nq != cur_qp) {
+                        cur_qp = nq;
+                        s.SetSetupByte(SetupRcQpI, cur_qp);
+                        if (gop != 0) { prep_p(g_nvab_armed ? ab_variant : ProductionVariant); }
+                    }
+                }
                 if (ab && ab_frames >= 600) {
                     const u64 now_ab = armTicksToNs(armGetSystemTick());
                     const u64 mbs = ab_intra + ab_inter;
@@ -5901,6 +5941,11 @@ namespace ams::mitm::applet {
                             static_cast<unsigned long long>(n_p ? s_bytes_p / n_p : 0), hz,
                             static_cast<unsigned long long>(gw_x10 / 10), static_cast<unsigned long long>(gw_x10 % 10));
                     DebugPumpLogStats("nvstream");
+                    if (g_tx_net && rc_busy_n) {
+                        LogLine("   nvstream: network rate control - QP %u now, %u-%u this window (quality setting %u), sender busy %u%% on average",
+                                cur_qp, rc_qp_min, rc_qp_max, qp, rc_busy_sum / rc_busy_n);
+                        rc_busy_sum = rc_busy_n = 0; rc_qp_min = 51; rc_qp_max = 0;
+                    }
                 }
                 /* hand the core back: every thread in this process shares core 3
                  * with the IPC thread that answers the game (M60b) */

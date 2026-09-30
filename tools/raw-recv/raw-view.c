@@ -25,6 +25,8 @@
  *   ./raw-view --file s.sft --paced --seconds 5   # v0.2: a recording through the LIVE
  *                              # pipeline (reader thread, decoder thread, vsync display)
  *                              # game audio (v0.3) plays on the default sound device; M mutes
+ *   ./raw-view --net 192.168.1.23   # v0.7: the stream over the network (the console
+ *                              # with network streaming on); --app finds it by itself
  *   R records to MP4 (v0.5) in Videos/Switch Frame Tap: the console's H.264 as it
  *   arrived plus the game audio as AAC; --rec-dir DIR saves elsewhere, --mp4 FILE
  *   records into FILE from the start (tests)
@@ -47,11 +49,22 @@
 #ifdef _WIN32
 /* v0.2: the Windows build (tools/raw-recv/build-windows.sh). libusb's Windows
  * package puts libusb.h at the top of its include dir; SDL must not replace
- * main (the entry point stays mainCRTStartup -> main, GUI subsystem). */
+ * main (the entry point stays mainCRTStartup -> main, GUI subsystem).
+ * v0.7: winsock2 before anything includes windows.h */
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <libusb.h>
 #define SDL_MAIN_HANDLED
 #else
 #include <libusb-1.0/libusb.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
 #endif
 #include <SDL2/SDL.h>
 #ifdef SFT_H264
@@ -118,8 +131,322 @@ static void audio_packet(const uint8_t *d, uint32_t n, uint32_t rate, uint32_t c
 }
 static void on_sigint(int s) { (void)s; g_quit = 1; }
 #include "record.h"            /* v0.5: R records the stream to MP4 */
+static const char *net_peer_for_menu(void);
+static int conn_for_menu(void);
+static const char *net_status_for_menu(void);
+static const char *ip_edit_for_menu(void);   /* NULL unless an address is being typed */
 #include "menu.h"              /* v0.5: the main screen while there is no picture */
 static libusb_device_handle *g_usb = NULL;
+
+/* ---- v0.7: the network transport ------------------------------------------
+ * With network streaming on (the manager), the console listens on TCP 9950
+ * and broadcasts "SFTAP1 <ip> <port> ..." on UDP 9951 once a second while no
+ * viewer is connected. The viewer listens for that beacon while it waits for
+ * USB, and connects: the stream is the same SFTR packets USB carries. */
+#ifdef _WIN32
+typedef SOCKET sock_t;
+#define SOCK_BAD INVALID_SOCKET
+#define sock_close closesocket
+#else
+typedef int sock_t;
+#define SOCK_BAD (-1)
+#define sock_close close
+#endif
+#define NET_PORT 9950
+#define BEACON_PORT 9951
+static sock_t g_sock = SOCK_BAD;       /* the stream, when it comes over the network */
+static sock_t g_beacon = SOCK_BAD;     /* listening for the console's beacon */
+static char g_net_peer[64] = "";       /* "192.168.1.23", for the menu and the title */
+
+static void net_init(void)
+{
+#ifdef _WIN32
+    static int done = 0;
+    if (!done) { WSADATA w; WSAStartup(MAKEWORD(2, 2), &w); done = 1; }
+#endif
+}
+
+/* connect to the console's stream port; 1 = connected (g_sock) */
+static int net_connect(const char *host, int port)
+{
+    net_init();
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_port = htons((unsigned short)port);
+    if (inet_pton(AF_INET, host, &a.sin_addr) != 1) return 0;
+    sock_t s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s == SOCK_BAD) return 0;
+    if (connect(s, (struct sockaddr *)&a, sizeof(a)) != 0) { sock_close(s); return 0; }
+    const int one = 1, rcv = 8 * 1024 * 1024;
+    setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
+    setsockopt(s, SOL_SOCKET, SO_RCVBUF, (const char *)&rcv, sizeof(rcv));
+    g_sock = s;
+    snprintf(g_net_peer, sizeof(g_net_peer), "%s", host);
+    fprintf(stderr, "network: connected to %s:%d\n", host, port);
+    return 1;
+}
+
+/* a beacon waiting on UDP 9951? then connect; 1 = connected */
+static int net_poll_beacon(void)
+{
+    net_init();
+    if (g_beacon == SOCK_BAD) {
+        g_beacon = socket(AF_INET, SOCK_DGRAM, 0);
+        if (g_beacon == SOCK_BAD) return 0;
+        const int one = 1;
+        setsockopt(g_beacon, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
+        struct sockaddr_in a;
+        memset(&a, 0, sizeof(a));
+        a.sin_family = AF_INET;
+        a.sin_port = htons(BEACON_PORT);
+        a.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (bind(g_beacon, (struct sockaddr *)&a, sizeof(a)) != 0) {
+            fprintf(stderr, "network: cannot listen for the console on UDP %d\n", BEACON_PORT);
+            sock_close(g_beacon); g_beacon = SOCK_BAD;
+            return 0;
+        }
+    }
+    fd_set rs;
+    FD_ZERO(&rs);
+    FD_SET(g_beacon, &rs);
+    struct timeval tv = { 0, 0 };
+    if (select((int)g_beacon + 1, &rs, NULL, NULL, &tv) <= 0) return 0;
+    char msg[128];
+    struct sockaddr_in from;
+    socklen_t fl = sizeof(from);
+    const int n = (int)recvfrom(g_beacon, msg, sizeof(msg) - 1, 0, (struct sockaddr *)&from, &fl);
+    if (n <= 0) return 0;
+    msg[n] = 0;
+    char ip[64]; int port = 0;
+    if (sscanf(msg, "SFTAP1 %63s %d", ip, &port) != 2 || port <= 0) return 0;
+    /* connect to where the beacon came from (the address in it may be
+     * another interface's) */
+    char src[64];
+    inet_ntop(AF_INET, &from.sin_addr, src, sizeof(src));
+    return net_connect(src, port);
+}
+
+static const char *net_peer_for_menu(void) { return g_net_peer; }
+
+/* ---- v0.7: one connection at a time, picked in the viewer (Tab) -----------
+ * USB: only the cable. Network: the last address that worked, the console's
+ * beacon, and a scan of this PC's subnet (Run AN: on a Wi-Fi LAN the beacon
+ * never arrived - access points often filter broadcasts between wireless
+ * clients - so the scan is what finds it there); or an address typed with I.
+ * The choice and the last address live in viewer.ini next to viewer.log. */
+enum { CONN_USB = 0, CONN_NET = 1 };
+static int g_conn = CONN_USB;
+static char g_last_ip[64] = "";
+static char g_net_status[128] = "";    /* what the finder is doing, for the menu */
+static char g_ip_edit[32] = "";        /* I: the address being typed */
+static int g_ip_editing = 0;
+static int conn_for_menu(void) { return g_conn; }
+static const char *net_status_for_menu(void) { return g_net_status; }
+static const char *ip_edit_for_menu(void) { return g_ip_editing ? g_ip_edit : NULL; }
+
+static void prefs_path(char *out, size_t cap)
+{
+    char *dir = SDL_GetPrefPath("switch-frame-tap", "viewer");
+    snprintf(out, cap, "%sviewer.ini", dir ? dir : "");
+    if (dir) SDL_free(dir);
+}
+
+static void prefs_load(void)
+{
+    char path[1024];
+    prefs_path(path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        char v[128];
+        if (sscanf(line, "connection=%127s", v) == 1) g_conn = strcmp(v, "network") == 0 ? CONN_NET : CONN_USB;
+        if (sscanf(line, "last_ip=%63s", v) == 1) snprintf(g_last_ip, sizeof(g_last_ip), "%.63s", v);
+    }
+    fclose(f);
+}
+
+static void prefs_save(void)
+{
+    char path[1024];
+    prefs_path(path, sizeof(path));
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "connection=%s\nlast_ip=%s\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip);
+    fclose(f);
+}
+
+static void sock_nonblock(sock_t s, int on)
+{
+#ifdef _WIN32
+    u_long v = (u_long)on;
+    ioctlsocket(s, FIONBIO, &v);
+#else
+    const int fl = fcntl(s, F_GETFL, 0);
+    fcntl(s, F_SETFL, on ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK));
+#endif
+}
+
+/* connect to many addresses at once, ms to answer; the first that does (on
+ * the console's port) comes back connected and blocking, the rest closed */
+static sock_t connect_any(const uint32_t *ips, int n, int port, int ms, uint32_t *which)
+{
+    sock_t sk[64];
+    uint32_t sip[64];
+    int m = 0;
+    for (int i = 0; i < n && m < 64; i++) {
+        sock_t s = socket(AF_INET, SOCK_STREAM, 0);
+        if (s == SOCK_BAD) continue;
+        sock_nonblock(s, 1);
+        struct sockaddr_in a;
+        memset(&a, 0, sizeof(a));
+        a.sin_family = AF_INET;
+        a.sin_port = htons((unsigned short)port);
+        a.sin_addr.s_addr = ips[i];
+        connect(s, (struct sockaddr *)&a, sizeof(a));
+        sk[m] = s;
+        sip[m] = ips[i];
+        m++;
+    }
+    sock_t won = SOCK_BAD;
+    const Uint64 t_end = SDL_GetTicks64() + (Uint64)ms;
+    while (won == SOCK_BAD && SDL_GetTicks64() < t_end && !g_quit) {
+        fd_set ws, es;
+        FD_ZERO(&ws); FD_ZERO(&es);
+        sock_t mx = 0;
+        for (int i = 0; i < m; i++) if (sk[i] != SOCK_BAD) { FD_SET(sk[i], &ws); FD_SET(sk[i], &es); if (sk[i] > mx) mx = sk[i]; }
+        struct timeval tv = { 0, 50000 };
+        if (select((int)mx + 1, NULL, &ws, &es, &tv) <= 0) continue;
+        for (int i = 0; i < m && won == SOCK_BAD; i++) {
+            if (sk[i] == SOCK_BAD) continue;
+            if (FD_ISSET(sk[i], &es)) { sock_close(sk[i]); sk[i] = SOCK_BAD; continue; }
+            if (!FD_ISSET(sk[i], &ws)) continue;
+            int err = 1; socklen_t el = sizeof(err);
+            getsockopt(sk[i], SOL_SOCKET, SO_ERROR, (char *)&err, &el);
+            if (err == 0) { won = sk[i]; sk[i] = SOCK_BAD; if (which) *which = sip[i]; }
+            else { sock_close(sk[i]); sk[i] = SOCK_BAD; }
+        }
+    }
+    for (int i = 0; i < m; i++) if (sk[i] != SOCK_BAD) sock_close(sk[i]);
+    if (won != SOCK_BAD) sock_nonblock(won, 0);
+    return won;
+}
+
+/* this PC's address on the LAN (the interface a packet to the internet
+ * would leave by - nothing is sent) */
+static uint32_t local_ip(void)
+{
+    sock_t s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s == SOCK_BAD) return 0;
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_port = htons(53);
+    inet_pton(AF_INET, "8.8.8.8", &a.sin_addr);
+    uint32_t ip = 0;
+    if (connect(s, (struct sockaddr *)&a, sizeof(a)) == 0) {
+        socklen_t l = sizeof(a);
+        if (getsockname(s, (struct sockaddr *)&a, &l) == 0) ip = a.sin_addr.s_addr;
+    }
+    sock_close(s);
+    return ip;
+}
+
+/* the finder thread: the last address, then the subnet; a connection it
+ * makes is handed over in g_found_sock */
+static SDL_Thread *g_finder = NULL;
+static volatile int g_finder_stop = 0;
+static volatile sock_t g_found_sock = SOCK_BAD;
+static char g_found_ip[64] = "";
+
+static void use_found(sock_t s, uint32_t ip)
+{
+    const int one = 1, rcv = 8 * 1024 * 1024;
+    setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
+    setsockopt(s, SOL_SOCKET, SO_RCVBUF, (const char *)&rcv, sizeof(rcv));
+    struct in_addr ia; ia.s_addr = ip;
+    inet_ntop(AF_INET, &ia, g_found_ip, sizeof(g_found_ip));
+    g_found_sock = s;
+}
+
+static int finder_main(void *arg)
+{
+    (void)arg;
+    net_init();
+    while (!g_finder_stop && !g_quit && g_found_sock == SOCK_BAD) {
+        if (g_last_ip[0]) {
+            struct in_addr ia;
+            if (inet_pton(AF_INET, g_last_ip, &ia) == 1) {
+                uint32_t ip = ia.s_addr, w = 0;
+                snprintf(g_net_status, sizeof(g_net_status), "Trying %s (the last address)...", g_last_ip);
+                sock_t s = connect_any(&ip, 1, NET_PORT, 700, &w);
+                if (s != SOCK_BAD) { use_found(s, w); break; }
+            }
+        }
+        const uint32_t me = local_ip();
+        if (me) {
+            const uint32_t base = ntohl(me) & 0xFFFFFF00u;
+            char net[32];
+            struct in_addr ia; ia.s_addr = htonl(base);
+            inet_ntop(AF_INET, &ia, net, sizeof(net));
+            snprintf(g_net_status, sizeof(g_net_status), "Looking on %s/24...", net);
+            for (int b = 1; b < 255 && !g_finder_stop && g_found_sock == SOCK_BAD; b += 64) {
+                uint32_t ips[64]; int n = 0;
+                for (int h = b; h < b + 64 && h < 255; h++) ips[n++] = htonl(base | (uint32_t)h);
+                uint32_t w = 0;
+                sock_t s = connect_any(ips, n, NET_PORT, 600, &w);
+                if (s != SOCK_BAD) { use_found(s, w); break; }
+            }
+        } else {
+            snprintf(g_net_status, sizeof(g_net_status), "This PC is not on a network");
+        }
+        for (int i = 0; i < 30 && !g_finder_stop && g_found_sock == SOCK_BAD; i++) SDL_Delay(100);
+    }
+    return 0;
+}
+
+static void finder_start(void)
+{
+    if (g_finder) return;
+    g_finder_stop = 0;
+    g_finder = SDL_CreateThread(finder_main, "net-finder", NULL);
+}
+
+static void finder_stop(void)
+{
+    if (!g_finder) return;
+    g_finder_stop = 1;
+    SDL_WaitThread(g_finder, NULL);
+    g_finder = NULL;
+    if (g_found_sock != SOCK_BAD) { sock_close(g_found_sock); g_found_sock = SOCK_BAD; }
+}
+
+/* the finder, the beacon or a typed address produced a connection? */
+static int net_try_connect(void)
+{
+    if (g_found_sock != SOCK_BAD) {
+        g_sock = g_found_sock;
+        g_found_sock = SOCK_BAD;
+        snprintf(g_net_peer, sizeof(g_net_peer), "%s", g_found_ip);
+        finder_stop();
+        fprintf(stderr, "network: connected to %s:%d\n", g_net_peer, NET_PORT);
+    } else if (!net_poll_beacon()) {
+        return 0;
+    } else {
+        finder_stop();
+    }
+    snprintf(g_last_ip, sizeof(g_last_ip), "%s", g_net_peer);
+    prefs_save();
+    return 1;
+}
+
+/* close whichever transport is open */
+static void transport_close(void)
+{
+    if (g_usb) { libusb_release_interface(g_usb, 0); libusb_close(g_usb); g_usb = NULL; }
+    if (g_sock != SOCK_BAD) { sock_close(g_sock); g_sock = SOCK_BAD; g_net_peer[0] = 0; }
+}
 static FILE *g_in = NULL;           /* --file */
 
 /* Read exactly n bytes from USB (tolerating short bulk transfers and idle
@@ -131,6 +458,29 @@ static int read_exact(uint8_t *dst, size_t n, int ms)
         if (got == 0 && g_paced) { rewind(g_in); got = fread(dst, 1, n, g_in); }
         if (got != n) { g_quit = 1; return -3; }
         return (int)n;
+    }
+    if (g_sock != SOCK_BAD) {
+        /* v0.7: the network - the same semantics as the USB reads below */
+        size_t done = 0;
+        while (done < n && !g_quit) {
+            fd_set rs;
+            FD_ZERO(&rs);
+            FD_SET(g_sock, &rs);
+            struct timeval tv = { ms / 1000, (ms % 1000) * 1000 };
+            const int r = select((int)g_sock + 1, &rs, NULL, NULL, &tv);
+            if (r == 0) return (done > 0) ? -2 : 0;
+            if (r < 0) { if (g_app) g_lost = 1; else g_quit = 1; return -3; }
+            const int got = (int)recv(g_sock, (char *)dst + done, (int)((n - done) > 0x40000 ? 0x40000 : (n - done)), 0);
+            if (got <= 0) {
+                /* the console closed it (the viewer went back to the menu,
+                 * the console slept or rebooted) - as a cable pulled out */
+                fprintf(stderr, "\nnetwork: the connection closed\n");
+                if (g_app) g_lost = 1; else g_quit = 1;
+                return -3;
+            }
+            done += (size_t)got;
+        }
+        return g_quit ? -1 : (int)done;
     }
     size_t done = 0;
     while (done < n && !g_quit) {
@@ -312,8 +662,56 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
 {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_QUIT) g_quit = 1;
-        else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) {
+        if (e.type == SDL_QUIT) { g_quit = 1; continue; }
+        /* v0.7: typing the Switch's address (I) takes every key */
+        if (g_ip_editing) {
+            if (e.type == SDL_TEXTINPUT) {
+                for (const char *c = e.text.text; *c; c++) {
+                    const size_t l = strlen(g_ip_edit);
+                    if (((*c >= '0' && *c <= '9') || *c == '.') && l + 1 < sizeof(g_ip_edit)) { g_ip_edit[l] = *c; g_ip_edit[l + 1] = 0; }
+                }
+            } else if (e.type == SDL_KEYDOWN) {
+                const SDL_Keycode k = e.key.keysym.sym;
+                if (k == SDLK_BACKSPACE) { const size_t l = strlen(g_ip_edit); if (l) g_ip_edit[l - 1] = 0; }
+                else if (k == SDLK_ESCAPE) { g_ip_editing = 0; SDL_StopTextInput(); }
+                else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
+                    g_ip_editing = 0;
+                    SDL_StopTextInput();
+                    snprintf(g_net_status, sizeof(g_net_status), "Connecting to %s...", g_ip_edit);
+                    if (g_menu) menu_draw(ren);
+                    struct in_addr ia;
+                    uint32_t w = 0;
+                    if (inet_pton(AF_INET, g_ip_edit, &ia) != 1) snprintf(g_net_status, sizeof(g_net_status), "\"%s\" is not an IPv4 address", g_ip_edit);
+                    else {
+                        uint32_t ip = ia.s_addr;
+                        finder_stop();
+                        sock_t sk = connect_any(&ip, 1, NET_PORT, 3000, &w);
+                        if (sk != SOCK_BAD) use_found(sk, w);
+                        else snprintf(g_net_status, sizeof(g_net_status), "No Switch Frame Tap at %s (is Connection set to Network on the Switch?)", g_ip_edit);
+                    }
+                }
+            }
+            if (g_menu) menu_draw(ren);
+            continue;
+        }
+        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_TAB && !e.key.repeat) {
+            /* v0.7: USB <-> network; a stream on the old one ends */
+            g_conn = g_conn == CONN_NET ? CONN_USB : CONN_NET;
+            prefs_save();
+            fprintf(stderr, "\nconnection: %s\n", g_conn == CONN_NET ? "network" : "USB");
+            g_net_status[0] = 0;
+            if (g_usb || g_sock != SOCK_BAD) g_lost = 1;
+            if (g_menu) menu_draw(ren);
+            continue;
+        }
+        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_i && !e.key.repeat && g_conn == CONN_NET && g_menu && g_sock == SOCK_BAD) {
+            snprintf(g_ip_edit, sizeof(g_ip_edit), "%.31s", g_last_ip);
+            g_ip_editing = 1;
+            SDL_StartTextInput();
+            menu_draw(ren);
+            continue;
+        }
+        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) {
             /* leave fullscreen first; Esc in a window closes it */
             if (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) SDL_SetWindowFullscreen(win, 0);
             else g_quit = 1;
@@ -378,7 +776,7 @@ static void app_title_cannot_open(SDL_Window *win, int err)
 }
 
 /* --app: open and claim the console, keeping the window alive meanwhile */
-static libusb_device_handle *app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
+static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
 {
     SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)");
     int said = 0;
@@ -388,7 +786,24 @@ static libusb_device_handle *app_wait_device(libusb_context *ctx, SDL_Window *wi
         /* v0.5: the menu, redrawn often enough for the keys and the REC timer;
          * the bus is looked at every 250 ms as before */
         app_events(win, ren, tex);
-        if (g_quit) return NULL;
+        if (g_quit) { finder_stop(); return 0; }
+        g_lost = 0;                        /* a Tab while waiting is not a disconnect */
+        if (g_conn == CONN_NET) {
+            /* v0.7: network only - the finder (last address, subnet scan),
+             * the beacon, or a typed address */
+            g_menu_state = MENU_WAITING;
+            finder_start();
+            if (net_try_connect()) {
+                char t[160];
+                snprintf(t, sizeof(t), "Switch Frame Tap - connected over the network (%s), waiting for the picture", g_net_peer);
+                SDL_SetWindowTitle(win, t);
+                g_menu_state = MENU_CONNECTED;
+                menu_draw(ren);
+                return 1;
+            }
+            menu_draw(ren); SDL_Delay(50); continue;
+        }
+        finder_stop();                     /* USB only */
         if (tick % 5 != 0) { menu_draw(ren); SDL_Delay(50); continue; }
         libusb_device_handle *h = libusb_open_device_with_vid_pid(ctx, SFT_VID, SFT_PID);
         if (h) {
@@ -397,7 +812,8 @@ static libusb_device_handle *app_wait_device(libusb_context *ctx, SDL_Window *wi
                 SDL_SetWindowTitle(win, "Switch Frame Tap - connected, waiting for the picture");
                 g_menu_state = MENU_CONNECTED;
                 menu_draw(ren);
-                return h;
+                g_usb = h;
+                return 1;
             }
             libusb_close(h);
             app_title_cannot_open(win, LIBUSB_ERROR_BUSY);
@@ -540,13 +956,11 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
         if (g_lost) {
             /* the Switch left the bus (rebooted, cable out) */
             reader_stop();
-            libusb_release_interface(g_usb, SFT_IFACE);
-            libusb_close(g_usb);
-            g_usb = NULL;
+            transport_close();
             fprintf(stderr, "\nthe Switch disconnected%s\n", app ? " - waiting for it" : "");
             if (!app) break;
-            g_usb = app_wait_device(ctx, win, ren, tex);
-            if (!g_usb) break;
+            g_menu = 1;
+            if (!app_wait_device(ctx, win, ren, tex)) break;
             g_lost = 0;
             reader_start();
             continue;
@@ -678,7 +1092,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
     SDL_Quit();
-    if (g_usb) { libusb_release_interface(g_usb, SFT_IFACE); libusb_close(g_usb); }
+    transport_close();
     if (ctx) libusb_exit(ctx);
     if (g_in) fclose(g_in);
     return 0;
@@ -689,7 +1103,7 @@ int main(int argc, char **argv)
 {
     int swap_rb = 0, scale = 1, headless = 0, low_latency = 0, threads = 2;
     long max_frames = 0;
-    const char *file = NULL, *record = NULL, *h264_out = NULL;
+    const char *file = NULL, *record = NULL, *h264_out = NULL, *net_host = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--swap")) swap_rb = 1;
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
@@ -705,6 +1119,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) g_run_secs = atof(argv[++i]);
         else if (!strcmp(argv[i], "--mp4") && i + 1 < argc) g_mp4 = argv[++i];
         else if (!strcmp(argv[i], "--rec-dir") && i + 1 < argc) g_rec_dir = argv[++i];
+        else if (!strcmp(argv[i], "--net") && i + 1 < argc) net_host = argv[++i];
         else { fprintf(stderr, "unknown option %s (see the comment at the top of raw-view.c)\n", argv[i]); return 2; }
     }
     if (scale < 1) scale = 1;
@@ -753,9 +1168,14 @@ int main(int argc, char **argv)
             return 1;
         }
         rec_init(g_rec_dir, g_mp4);
+        prefs_load();                      /* v0.7: USB or network, the last address */
+        net_init();
         menu_draw(ren);
-        g_usb = app_wait_device(ctx, win, ren, NULL);
-        if (!g_usb) { SDL_Quit(); libusb_exit(ctx); return 0; }
+        if (!app_wait_device(ctx, win, ren, NULL)) { SDL_Quit(); libusb_exit(ctx); return 0; }
+    } else if (net_host) {
+        /* v0.7: straight to a console on the network (tests; or a network
+         * where broadcasts do not arrive) */
+        if (!net_connect(net_host, NET_PORT)) { fprintf(stderr, "cannot connect to %s:%d\n", net_host, NET_PORT); return 1; }
     } else if (file) {
         g_in = fopen(file, "rb");
         if (!g_in) { perror(file); return 1; }
@@ -780,16 +1200,16 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "waiting for frames on %04x:%04x ep 0x%02x...\n", SFT_VID, SFT_PID, SFT_EP_IN);
     }
-    if (g_usb) reader_start();
+    if (g_usb || g_sock != SOCK_BAD) reader_start();
     FILE *rec = record ? fopen(record, "wb") : NULL;
     FILE *es = h264_out ? fopen(h264_out, "wb") : NULL;
     if ((record && !rec) || (h264_out && !es)) { perror("output file"); return 1; }
 #ifdef SFT_H264
     /* v0.2 test3: live USB goes through the paced three-thread pipeline;
      * the loop below is file replay (and the tests) */
-    if (g_usb || (g_in && g_paced)) {
+    if (g_usb || g_sock != SOCK_BAD || (g_in && g_paced)) {
         (void)headless; (void)max_frames;
-        if (!g_usb) reader_start();            /* --paced: the recording goes through the same reader thread */
+        if (!g_usb && g_sock == SOCK_BAD) reader_start();            /* --paced: the recording goes through the same reader thread */
         return run_live(ctx, win, ren, g_app, low_latency, threads, rec, es);
     }
 #endif
@@ -829,12 +1249,10 @@ int main(int argc, char **argv)
         if (g_app && g_lost) {
             /* the Switch left the bus (rebooted, cable out): keep the window */
             reader_stop();
-            libusb_release_interface(g_usb, SFT_IFACE);
-            libusb_close(g_usb);
-            g_usb = NULL; g_lost = 0;
+            transport_close();
+            g_lost = 0;
             fprintf(stderr, "\nthe Switch disconnected - waiting for it\n");
-            g_usb = app_wait_device(ctx, win, ren, tex);
-            if (!g_usb) break;
+            if (!app_wait_device(ctx, win, ren, tex)) break;
             g_lost = 0;
             reader_start();
             have_kind = 0;
@@ -1052,7 +1470,7 @@ int main(int argc, char **argv)
     free(payload);
     free(rgb);
     if (g_in) fclose(g_in);
-    if (g_usb) { libusb_release_interface(g_usb, SFT_IFACE); libusb_close(g_usb); }
+    transport_close();
     if (ctx) libusb_exit(ctx);
     return 0;
 }

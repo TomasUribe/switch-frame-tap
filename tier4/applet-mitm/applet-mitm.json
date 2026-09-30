@@ -32,7 +32,9 @@
         "clkrst",
         "hid",
         "time:u",
-        "grc:d"
+        "grc:d",
+        "bsd:u",
+        "nifm:u"
     ],
     "service_host": [
         "vi:u",

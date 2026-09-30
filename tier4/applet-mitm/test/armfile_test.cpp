@@ -152,6 +152,13 @@ int main() {
     ExpectRelease("usb_mode = Webcam2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
     /* v0.6: the bitrate experiment */
     ExpectRelease("encoder_test = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio nvab");
+    /* v0.7: the network transport */
+    ExpectRelease("network = 1\nquality = medium\n", "vic exec dbg net live nvqp=24 nvgop=60 wait=20 audio");
+    /* v0.7: one connection at a time */
+    ExpectRelease("connection = network\n", "vic exec dbg net live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("connection = webcam\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio uvc");
+    ExpectRelease("connection = usb\nusb_mode = webcam\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("usb_mode = webcam\nconnection = network\n", "vic exec dbg net live nvqp=20 nvgop=60 wait=20 audio");
     /* M99: screenshots */
     ExpectRelease("screenshot = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
     ExpectRelease("screenshot = 1\nscreenshot_buttons = 2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=2 audio");
