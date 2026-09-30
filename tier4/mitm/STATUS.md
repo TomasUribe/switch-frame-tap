@@ -338,8 +338,10 @@ after STREAMON; then 1280x720 (a new commit at another size - the stream
 restarted at 720p) **60.1 fps**, 580/580, first frame 370 ms; reopened after
 8 s idle: 60.1 fps, 0 errors. Windows: OBS Video Capture Device works;
 latency "not great" (OBS's decoder, RESEARCH.md §8 of the reference); the
-Windows Camera app does not open it (H.264-only camera). MJPEG through NVJPG
-would reach both - a possible next step.
+Windows Camera app does not open it (H.264-only camera). (Corrected later:
+MJPEG cannot come from NVJPG - on the X1 it is a decoder, see M76/M78 and "NVJPG
+is a dead end here" below; only software JPEG, libjpeg-turbo in the devkitPro
+portlibs, likely 720p30 on the system core. Parked by the user after v0.7.0.)
 
 ## *** v0.3.0: game audio (Run AG: works) ***
 

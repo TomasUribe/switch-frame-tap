@@ -220,6 +220,15 @@ Expect more heat and battery drain, and some games dislike fake docked mode
 
 ### The manager app
 
+| | |
+|---|---|
+| ![The manager app: status, streaming and connection](docs/app-manager-status.jpg) | ![The manager app: picture quality, keyframes, resolution and screenshots](docs/app-manager-settings.jpg) |
+| ![The manager app: the setup check](docs/app-manager-setup-check.jpg) | ![The overlay over Mario Kart 8 Deluxe: stream on/off, this app, handheld/docked](docs/app-overlay-mk8.jpg) |
+
+*The manager app from the homebrew menu (status and connection, picture and
+screenshot settings, the setup check) and the overlay over a game - v0.7.0,
+captured on the console.*
+
 **Switch Frame Tap** in the homebrew menu: what the stream is doing (and its
 frame rate), streaming on/off, start with the console, USB mode (PC viewer or
 webcam), picture quality
@@ -589,7 +598,7 @@ dock works over the network since v0.7.0, with the quality adapting to the link.
 | Game audio (grc:d PCM alongside the video; paced playback) | **done** (v0.3.0) |
 | Windows viewer, and paced display (reader / decoder / vsync threads) on both | **done** (v0.2.0) |
 | Recording from the viewer (MP4: the console's H.264 untouched + AAC) | **done, on hardware** (v0.5.0) |
-| Webcam mode (UVC 1.5 H.264 camera, 1080p/720p60) | **done, on hardware** (v0.4.0); MJPEG (NVJPG) could reach the Windows Camera app and cut OBS latency |
+| Webcam mode (UVC 1.5 H.264 camera, 1080p/720p60) | **done, on hardware** (v0.4.0). MJPEG (for the Windows Camera app) would have to be software JPEG on the Switch's CPU - its NVJPG engine only decodes - probably 720p30; parked |
 | USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |
 | Home menu and system overlays | not possible through any route found |
 
