@@ -5,6 +5,8 @@
  *
  *  - The stream: the applet-mitm sysmodule's "sftap" service
  *    (tier4/applet-mitm/source/applet_mitm_control.hpp).
+ *  - Keyframes: the keyframe_interval line of config.ini, then sftap's
+ *    reload, as the manager app does - the stream restarts with it.
  *  - The display mode: SaltyNX's shared memory, exactly as ReverseNX-RT's own
  *    overlay does it (github.com/masagrator/ReverseNX-RT, MIT): ask the
  *    "SaltySD" port for the handle (command 7), map 0x1000 bytes, find the
@@ -15,6 +17,7 @@
 #include <tesla.hpp>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 namespace {
 
@@ -82,6 +85,89 @@ namespace {
         if (!SftapConnect()) { return; }
         const u8 v = on ? 1 : 0;
         serviceDispatchIn(&g_sftap, 1, v);
+    }
+
+    void SftapReload() {
+        if (SftapConnect()) { serviceDispatch(&g_sftap, 2); }
+    }
+
+    /* ---- keyframes: config.ini's keyframe_interval ----------------------- */
+
+    constexpr const char *ConfigIni = "sdmc:/config/switch-frame-tap/config.ini";
+    constexpr const char *KeyframeKey = "keyframe_interval";
+
+    /* libtesla keeps no sdmc mount open: every access mounts it for its
+     * own duration (doWithSDCardHandle), as with the sm session above */
+    std::string ReadConfig() {
+        std::string ini;
+        tsl::hlp::doWithSDCardHandle([&ini] {
+            if (FILE *f = std::fopen(ConfigIni, "rb")) {
+                char b[512];
+                for (size_t n; (n = std::fread(b, 1, sizeof(b), f)) > 0; ) { ini.append(b, n); }
+                std::fclose(f);
+            }
+        });
+        return ini;
+    }
+
+    /* where the key's line starts in ini, or npos (comments are skipped) */
+    size_t FindKeyLine(const std::string &ini, const char *key) {
+        const size_t klen = std::strlen(key);
+        for (size_t at = 0; at < ini.size(); ) {
+            size_t i = at;
+            while (i < ini.size() && (ini[i] == ' ' || ini[i] == '\t')) { ++i; }
+            if (ini.compare(i, klen, key) == 0) {
+                size_t j = i + klen;
+                while (j < ini.size() && (ini[j] == ' ' || ini[j] == '\t')) { ++j; }
+                if (j < ini.size() && ini[j] == '=') { return at; }
+            }
+            const size_t nl = ini.find('\n', at);
+            if (nl == std::string::npos) { break; }
+            at = nl + 1;
+        }
+        return std::string::npos;
+    }
+
+    /* the manager's default when the line is missing: once a second */
+    int ConfigKeyframes() {
+        const std::string ini = ReadConfig();
+        const size_t at = FindKeyLine(ini, KeyframeKey);
+        if (at == std::string::npos) { return 60; }
+        const int v = std::atoi(ini.c_str() + ini.find('=', at) + 1);
+        return v > 0 ? v : 60;
+    }
+
+    bool SetConfigKeyframes(int frames) {
+        std::string ini = ReadConfig();
+        char line[48];
+        std::snprintf(line, sizeof(line), "%s = %d", KeyframeKey, frames);
+        const size_t at = FindKeyLine(ini, KeyframeKey);
+        if (at == std::string::npos) {
+            if (!ini.empty() && ini.back() != '\n') { ini += '\n'; }
+            ini += line;
+            ini += '\n';
+        } else {
+            const size_t nl = ini.find('\n', at);
+            size_t end = nl == std::string::npos ? ini.size() : nl;
+            if (end > at && ini[end - 1] == '\r') { --end; }
+            ini.replace(at, end - at, line);
+        }
+        bool ok = false;
+        tsl::hlp::doWithSDCardHandle([&ini, &ok] {
+            if (FILE *f = std::fopen(ConfigIni, "wb")) {
+                ok = std::fwrite(ini.data(), 1, ini.size(), f) == ini.size();
+                ok = (std::fclose(f) == 0) && ok;
+            }
+        });
+        return ok;
+    }
+
+    std::string KeyframeText(int frames) {
+        if (frames == 60)  { return "Every second (60)"; }
+        if (frames == 120) { return "Every 2 s (120)"; }
+        char b[24];
+        std::snprintf(b, sizeof(b), "Every %d frames", frames);
+        return b;
     }
 
     /* ---- ReverseNX-RT, through SaltyNX ---------------------------------- */
@@ -227,6 +313,22 @@ namespace {
                     return false;
                 });
                 list->addItem(m_app);
+                /* 120: half the keyframes - fewer of the big frames that make
+                 * a PC decoder skip one; 60: recovers from a lost frame sooner */
+                m_keyframes = new tsl::elm::ListItem("Keyframes");
+                m_keyframes->setValue(KeyframeText(ConfigKeyframes()));
+                m_keyframes->setClickListener([this](u64 keys) {
+                    if (!(keys & HidNpadButton_A)) { return false; }
+                    const int next = ConfigKeyframes() == 60 ? 120 : 60;
+                    if (SetConfigKeyframes(next)) {
+                        if (m_have) { SftapReload(); }
+                        m_keyframes->setValue(KeyframeText(next));
+                    } else {
+                        m_keyframes->setValue("Could not write config.ini");
+                    }
+                    return true;
+                });
+                list->addItem(m_keyframes);
                 list->addItem(new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
                     r->drawString(m_status.c_str(), false, x + 15, y + 22, 18, r->a(tsl::style::color::ColorText));
                     r->drawString(m_game.c_str(), false, x + 15, y + 46, 16, r->a(tsl::style::color::ColorDescription));
@@ -290,6 +392,7 @@ namespace {
             std::string m_status, m_game;
             tsl::elm::ToggleListItem *m_toggle = nullptr;
             tsl::elm::ListItem *m_app = nullptr;
+            tsl::elm::ListItem *m_keyframes = nullptr;
             tsl::elm::ListItem *m_modes[4] = {};
     };
 
