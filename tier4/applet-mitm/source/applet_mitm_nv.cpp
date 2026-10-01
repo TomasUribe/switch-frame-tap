@@ -4785,24 +4785,38 @@ namespace ams::mitm::applet {
             return 0;
         }
 
-        /* M94: wait for a submitted job: 0 done, 2 no status within 1 s. */
+        /* Wait for a submitted job: 0 done, 2 still incomplete after 1 s.
+         * Check completion before the deadline: a descheduled waiter can wake
+         * after the deadline even though NVENC completed while it slept. */
         int NvfWaitDone(const NvfCtx &x, u32 pic_index, u32 fence_val, u64 t0, nvenc_pic_stat_s *st, u64 *enc_ns) {
             u8 *const a = x.a;
             const NvfLayout &L = x.lay != nullptr ? *x.lay : Layout720();
             const u64 w0 = armTicksToNs(armGetSystemTick());
             const u32 cfd = CtrlFd();
             bool fence_done = false, ours = false;
-            while (armTicksToNs(armGetSystemTick()) - w0 < UINT64_C(1000000000)) {
+            auto sample_completion = [&]() {
                 if (cfd != 0 && !fence_done) {
                     struct { u32 id; u32 value; } r = { x.esyncpt, 0 };
                     u32 e2 = 0;
-                    NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
-                    fence_done = (static_cast<s32>(r.value - fence_val) >= 0);
+                    const Result rc = NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
+                    if (R_SUCCEEDED(rc) && e2 == 0) {
+                        fence_done = (static_cast<s32>(r.value - fence_val) >= 0);
+                    }
                 }
                 armDCacheFlush(a + L.off_status, 0x80);
                 std::memcpy(st, a + L.off_status, sizeof(*st));
                 ours = (st->picture_index == pic_index);
+            };
+            for (;;) {
+                sample_completion();
                 if (fence_done && ours) { break; }
+                if (armTicksToNs(armGetSystemTick()) - w0 >= UINT64_C(1000000000)) {
+                    /* The thread may also be descheduled between the fence
+                     * read and the status read. Refresh both at the timeout
+                     * boundary instead of declaring a stale read a stall. */
+                    sample_completion();
+                    break;
+                }
                 os::SleepThread(TimeSpan::FromMicroSeconds(50));
             }
             *enc_ns = armTicksToNs(armGetSystemTick()) - t0;
