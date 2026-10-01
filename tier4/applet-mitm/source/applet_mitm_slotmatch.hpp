@@ -106,4 +106,32 @@ namespace ams::mitm::applet::slotmatch {
         bool GaveUp() const { return intervals >= GiveUpAfter || samples >= MaxSamples; }
     };
 
+    /* A first guess while the picture stands still and Match has nothing to
+     * go on (DuckStation's menu): a still picture is the same in every slot,
+     * and no texture memory holds the same few megabytes twice. Out: nslots
+     * candidates whose signatures are equal and whose samples are not one
+     * uniform value (a cleared buffer), the first such set. `grouped`: the
+     * slots are offsets of one object, so a set is nslots consecutive
+     * candidates (FindSlotCandidates lists one region's slots together). */
+    inline bool StillGuess(const uint32_t *sigs, const bool *varied, uint32_t ncand, uint32_t nslots, bool grouped, uint8_t *out) {
+        if (nslots < 2 || nslots > MaxSlots || ncand < nslots) { return false; }
+        if (grouped) {
+            for (uint32_t c = 0; c + nslots <= ncand; c += nslots) {
+                bool same = varied[c];
+                for (uint32_t k = 1; k < nslots && same; ++k) { same = varied[c + k] && sigs[c + k] == sigs[c]; }
+                if (same) { for (uint32_t k = 0; k < nslots; ++k) { out[k] = static_cast<uint8_t>(c + k); } return true; }
+            }
+            return false;
+        }
+        for (uint32_t c = 0; c < ncand; ++c) {
+            if (!varied[c]) { continue; }
+            uint32_t n = 0;
+            for (uint32_t d = c; d < ncand && n < nslots; ++d) {
+                if (varied[d] && sigs[d] == sigs[c]) { out[n++] = static_cast<uint8_t>(d); }
+            }
+            if (n == nslots) { return true; }
+        }
+        return false;
+    }
+
 }

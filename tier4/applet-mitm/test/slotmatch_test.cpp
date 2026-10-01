@@ -139,6 +139,24 @@ int main() {
         if (wrong) { std::printf("FAIL always-early: %u wrong match(es)\n", wrong); ++g_fail; }
         else { std::printf("ok   always-early: never a wrong match\n"); }
     }
+    /* StillGuess: the swapchain's slots hold the same still picture */
+    {
+        const uint32_t sigs[]  = { 7, 9, 5, 5, 4, 4, 3, 8 };
+        const bool varied[]    = { 1, 1, 1, 1, 0, 0, 1, 1 };
+        uint8_t out[sm::MaxSlots] = {};
+        /* one object, two slots: pairs (0,1) (2,3) (4,5) (6,7) - (2,3) matches, (4,5) is a cleared buffer */
+        const bool g1 = sm::StillGuess(sigs, varied, 8, 2, true, out) && out[0] == 2 && out[1] == 3;
+        /* one object per slot, three slots: no three equal varied signatures */
+        const bool g2 = !sm::StillGuess(sigs, varied, 8, 3, false, out);
+        const uint32_t sigs3[] = { 1, 6, 2, 6, 6, 9 };
+        const bool varied3[]   = { 1, 1, 1, 1, 1, 1 };
+        const bool g3 = sm::StillGuess(sigs3, varied3, 6, 3, false, out) && out[0] == 1 && out[1] == 3 && out[2] == 4;
+        /* grouped sets never straddle two regions */
+        const uint32_t sigs4[] = { 1, 2, 2, 3 };
+        const bool g4 = !sm::StillGuess(sigs4, varied3, 4, 2, true, out);
+        if (g1 && g2 && g3 && g4) { std::printf("ok   still-picture guess: equal slots, cleared buffers skipped\n"); }
+        else { std::printf("FAIL still-picture guess: %d %d %d %d\n", g1, g2, g3, g4); ++g_fail; }
+    }
     std::printf(g_fail ? "%d FAILED\n" : "all passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

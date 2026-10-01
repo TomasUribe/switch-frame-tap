@@ -4869,6 +4869,7 @@ namespace ams::mitm::applet {
             bool sep_layout = false;       /* the geometry says one object per slot */
             bool sep = false;              /* reading per-slot buffers */
             bool sep_locked = false;       /* matched (or given up): no more sampling */
+            bool still_guessed = false;    /* slot_cand from StillGuess (a still picture), not yet matched */
             u64 cand[MaxSlotCand] = {};
             u32 ncand = 0;
             u8 slot_cand[8] = {};
@@ -4884,7 +4885,7 @@ namespace ams::mitm::applet {
              * unless slot_base is a region exactly the swapchain's size and
              * the slots are offsets in it (MK8) */
             void PrepareSlots(::ams::svc::Handle dbg, u64 slot_base, const char *who) {
-                sep = sep_locked = false;
+                sep = sep_locked = still_guessed = false;
                 u64 span = buf_bytes;
                 for (u32 k = 0; k < nslots; ++k) { if (slot_off[k] + static_cast<u64>(buf_bytes) > span) { span = slot_off[k] + static_cast<u64>(buf_bytes); } }
                 ::ams::svc::MemoryInfo mi = {};
@@ -4923,15 +4924,21 @@ namespace ams::mitm::applet {
                         reused ? " (starting from the last session's match)" : "");
             }
 
-            /* a hash of SigPoints 64-byte samples spread over the buffer */
-            u32 SampleSig(::ams::svc::Handle dbg, u64 base) const {
+            /* a hash of SigPoints 64-byte samples spread over the buffer;
+             * *varied false when every sample is one repeated 4-byte value
+             * (a cleared buffer) */
+            u32 SampleSig(::ams::svc::Handle dbg, u64 base, bool *varied) const {
                 const u64 step = (buf_bytes / SigPoints) & ~UINT64_C(63);
-                u32 h = 2166136261u;
+                u32 h = 2166136261u, first = 0;
+                bool var = false;
                 for (u32 j = 0; j < SigPoints; ++j) {
                     alignas(64) u8 b[64];
-                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(b), dbg, base + j * step + ((step / 2) & ~UINT64_C(63)), sizeof(b)))) { return 0; }
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(b), dbg, base + j * step + ((step / 2) & ~UINT64_C(63)), sizeof(b)))) { *varied = false; return 0; }
+                    if (j == 0) { std::memcpy(std::addressof(first), b, sizeof(first)); }
+                    for (u32 i = 0; i < sizeof(b); i += 4) { var |= std::memcmp(b + i, std::addressof(first), 4) != 0; }
                     for (u32 i = 0; i < sizeof(b); ++i) { h = (h ^ b[i]) * 16777619u; }
                 }
+                *varied = var;
                 return h;
             }
 
@@ -4941,7 +4948,8 @@ namespace ams::mitm::applet {
             void Calibrate(::ams::svc::Handle dbg, u32 count, s32 slot) {
                 if (!sep || sep_locked || slot < 0 || static_cast<u32>(slot) >= nslots) { return; }
                 u32 sig[MaxSlotCand];
-                for (u32 c = 0; c < ncand; ++c) { sig[c] = this->SampleSig(dbg, cand[c]); }
+                bool varied[MaxSlotCand];
+                for (u32 c = 0; c < ncand; ++c) { sig[c] = this->SampleSig(dbg, cand[c], std::addressof(varied[c])); }
                 matcher.Add(count, static_cast<u32>(slot), sig);
                 u8 m[8] = {};
                 s32 weakest = 0;
@@ -4958,6 +4966,12 @@ namespace ams::mitm::applet {
                         len += std::snprintf(line + len, sizeof(line) - len, " %u->0x%010llx", s, static_cast<unsigned long long>(cand[m[s]]));
                     }
                     LogLine("%s", line);
+                } else if (u8 g[8] = {}; !still_guessed && slotmatch::StillGuess(sig, varied, ncand, nslots, !sep_layout, g)) {
+                    /* the picture stands still: show it while waiting for motion */
+                    std::memcpy(slot_cand, g, nslots);
+                    still_guessed = true;
+                    LogLine("   swapchain: the picture stands still - slot 0 shows 0x%010llx (the same picture in every slot) until motion tells them apart",
+                            static_cast<unsigned long long>(cand[g[0]]));
                 } else if (matcher.GaveUp()) {
                     sep_locked = true;
                     LogLine("   swapchain: slots not told apart in %u samples (%u with a change) - keeping the first guess", matcher.samples, matcher.intervals);
@@ -5159,7 +5173,35 @@ namespace ams::mitm::applet {
              * The slot is safe to read: a finished present stays on screen or
              * queued until the one after it is drawn, and its slot can only be
              * drawn into again after the present after THAT. */
+            /* A copy of a slot the game drew into again while it was being
+             * copied (a two-slot app such as DuckStation, after a read that
+             * stalled for 50-80 ms) mixes two frames - flashes of the next
+             * picture in strips. ChangedSinceRead compares a few samples of
+             * the slot with the copy afterwards; a slot that moved is copied
+             * again from the next finished present, at most twice. */
+            u32 recopies = 0;
+            u64 last_read = 0;
+
+            bool ChangedSinceRead(::ams::svc::Handle dbg) const {
+                for (u32 k = 0; k < 8; ++k) {
+                    const u64 off = corner ? static_cast<u64>(k % CornerBlockRows) * FbBlockRow + ((static_cast<u64>(k) * 0x2340u % CornerBlockRowBytes) & ~UINT64_C(63))
+                                           : ((static_cast<u64>(buf_bytes) / 8 * k + 1024) & ~UINT64_C(63));
+                    alignas(64) u8 b[64];
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(b), dbg, last_read + off, sizeof(b)))) { return false; }
+                    if (std::memcmp(b, g_ind_buf + off, sizeof(b)) != 0) { return true; }
+                }
+                return false;
+            }
+
             bool Capture(::ams::svc::Handle dbg, u64 slot_base, u64 *read_ns, u32 *sig, u32 *dropped = nullptr) {
+                for (u32 attempt = 0; ; ++attempt) {
+                    if (!this->CaptureOnce(dbg, slot_base, read_ns, sig, dropped)) { return false; }
+                    if (attempt >= 2 || !this->ChangedSinceRead(dbg)) { return true; }
+                    ++recopies;
+                }
+            }
+
+            bool CaptureOnce(::ams::svc::Handle dbg, u64 slot_base, u64 *read_ns, u32 *sig, u32 *dropped) {
                 for (u32 spins = 0; g_queue_count.load(std::memory_order_acquire) == seen && spins < 50; ++spins) {
                     os::SleepThread(TimeSpan::FromMilliSeconds(1));
                 }
@@ -5224,6 +5266,7 @@ namespace ams::mitm::applet {
 
             bool ReadSlot(::ams::svc::Handle dbg, u64 base, u64 *read_ns, u32 *sig) {
                 const u64 t0 = armTicksToNs(armGetSystemTick());
+                last_read = base;
                 if (corner) {
                     for (u32 br = 0; br < CornerBlockRows; ++br) {
                         u8 *dst = g_ind_buf + br * FbBlockRow;
@@ -6200,8 +6243,8 @@ namespace ams::mitm::applet {
             LogLine("   nvstream: present fences: %u waited, avg %llu us, max %llu us, %u timed out (30 ms), %u presents without a readable fence",
                     s.fence_waits, static_cast<unsigned long long>(s.fence_waits ? s.fence_wait_sum / s.fence_waits / 1000 : 0),
                     static_cast<unsigned long long>(s.fence_wait_max / 1000), s.fence_timeouts, s.fence_unknown);
-            LogLine("   nvstream: presents taken (M96): %u already drawn, %u waited for (the oldest not yet drawn), %u by the old latest-present rule",
-                    s.pick_ready, s.pick_waited, s.pick_legacy);
+            LogLine("   nvstream: presents taken (M96): %u already drawn, %u waited for (the oldest not yet drawn), %u by the old latest-present rule; %u copied again (drawn into while copied)",
+                    s.pick_ready, s.pick_waited, s.pick_legacy, s.recopies);
             LogLine("   nvstream: per-stage max us: read %llu  VIC %llu  NVENC %llu  USB wait %llu  copy %llu; %u frame(s) over 50 ms of work; %u USB wait(s) over 500 ms (IDR forced after each)",
                     static_cast<unsigned long long>(m_read / 1000), static_cast<unsigned long long>(m_vic / 1000),
                     static_cast<unsigned long long>(m_enc / 1000), static_cast<unsigned long long>(m_usbw / 1000),
