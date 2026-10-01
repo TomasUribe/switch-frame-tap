@@ -25,12 +25,13 @@
 namespace ams::mitm::applet::slotmatch {
 
     constexpr uint32_t MaxSlots = 8;
-    constexpr uint32_t MaxCand  = 12;
+    constexpr uint32_t MaxCand  = 24;
 
     constexpr uint32_t MinPerSlot = 8;      /* counted intervals per slot before any match */
     constexpr int32_t  MinScore   = 600;    /* of 1000 */
     constexpr int32_t  MinMargin  = 300;    /* over the slot's second-best candidate */
     constexpr uint32_t GiveUpAfter = 900;   /* counted intervals (~15 s of moving picture at 60 fps) */
+    constexpr uint32_t MaxSamples  = 3600;  /* samples of any kind (~1 min): a still picture stops it too */
 
     struct Matcher {
         uint32_t nslots = 0, ncand = 0;
@@ -40,6 +41,7 @@ namespace ams::mitm::applet::slotmatch {
         uint16_t hit[MaxSlots][MaxCand] = {};
         uint16_t tot[MaxSlots] = {};
         uint32_t intervals = 0;
+        uint32_t samples = 0;
 
         void Reset(uint32_t slots, uint32_t cands) {
             nslots = slots < MaxSlots ? slots : MaxSlots;
@@ -47,6 +49,7 @@ namespace ams::mitm::applet::slotmatch {
             have = false;
             last = 0;
             intervals = 0;
+            samples = 0;
             std::memset(sig, 0, sizeof(sig));
             std::memset(hit, 0, sizeof(hit));
             std::memset(tot, 0, sizeof(tot));
@@ -55,6 +58,7 @@ namespace ams::mitm::applet::slotmatch {
         /* the candidates' signatures once present `count` (of `slot`) is finished */
         void Add(uint32_t count, uint32_t slot, const uint32_t *sigs) {
             if (slot >= nslots) { return; }
+            ++samples;
             if (have && count == last + 1 && tot[slot] < 0xFFFF) {
                 bool any = false;
                 for (uint32_t c = 0; c < ncand; ++c) { any |= sigs[c] != sig[c]; }
@@ -99,7 +103,7 @@ namespace ams::mitm::applet::slotmatch {
             return true;
         }
 
-        bool GaveUp() const { return intervals >= GiveUpAfter; }
+        bool GaveUp() const { return intervals >= GiveUpAfter || samples >= MaxSamples; }
     };
 
 }

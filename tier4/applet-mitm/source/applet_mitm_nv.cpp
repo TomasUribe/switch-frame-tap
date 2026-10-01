@@ -2391,15 +2391,25 @@ namespace ams::mitm::applet {
             return false;
         }
 
-        /* A swapchain with one nvmap object per slot (GameSurface::separate)
-         * has no single region holding every slot: each slot is a buffer of
-         * its own somewhere in the game's memory. Every device-mapped region
-         * that is a whole number of buffers (adjacent buffers can share one
-         * memory block) gives that many candidates, in address order; which
-         * candidate is which slot is worked out while streaming
-         * (NvfSession::Calibrate). */
-        u32 FindSlotCandidates(::ams::svc::Handle dbg, u64 buf, u64 *out, u32 max) {
-            if (buf == 0) { return 0; }
+        /* Where each slot's buffer may be, when no region is exactly the
+         * swapchain (FindSwapchainBySize fell back to "the smallest region
+         * that holds it", which in a homebrew app is as likely its texture
+         * memory - Moonlight streamed its box art). Which candidate is which
+         * slot is worked out while streaming (NvfSession::Calibrate).
+         *
+         * One nvmap object per slot (GameSurface::separate - Smash Ultimate,
+         * Moonlight): every device-mapped region that is a whole number of
+         * buffers, each rounded up to a power-of-two alignment (Moonlight
+         * keeps a 3.75 MB 720p buffer in a 4 MB block), gives one candidate
+         * per buffer - adjacent buffers can share one memory block.
+         * One object for every slot (DuckStation: two slots at 0 and
+         * 0x3C0000): every device-mapped region that holds the whole set
+         * gives one candidate per slot, its base plus that slot's offset. */
+        u32 FindSlotCandidates(::ams::svc::Handle dbg, u64 buf, const u32 *slot_off, u32 nslots, bool separate, u64 *out, u32 max) {
+            if (buf == 0 || nslots == 0) { return 0; }
+            static constexpr u64 Aligns[] = { 0x1000, 0x10000, 0x20000, 0x40000, 0x100000, 0x200000, 0x400000 };
+            u64 span = buf;
+            for (u32 k = 0; k < nslots; ++k) { if (slot_off[k] + buf > span) { span = slot_off[k] + buf; } }
             u64 addr = 0;
             u32 n = 0;
             for (u32 steps = 0; steps < 4000 && n < max; ++steps) {
@@ -2408,8 +2418,16 @@ namespace ams::mitm::applet {
                 if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr)) || mi.size == 0) { break; }
                 const u32  attr = static_cast<u32>(mi.attribute);
                 const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
-                if (dev && mi.size % buf == 0 && mi.size / buf <= 8) {
-                    for (u64 o = 0; o < mi.size && n < max; o += buf) { out[n++] = mi.base_address + o; }
+                if (dev && separate) {
+                    for (const u64 a : Aligns) {
+                        const u64 step = (buf + a - 1) & ~(a - 1);
+                        if (mi.size % step == 0 && mi.size / step <= 8) {
+                            for (u64 o = 0; o < mi.size && n < max; o += step) { out[n++] = mi.base_address + o; }
+                            break;
+                        }
+                    }
+                } else if (dev && mi.size >= span) {
+                    for (u32 k = 0; k < nslots && n < max; ++k) { out[n++] = mi.base_address + slot_off[k]; }
                 }
                 const u64 next = mi.base_address + mi.size;
                 if (next <= addr) { break; }
@@ -4837,10 +4855,14 @@ namespace ams::mitm::applet {
             /* One nvmap object per slot (GameSurface::separate, Smash
              * Ultimate): every slot_off is 0, and slot_base + slot_off read
              * ONE buffer for every slot - each picture sent three times, 20
-             * fps of picture in a 60 fps stream. Each slot reads its own
-             * buffer instead: cand[] from FindSlotCandidates, slot_cand[k]
-             * the candidate slot k reads. Until Calibrate has matched them,
-             * slot k reads candidate k (address order), or the match the last
+             * fps of picture in a 60 fps stream. And with no region exactly
+             * the swapchain's size, slot_base is only the smallest region
+             * that holds it - in Moonlight its texture memory, in DuckStation
+             * nothing on screen. Then each slot reads its own buffer
+             * instead: cand[] from FindSlotCandidates, slot_cand[k] the
+             * candidate slot k reads. Until Calibrate has matched them, slot
+             * k reads candidate k (one object per slot) or what slot_base +
+             * slot_off[k] read before (one object), or the match the last
              * session found if its buffers are all still there. */
             static constexpr u32 MaxSlotCand = slotmatch::MaxCand;
             static constexpr u32 SigPoints = 32;
@@ -4858,17 +4880,30 @@ namespace ams::mitm::applet {
                 return slot_base + (valid ? slot_off[slot] : 0);
             }
 
-            /* after SetGeometry, while attached: the per-slot buffers */
-            void PrepareSlots(::ams::svc::Handle dbg, const char *who) {
+            /* after SetGeometry, while attached: the per-slot buffers -
+             * unless slot_base is a region exactly the swapchain's size and
+             * the slots are offsets in it (MK8) */
+            void PrepareSlots(::ams::svc::Handle dbg, u64 slot_base, const char *who) {
                 sep = sep_locked = false;
-                if (!sep_layout) { return; }
-                ncand = FindSlotCandidates(dbg, buf_bytes, cand, MaxSlotCand);
+                u64 span = buf_bytes;
+                for (u32 k = 0; k < nslots; ++k) { if (slot_off[k] + static_cast<u64>(buf_bytes) > span) { span = slot_off[k] + static_cast<u64>(buf_bytes); } }
+                ::ams::svc::MemoryInfo mi = {};
+                ::ams::svc::PageInfo   pi = {};
+                const bool exact = R_SUCCEEDED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, slot_base)) &&
+                                   mi.base_address == slot_base && mi.size == span;
+                if (!sep_layout && exact) { return; }
+                ncand = FindSlotCandidates(dbg, buf_bytes, slot_off, nslots, sep_layout, cand, MaxSlotCand);
                 if (ncand < nslots) {
-                    LogLine("   %s: %u slot(s), each its own buffer, but %u buffer(s) of %u B in the game's memory - every slot reads the same one",
-                            who, nslots, ncand, buf_bytes);
+                    LogLine("   %s: %u slot(s)%s, but %u candidate buffer(s) of %u B in the game's memory - reading from 0x%010llx as before",
+                            who, nslots, sep_layout ? ", each its own buffer" : "", ncand, buf_bytes, static_cast<unsigned long long>(slot_base));
                     return;
                 }
-                for (u32 k = 0; k < nslots; ++k) { slot_cand[k] = static_cast<u8>(k); }
+                for (u32 k = 0; k < nslots; ++k) {
+                    slot_cand[k] = static_cast<u8>(k);
+                    for (u32 c = 0; c < ncand && !sep_layout; ++c) {
+                        if (cand[c] == slot_base + slot_off[k]) { slot_cand[k] = static_cast<u8>(c); break; }
+                    }
+                }
                 bool reused = false;
                 if (g_slot_match.n == nslots && g_slot_match.buf == buf_bytes) {
                     u8 m[8] = {};
@@ -4882,8 +4917,9 @@ namespace ams::mitm::applet {
                 }
                 matcher.Reset(nslots, ncand);
                 sep = true;
-                LogLine("   %s: %u slot(s), each its own nvmap object; %u candidate buffer(s) of %u B from 0x%010llx%s - matching them to slots while streaming",
-                        who, nslots, ncand, buf_bytes, static_cast<unsigned long long>(cand[0]),
+                LogLine("   %s: %u slot(s), %s; %u candidate buffer(s) of %u B from 0x%010llx%s - matching them to slots while streaming",
+                        who, nslots, sep_layout ? "each its own nvmap object" : "no region exactly the swapchain's size",
+                        ncand, buf_bytes, static_cast<unsigned long long>(cand[0]),
                         reused ? " (starting from the last session's match)" : "");
             }
 
@@ -4924,7 +4960,7 @@ namespace ams::mitm::applet {
                     LogLine("%s", line);
                 } else if (matcher.GaveUp()) {
                     sep_locked = true;
-                    LogLine("   swapchain: slots not told apart in %u frame intervals - keeping the first guess", matcher.intervals);
+                    LogLine("   swapchain: slots not told apart in %u samples (%u with a change) - keeping the first guess", matcher.samples, matcher.intervals);
                 }
             }
 
@@ -5547,7 +5583,7 @@ namespace ams::mitm::applet {
             } else {
                 NvfSession s;
                 if (s.SetGeometry(geo, "shot")) {
-                    s.PrepareSlots(dbg, "shot");
+                    s.PrepareSlots(dbg, slot_base, "shot");
                     s.seen = g_queue_count.load(std::memory_order_acquire) - 1;   /* the latest present counts as new */
                     u64 rn = 0; u32 sg = 0;
                     if (s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) {
@@ -5634,7 +5670,7 @@ namespace ams::mitm::applet {
             ON_SCOPE_EXIT { ClockWatchStop(); };
             NvfSession s;
             if (geo != nullptr && !s.SetGeometry(*geo, "nvstream")) { VicStage("ns:geometry"); return StreamEnd::Failed; }
-            s.PrepareSlots(dbg, "nvstream");
+            s.PrepareSlots(dbg, slot_base, "nvstream");
             /* M93: the first frame decides the size. A 1280x720 picture in the
              * corner of the 1920x1080 surface (handheld) streams at 720p; full
              * 1920x1080 content (docked, or a game told it is docked) streams
