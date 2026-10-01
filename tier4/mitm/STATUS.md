@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.0** (network streaming, docked play - Runs AN-AP). Released: v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.1** (the keyboard, finished frames, Minecraft and Smash). Released: v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,59 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.7.1: the keyboard, finished frames, games with one buffer per slot ***
+
+GBAtemp reports (kingboxnt: the keyboard; SooraMaru: corrupted frames) and
+what testing them turned up.
+
+- **The on-screen keyboard (swkbd) crashed with the module on** - in every
+  homebrew app and in retail games (Minecraft). Bisected over 7 boots: not the
+  capture setup, not the debugger, not our binder handling - routing the
+  binder session through us at all was enough. Process logging showed swkbd
+  (0100000000001008) starting and aborting at once, 2001-0132 LimitReached:
+  the module is `application_type 2` (Applet resource-limit group, for the
+  capture memory - the System group had ~14 MB), and pm gives the Applet group
+  **6 sessions for every applet together** (pm_spec.cpp). svcCreateSession
+  charges the caller; each wrapped sub-object (display service, binder) cost
+  one, so a wrapped app took 2 and swkbd had none. Fix: a hook in
+  `patch_libstrat.py` (`g_tier4_create_session`) so out-object session pairs
+  come through sm - we register `sftap:s`, sm connects to it (charged to sm,
+  System group), we accept. The first pair of a boot came back broken (the
+  first app to open the display died in nn::vi, every later one was fine) -
+  a throwaway pair is made at startup.
+- **Dot-grid frames in fades (SooraMaru, Pokemon SwSh):** Pokemon queues each
+  frame ~20 ms before its GPU work ends; the fence wait gave up at 30 ms (136
+  timeouts in 15 min, max 68 ms, later 229 ms) and read a half-drawn frame.
+  Now 250 ms. And a read is redone when the next present's fence was reached
+  before it ended (the slot may be the game's again) - 2-slot games mostly.
+- **Games with one buffer object per slot** (Minecraft, Smash): the slot
+  table was reset at every slot (new nvmap id) and the lookup searched for one
+  region of one slot's size - Minecraft streamed a mix of screens. Now each
+  slot's nvmap id is kept; such a set is located by **calibration**: after
+  every present's fence, 64 x 512 B of every region of a slot's size are
+  hashed; a slot's buffer changes in the windows ending with its present and
+  holds still in the next, a render target changes every frame. Kept per
+  (pid, buffer set) for restarts and screenshots. Guessing by address failed
+  (an evenly spaced run at Minecraft's 1080p was not its slots). The stream
+  restarts when the game makes new buffers (Minecraft loading a world).
+- **Device address 0** is a real address the channels hand out; every check
+  treats 0 as "not pinned" (it hangs the VIC). One boot gave it to cfg: no
+  stream at all. A guard page mapped first takes it, and any later mapping
+  that lands at 0 gets a fresh guard page and is mapped again.
+- **Busy engines are not dead ones:** an NVENC job that misses 1 s gets 3 s
+  more and the stream restarts if it finished (grc shared NVENC in
+  Minecraft); a stream's VIC job may take ~0.5 s (the compositor shares the
+  VIC when ReverseNX renders 1080p in handheld: up to 450 ms).
+- **720p/1080p switch:** to 1080p at once, to 720p only after 4 checks in a
+  row 0.5 s apart - a docked game's black menu transition looks like a 720p
+  picture (Smash in ReverseNX's docked mode zoomed in at menu changes).
+- Also: the vi server on 4 threads (a forwarded call that blocks can no
+  longer stall every other session, and sm can ask our mitm while one thread
+  waits on sm), 16 sessions, the indirect-layer probe removed, `homebrew = 0`
+  (config only) leaves vi:m alone. Builds: the patch script rewrote the header
+  every build (a full libstratosphere rebuild, single-threaded: 30+ minutes);
+  now only on a change, and `-j$(nproc)`.
 
 ## *** v0.7.0: network streaming - play docked (Runs AN, AO, AP) ***
 

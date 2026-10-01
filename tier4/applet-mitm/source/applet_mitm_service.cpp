@@ -157,16 +157,27 @@ namespace ams::mitm::applet {
          * relaxed stores. The worker thread polls these to know when a new frame
          * has been presented and which slot holds it. */
         if (code == 7) {
+            /* v0.7.1: the vi server runs on several threads now - one present's
+             * bookkeeping at a time */
+            static constinit os::SdkMutex s_present_lock;
+            std::scoped_lock present_lk(s_present_lock);
             const s32 qs = ParseQueueBufferSlot(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize());
             u32 fn = 0, xf = 0;
             u64 fv[4] = {};
             s32 crop[4] = {};
             const bool have_fence = ParseQueueBufferFence(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize(), std::addressof(fn), fv, std::addressof(xf), crop);
             if (!have_fence) { xf = 0; }
-            /* v0.4.1: say when a game's transform changes (rare: once per swapchain) */
+            /* v0.4.1: say when a game's transform changes (rare: once per swapchain).
+             * v0.7.1: and its crop - does a docked/handheld switch show in it?
+             * (at most 60 lines a boot) */
             {
                 static constinit u32 s_last_xf = ~0u;
-                if (xf != s_last_xf) {
+                static constinit s32 s_last_crop[4] = { -1, -1, -1, -1 };
+                static constinit u32 s_crop_logs = 0;
+                const bool crop_changed = crop[0] != s_last_crop[0] || crop[1] != s_last_crop[1] || crop[2] != s_last_crop[2] || crop[3] != s_last_crop[3];
+                if ((xf != s_last_xf || crop_changed) && s_crop_logs < 60) {
+                    ++s_crop_logs;
+                    for (u32 k = 0; k < 4; ++k) { s_last_crop[k] = crop[k]; }
                     s_last_xf = xf;
                     LogLine("   present transform 0x%x%s%s%s, crop (%d,%d)-(%d,%d)", xf,
                             (xf & 1) ? " flip-H" : "", (xf & 2) ? " flip-V" : "", (xf & 4) ? " rot-90 (not handled)" : "",
@@ -251,42 +262,8 @@ namespace ams::mitm::applet {
 
         LogMark("GetRelayService:wrapped");
 
-        /* ---- indirect-layer recon (one-shot, read-only) --------------------
-         * Reading the game's swapchain is structurally impossible for us, and
-         * the display-controller nodes only PROGRAM the display - there is no
-         * readback ioctl anywhere in nvdrv. But vi has the mechanism Nintendo
-         * actually uses for "one process reads another's layer": indirect
-         * layers. GetIndirectLayerImageMap (2450) writes into a type-0x46
-         * buffer, i.e. memory WE supply - which is precisely what our process
-         * isolation requires.
-         *
-         * Two cheap forward calls decide whether that route is open from here:
-         *   2460 GetIndirectLayerImageRequiredMemoryInfo - no PID descriptor,
-         *        just two s64 in / two s64 out. A sane size for 1280x720 means
-         *        the indirect-layer machinery answers us at all.
-         *   102  GetManagerDisplayService - gates CreateIndirectLayer (2050),
-         *        which is how a consumer handle gets made without AM. */
-        {
-            static std::atomic<bool> probed{false};
-            bool ex = false;
-            if (probed.compare_exchange_strong(ex, true)) {
-                LogMark("indirect:probe");
-                struct { s64 w; s64 h; } in  = { 1280, 720 };
-                struct { s64 size; s64 align; } out = {};
-                const Result r1 = serviceDispatchInOut(m_forward_service.get(), 2460, in, out);
-                LogLine("   2460 RequiredMemoryInfo(1280x720) rc=0x%x -> size=%lld align=%lld",
-                        r1.GetValue(), static_cast<long long>(out.size), static_cast<long long>(out.align));
-
-                ::Service mgr = {};
-                const Result r2 = serviceDispatch(m_forward_service.get(), 102,
-                    .out_num_objects = 1, .out_objects = std::addressof(mgr));
-                LogLine("   102 GetManagerDisplayService rc=0x%x -> %s",
-                        r2.GetValue(), R_SUCCEEDED(r2) ? "GOT IT (CreateIndirectLayer reachable)"
-                                                       : "denied on a vi:u session");
-                if (R_SUCCEEDED(r2)) { serviceClose(std::addressof(mgr)); }
-                LogMark("indirect:probe_done");
-            }
-        }
+        /* (v0.7.1: the M-era indirect-layer probe that ran here once per boot,
+         * on the first app's display service, is gone - research, not release) */
 
         R_SUCCEED();
     }
@@ -304,6 +281,49 @@ namespace ams::mitm::applet {
             LogLine("   rc=0x%x", rc.GetValue());
         }
         R_RETURN(rc);
+    }
+
+    /* ---- v0.7.1: session pairs through sm ------------------------------
+     * Every wrapped sub-object (display service, binder) needs a session
+     * pair, and svcCreateSession charges the calling process's resource
+     * limit. Ours is the Applet group's (application_type 2, kept for the
+     * capture memory), whose session limit is 6 for every applet together
+     * (Atmosphere pm_spec.cpp). Two per wrapped app left the keyboard applet
+     * none: it aborted with 2001-0132 (LimitReached) - kingboxnt's report,
+     * and Minecraft's keyboard too. A connection to a port is charged to the
+     * process that connects, and through sm that is sm (System group). So:
+     * our own port, registered with sm, and sm connects to it for us. */
+    namespace {
+        constinit os::SdkMutex g_sess_lock;
+        constinit os::NativeHandle g_sess_port = os::InvalidNativeHandle;
+        constinit u32 g_sess_made = 0, g_sess_fail = 0;
+        constexpr sm::ServiceName SessServiceName = sm::ServiceName::Encode("sftap:s");
+    }
+
+    Result CreateSessionViaSm(os::NativeHandle *out_server, os::NativeHandle *out_client) {
+        std::scoped_lock lk(g_sess_lock);
+        if (g_sess_port == os::InvalidNativeHandle) {
+            if (const Result rc = sm::RegisterService(std::addressof(g_sess_port), SessServiceName, 64, false); R_FAILED(rc)) {
+                g_sess_port = os::InvalidNativeHandle;
+                if (g_sess_fail++ < 4) { LogLine("sessions: could not register sftap:s rc=0x%x - creating them ourselves", rc.GetValue()); }
+                R_RETURN(rc);
+            }
+        }
+        os::NativeHandle client = os::InvalidNativeHandle;
+        if (const Result rc = sm::GetServiceHandle(std::addressof(client), SessServiceName); R_FAILED(rc)) {
+            if (g_sess_fail++ < 4) { LogLine("sessions: sm connect failed rc=0x%x - creating one ourselves", rc.GetValue()); }
+            R_RETURN(rc);
+        }
+        ::ams::svc::Handle server = ::ams::svc::InvalidHandle;
+        if (const Result rc = ::ams::svc::AcceptSession(std::addressof(server), g_sess_port); R_FAILED(rc)) {
+            ::ams::svc::CloseHandle(client);
+            if (g_sess_fail++ < 4) { LogLine("sessions: accept failed rc=0x%x - creating one ourselves", rc.GetValue()); }
+            R_RETURN(rc);
+        }
+        if (g_sess_made++ == 0) { LogLine("sessions: wrapped objects get their sessions through sm (sftap:s), not from the Applet group's 6"); }
+        *out_server = server;
+        *out_client = client;
+        R_SUCCEED();
     }
 
     /* ---- vi:u root ---------------------------------------------------- */

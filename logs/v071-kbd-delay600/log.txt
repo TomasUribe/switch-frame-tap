@@ -1,0 +1,94 @@
+[    10.796] grc IPC interceptor: off
+[    10.813] applet-mitm v0.7.0: up (grc IPC interceptor off)
+[    10.820] install type from GetEntryType(sdmc:/applet-mitm.armed) rc=0x202
+[    10.827] release install, sdmc:/config/switch-frame-tap/config.ini ->: vic exec dbg usb live nvqp=20 nvgop=60 wait=600 shot shotkey=0 audio
+[    10.835] sftap: stream on at boot (stream-off: rc=0x202)
+[    10.842] sftap: 0 app(s) excluded (never attached)
+[    10.857] ARMED FLAGS: vic=1 exec=1 dbg=1 dump=0 usb=1 bench=0 nvenc=0 jpg=0 sweep=0 mtx=0 stream=0 grc=0 grcscan=0 clk=0 jpgdec=0 nvgrc=0 csc=0 nvframe=0(120) nvstream=1(3600, qp 20, gop 60) nvp=0(30) live=1 nv1080=0(120) wait=600
+[    10.867] arm file (sdmc:/applet-mitm.armed): vic=ARMED exec=PhaseB-full-blit
+[    10.886] ---- physical memory pools (svcGetSystemInfo) ----
+[    10.906]    pool 0 Application  total= 3363840 KB  used=       0 KB  free=  3363840 KB   rc=0/0
+[    10.921]    pool 1 Applet       total=  512000 KB  used=    4496 KB  free=   507504 KB   rc=0/0
+[    10.937]    pool 2 System       total=  237728 KB  used=  221148 KB  free=    16580 KB   rc=0/0
+[    10.971]    pool 3 SystemUnsafe total=   45184 KB  used=   43180 KB  free=     2004 KB   rc=0/0
+[    10.985]    THIS PROCESS (pool_partition 1 = Applet, at boot): total=511936 KB used=4432 KB free=507504 KB
+[    10.995]    for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB
+[    11.020] ---- USB device enumeration (usb:ds) ----
+[    11.044]    usbDsInitialize rc=0x0 
+[    11.055]    string descriptors rc=0x0
+[    11.064]    device descriptors (Full+High+Super) rc=0x0
+[    11.084]    usbDsSetBinaryObjectStore rc=0x0
+[    11.102]    usbDsRegisterInterface rc=0x0
+[    11.141]    configuration descriptors (Full+High+Super) rc=0x0
+[    11.157]    endpoints IN=0x81 OUT=0x01 rc=0x0
+[    11.166]    EnableInterface rc=0x0
+[    11.310]    usbDsEnable rc=0x0
+[    11.840]    usb state high-water = 5 (Configured)
+[    11.853]    *** NEGOTIATED SPEED = 3 (High(480Mbps)) *** rc=0x0
+[    11.858]    not SuperSpeed - check the CABLE is USB 3.0, and that the PC port is blue/SS
+[    11.862]    *** HOST CONFIGURED US - we own the bus, expect 1209:5f1e in lsusb ***
+[    11.866] probe fires at t=600 s; frame dump to SD: off
+[    11.869] debug-capture route: ARMED   pmdmntInitialize rc=0x0
+[    11.889] -> main:heartbeat_started
+[    11.894] sftap: control service rc=0x0
+[    11.902] VIC worker started (execute=PhaseB-full-blit)
+[    11.909] app watch: application pid 0, program 0000000000000000
+[    14.906] -> hb:1 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    17.963] -> hb:2 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    21.392] -> hb:3 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    22.102] registered mitm server for vi:u
+[    22.126] audio: grc:d open
+[    22.151] shot: input up (read-only) - hid rc=0x0, time ok
+[    22.169] registered mitm server for vi:m (homebrew applications only)
+[    22.186] audio: grc:d Begin rc=0x0
+[    22.207] vi server: 4 threads, 16 sessions
+[    22.258] -> main:LoopProcess
+[    24.472] -> hb:4 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    27.505] -> hb:5 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    30.342] app watch: application pid 141, program 05446530aca7e000
+[    30.535] -> hb:6 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    30.827] OnNeedsToAccept port=1 program=05446530aca7e000
+[    30.840]   AcceptMitmImpl (vi:m) rc=0x0
+[    30.884] audio: game audio flowing (4096 B chunks)
+[    30.897] -> GetDisplayService:enter
+[    30.912]    program=05446530aca7e000 cmd 2 mode=1 (vi:m - a homebrew application)
+[    30.941] -> GetDisplayService:done
+[    30.977] -> GetRelayService:enter
+[    31.001] -> GetRelayService:wrapped
+[    31.028] -> OpenDisplay:enter
+[    31.036]    OpenDisplay "Default" -> display_id=15
+[    31.110] *** binder txn #1  program=05446530aca7e000  session=0  code=10(connect) x1  flags=0x0  in=108 out=1024
+[    31.135] -> binder:first_txn
+[    31.174] *** binder txn #2  program=05446530aca7e000  session=0  code=14(setPreallocatedBuffer) x1  flags=0x0  in=476 out=1024
+[    31.199] -> binder:parse_preallocated
+[    31.206] === setPreallocatedBuffer#1 slot 0 NvGraphicBuffer ===
+[    31.212]     nvmap_id=920  stride=1280 px  total_size=3932160 B  num_planes=1  usage=0xb00  format=0x1
+[    31.219]     plane[0] 1280x720  pitch=5120 B  offset=0xf0000  size=3932160 B
+[    31.237]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    31.244]    captured slot 0: nvmap=920 1280x720 stride_px=1280 blk_h_log2=4 off=0xf0000 pixfmt=33 (slots=1)
+[    31.251] *** binder txn #3  program=05446530aca7e000  session=0  code=14(setPreallocatedBuffer) x2  flags=0x0  in=476 out=1024
+[    31.274] -> binder:parse_preallocated
+[    31.280] === setPreallocatedBuffer#2 slot 1 NvGraphicBuffer ===
+[    31.287]     nvmap_id=920  stride=1280 px  total_size=3932160 B  num_planes=1  usage=0xb00  format=0x1
+[    31.294]     plane[0] 1280x720  pitch=5120 B  offset=0x4b0000  size=3932160 B
+[    31.300]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    31.307]    captured slot 1: nvmap=920 1280x720 stride_px=1280 blk_h_log2=4 off=0x4b0000 pixfmt=33 (slots=2)
+[    31.863] *** binder txn #4  program=05446530aca7e000  session=0  code=3(dequeueBuffer) x1  flags=0x0  in=116 out=1024
+[    31.873] *** binder txn #5  program=05446530aca7e000  session=0  code=1(requestBuffer) x1  flags=0x0  in=100 out=1024
+[    31.915] *** binder txn #6  program=05446530aca7e000  session=0  code=7(queueBuffer) x1  flags=0x0  in=192 out=1024
+[    31.925]    present transform 0x0, crop (0,0)-(0,0)
+[    31.934] *** binder txn #7  program=05446530aca7e000  session=0  code=3(dequeueBuffer) x2  flags=0x0  in=116 out=1024
+[    31.941] *** binder txn #8  program=05446530aca7e000  session=0  code=1(requestBuffer) x2  flags=0x0  in=100 out=1024
+[    31.973] *** binder txn #9  program=05446530aca7e000  session=0  code=7(queueBuffer) x2  flags=0x0  in=192 out=1024
+[    31.982] *** binder txn #10  program=05446530aca7e000  session=0  code=3(dequeueBuffer) x3  flags=0x0  in=116 out=1024
+[    32.012] *** binder txn #11  program=05446530aca7e000  session=0  code=7(queueBuffer) x3  flags=0x0  in=192 out=1024
+[    33.562] -> hb:7 sess=1 getdisp=1 relay=1 txn=192 vic=waiting
+[    36.591] -> hb:8 sess=1 getdisp=1 relay=1 txn=535 vic=waiting
+[    37.107] *** binder txn #600  program=05446530aca7e000  session=0  code=3(dequeueBuffer) x298  flags=0x0  in=116 out=1024
+[    39.620] -> hb:9 sess=1 getdisp=1 relay=1 txn=806 vic=waiting
+[    42.913] -> hb:10 sess=1 getdisp=1 relay=1 txn=1021 vic=waiting
+[    44.779] *** binder txn #1038  program=05446530aca7e000  session=0  code=11(disconnect) x1  flags=0x0  in=100 out=1024
+[    44.933] app watch: application pid 0, program 0000000000000000
+[    45.982] -> hb:11 sess=1 getdisp=1 relay=1 txn=1038 vic=waiting
+[    48.245] shot: combo 0 pressed
+[    50.168] -> hb:12 sess=1 getdisp=1 relay=1 txn=1038 vic=waiting

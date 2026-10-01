@@ -1,0 +1,59 @@
+[    10.766] grc IPC interceptor: off
+[    10.789] applet-mitm v0.7.0: up (grc IPC interceptor off)
+[    10.800] install type from GetEntryType(sdmc:/applet-mitm.armed) rc=0x202
+[    10.804] release install, sdmc:/config/switch-frame-tap/config.ini ->: vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio nohb
+[    10.808] sftap: stream on at boot (stream-off: rc=0x202)
+[    10.812] sftap: 0 app(s) excluded (never attached)
+[    10.826] ARMED FLAGS: vic=1 exec=1 dbg=1 dump=0 usb=1 bench=0 nvenc=0 jpg=0 sweep=0 mtx=0 stream=0 grc=0 grcscan=0 clk=0 jpgdec=0 nvgrc=0 csc=0 nvframe=0(120) nvstream=1(3600, qp 20, gop 60) nvp=0(30) live=1 nv1080=0(120) wait=20
+[    10.838] arm file (sdmc:/applet-mitm.armed): vic=ARMED exec=PhaseB-full-blit
+[    10.869] ---- physical memory pools (svcGetSystemInfo) ----
+[    10.881]    pool 0 Application  total= 3363840 KB  used=       0 KB  free=  3363840 KB   rc=0/0
+[    10.894]    pool 1 Applet       total=  512000 KB  used=    4368 KB  free=   507632 KB   rc=0/0
+[    10.924]    pool 2 System       total=  237728 KB  used=  221660 KB  free=    16068 KB   rc=0/0
+[    10.932]    pool 3 SystemUnsafe total=   45184 KB  used=   43180 KB  free=     2004 KB   rc=0/0
+[    10.936]    THIS PROCESS (pool_partition 1 = Applet, at boot): total=511936 KB used=4304 KB free=507632 KB
+[    10.952]    for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB
+[    10.961] ---- USB device enumeration (usb:ds) ----
+[    10.976]    usbDsInitialize rc=0x0 
+[    10.992]    string descriptors rc=0x0
+[    11.001]    device descriptors (Full+High+Super) rc=0x0
+[    11.007]    usbDsSetBinaryObjectStore rc=0x0
+[    11.027]    usbDsRegisterInterface rc=0x0
+[    11.100]    configuration descriptors (Full+High+Super) rc=0x0
+[    11.110]    endpoints IN=0x81 OUT=0x01 rc=0x0
+[    11.122]    EnableInterface rc=0x0
+[    11.232]    usbDsEnable rc=0x0
+[    11.746]    usb state high-water = 5 (Configured)
+[    11.756]    *** NEGOTIATED SPEED = 3 (High(480Mbps)) *** rc=0x0
+[    11.780]    not SuperSpeed - check the CABLE is USB 3.0, and that the PC port is blue/SS
+[    11.791]    *** HOST CONFIGURED US - we own the bus, expect 1209:5f1e in lsusb ***
+[    11.802] probe fires at t=20 s; frame dump to SD: off
+[    11.813] debug-capture route: ARMED   pmdmntInitialize rc=0x0
+[    11.836] -> main:heartbeat_started
+[    11.842] sftap: control service rc=0x0
+[    11.848] VIC worker started (execute=PhaseB-full-blit)
+[    11.852] app watch: application pid 0, program 0000000000000000
+[    14.853] -> hb:1 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    17.899] -> hb:2 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    21.356] -> hb:3 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    22.092] registered mitm server for vi:u
+[    22.117] audio: grc:d open
+[    22.143] shot: input up (read-only) - hid rc=0x0, time ok
+[    22.166] vi:m NOT wrapped (homebrew = 0): homebrew apps are not streamed this boot
+[    22.184] audio: grc:d Begin rc=0x0
+[    22.264] -> main:LoopProcess
+[    24.405] -> hb:4 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    27.433] -> hb:5 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    30.459] -> hb:6 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    30.943] app watch: application pid 141, program 05446530aca7e000
+[    31.495] audio: game audio flowing (4096 B chunks)
+[    33.493] -> hb:7 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    36.523] -> hb:8 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    39.551] -> hb:9 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    42.672] -> hb:10 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    45.707] -> hb:11 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    47.074] app watch: application pid 0, program 0000000000000000
+[    48.752] -> hb:12 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    49.427] shot: combo 0 pressed
+[    51.802] -> hb:13 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    54.823] -> hb:14 sess=0 getdisp=0 relay=0 txn=0 vic=waiting

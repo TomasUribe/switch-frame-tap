@@ -461,7 +461,35 @@ namespace ams::mitm::applet {
         /* Pin one nvmap handle into the channel and get its device physical
          * address. Each call is breadcrumbed by the caller so that if this ever
          * takes nvservices down again we know exactly which handle did it. */
-        bool MapCmdBuffer(u32 chan_fd, u32 handle, u32 *out_addr, const char *what, u8 is_compr = 0, u32 req = 0) {
+        ::Result NvmapOwn(u32 fd, void *cpu, u32 size, u8 kind, u32 *out_handle, u32 *out_id, bool cacheable = false);
+
+        /* v0.7.1: device address 0 is a real address the channels hand out
+         * when it is free, and to every check here 0 means "not pinned" (a zero
+         * address hangs the VIC). The guard page mapped at setup only takes it
+         * if it is free then; a later session found it freed and got it for its
+         * slot buffer ("slot pin returned 0"). So whenever a mapping comes back
+         * at 0: unmap it, map a fresh guard page from the unused gap in our
+         * heap (it lands at 0 and stays there, never unmapped), map again. */
+        constinit u32 g_guard_nvmap_fd = 0;
+        constinit u32 g_guard_next = 0x9000;      /* 0x9000..0xF000: the gap between cmd and dst */
+
+        bool MapCmdBuffer(u32 chan_fd, u32 handle, u32 *out_addr, const char *what, u8 is_compr = 0, u32 req = 0);
+
+        bool AbsorbDeviceZero(u32 chan_fd, u32 req) {
+            if (g_guard_nvmap_fd == 0 || g_vic_heap == 0 || g_guard_next >= 0x10000) { return false; }
+            u32 gh = 0, gid = 0;
+            if (R_FAILED(NvmapOwn(g_guard_nvmap_fd, reinterpret_cast<u8 *>(g_vic_heap + g_guard_next), 0x1000, 0, std::addressof(gh), std::addressof(gid), false))) { return false; }
+            g_guard_next += 0x1000;
+            MapCmdBufArgs a = {};
+            a.num_handles  = 1;
+            a.handle_id_in = gh;
+            u32 nverr = 0;
+            const ::Result rc = NvIoctl(chan_fd, req, std::addressof(a), sizeof(a), std::addressof(nverr));
+            LogLine("   guard page mapped at 0x%x (rc=0x%x nverr=%u) - device address 0 is held from now on", a.phys_addr_out, rc, nverr);
+            return R_SUCCEEDED(rc) && nverr == 0 && a.phys_addr_out == 0;
+        }
+
+        bool MapCmdBuffer(u32 chan_fd, u32 handle, u32 *out_addr, const char *what, u8 is_compr, u32 req) {
             MapCmdBufArgs a = {};
             a.num_handles  = 1;
             a.is_compr     = is_compr;
@@ -472,6 +500,22 @@ namespace ams::mitm::applet {
             LogLine("   MAP_CMD_BUFFER(%s handle=%u compr=%u req=0x%08x) rc=0x%x nverr=%u -> phys=0x%x",
                     what, handle, is_compr, req, rc, nverr, a.phys_addr_out);
             if (R_FAILED(rc) || nverr != 0) { return false; }
+            if (a.phys_addr_out == 0 && AbsorbDeviceZero(chan_fd, req)) {
+                /* ours was at 0: move it off */
+                MapCmdBufArgs u = {};
+                u.num_handles  = 1;
+                u.handle_id_in = handle;
+                u32 ue = 0;
+                NvIoctl(chan_fd, NvHostIocChannelUnmapCmdBuf, std::addressof(u), sizeof(u), std::addressof(ue));
+                a = {};
+                a.num_handles  = 1;
+                a.is_compr     = is_compr;
+                a.handle_id_in = handle;
+                nverr = 0;
+                const ::Result rc2 = NvIoctl(chan_fd, req, std::addressof(a), sizeof(a), std::addressof(nverr));
+                LogLine("   MAP_CMD_BUFFER(%s) again -> phys=0x%x (rc=0x%x nverr=%u)", what, a.phys_addr_out, rc2, nverr);
+                if (R_FAILED(rc2) || nverr != 0) { return false; }
+            }
             *out_addr = a.phys_addr_out;
             return true;
         }
@@ -485,7 +529,7 @@ namespace ams::mitm::applet {
         }
 
         /* CREATE + ALLOC(kind, our cpu pages) + GET_ID for a buffer we own. */
-        ::Result NvmapOwn(u32 fd, void *cpu, u32 size, u8 kind, u32 *out_handle, u32 *out_id, bool cacheable = false) {
+        ::Result NvmapOwn(u32 fd, void *cpu, u32 size, u8 kind, u32 *out_handle, u32 *out_id, bool cacheable) {
             u32 nverr = 0;
             struct { u32 size; u32 handle; } cr = { size, 0 };
             ::Result rc = NvIoctl(fd, NvmapIocCreate, std::addressof(cr), sizeof(cr), std::addressof(nverr));
@@ -1079,7 +1123,12 @@ namespace ams::mitm::applet {
                  * semantics, and the elapsed time it reports IS the engine time,
                  * which is the number M59 never actually measured. */
                 if (!completed) {
-                    for (u32 spin = 0; spin < 300 && !completed; ++spin) {
+                    /* v0.7.1: 300 polls (~30-60 ms) were not enough when the
+                     * compositor shares the VIC - Minecraft in ReverseNX's docked
+                     * mode took up to 450 ms - and a miss ended the stream.
+                     * A stream waits up to ~0.5 s; the one-shot probe as before. */
+                    const u32 spins = g_vic_quiet ? 5000 : 300;
+                    for (u32 spin = 0; spin < spins && !completed; ++spin) {
                         os::SleepThread(TimeSpan::FromMicroSeconds(100));
                         r.value = 0;
                         NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e2));
@@ -1303,14 +1352,19 @@ namespace ams::mitm::applet {
         /* M87: a new buffer object is a new game (or a new swapchain): forget
          * the old slots. Before M87 the slot was a running count of these
          * calls, so a relaunched game's buffers landed at slots 6 and 7. */
-        if (static_cast<u32>(gb->nvmap_id) != g_game_surface.nvmap_id) {
+        /* v0.7.1: slot 0 starts a set. A different nvmap id alone no longer
+         * does - Minecraft registers each slot from its own buffer object, and
+         * the old rule restarted the set at every slot. */
+        if (slot_arg == 0 || (slot_arg < 0 && static_cast<u32>(gb->nvmap_id) != g_game_surface.nvmap_id)) {
             for (auto &o : g_game_surface.slot_offset) { o = 0; }
+            for (auto &o : g_game_surface.slot_nvmap) { o = 0; }
             g_game_surface.num_slots = 0;
             ++g_game_surface.generation;
         }
         const u32 slot = (slot_arg >= 0 && slot_arg < 8) ? static_cast<u32>(slot_arg) : g_game_surface.num_slots;
         if (slot < 8) {
             g_game_surface.slot_offset[slot] = p0->offset;
+            g_game_surface.slot_nvmap[slot]  = static_cast<u32>(gb->nvmap_id);
             if (slot + 1 > g_game_surface.num_slots) { g_game_surface.num_slots = slot + 1; }
         }
         g_game_surface.buf_size     = gb->total_size;
@@ -1528,6 +1582,20 @@ namespace ams::mitm::applet {
         }
 
         if (g_vic_execute) {
+            /* v0.7.1: device address 0 is a real address the channel hands out
+             * when it is free - and to every check here it means "not pinned"
+             * (a zero address hangs the VIC). One boot gave it to cfg, and every
+             * job of that boot was refused: no stream at all. A page of our own,
+             * mapped first and never unmapped, takes it instead. It sits in the
+             * unused gap between the command buffer and dst. */
+            {
+                VicStage("vb:8_guard");
+                g_guard_nvmap_fd = nvmap_fd;
+                u32 gh = 0, gid = 0, gaddr = 0;
+                if (R_SUCCEEDED(NvmapOwn(nvmap_fd, reinterpret_cast<u8 *>(g_vic_heap + 0x8000), 0x1000, 0, std::addressof(gh), std::addressof(gid)))) {
+                    MapCmdBuffer(vfd, gh, std::addressof(gaddr), "guard (holds device address 0)");
+                }
+            }
             VicStage("vb:8a_map_cfg");
             if (!MapCmdBuffer(vfd, cfg_handle, std::addressof(cfg_addr), "cfg")) { VicStage("vb:8a_FAILED"); goto close_vic; }
             VicStage("vb:8b_map_dst");
@@ -2376,6 +2444,56 @@ namespace ams::mitm::applet {
             return false;
         }
 
+        /* v0.7.1: where the game's swapchain slots are. One buffer object
+         * holding every slot (MK8 and most games): the device-mapped region of
+         * exactly that size. One object PER slot (Minecraft, Smash): false,
+         * with every region of exactly one slot's size in cand_out - which of
+         * them are the slots, and in what order, only CalibrateSlots can tell.
+         * (Guessing by address read render targets: an evenly spaced run of 3
+         * at Minecraft's 1080p was not its slots - a corrupted stream.) */
+        constexpr u32 MaxCand = 16;
+        bool CalibrateSlots(::ams::svc::Handle dbg, GameSurface &geo, const u64 *cand, u32 nc, u64 *base);
+
+        /* v0.7.1: a calibration holds for the game's buffer set: a restart
+         * (docked/handheld, a late NVENC job) reuses it */
+        struct SlotCache { u64 pid; u32 gen; u64 base; u32 off[8]; bool valid; };
+        constinit SlotCache g_slot_cache = {};
+
+        bool LocateSwapchain(::ams::svc::Handle dbg, GameSurface &geo, u64 *base, const char *who, u64 *cand_out = nullptr, u32 *nc_out = nullptr) {
+            bool separate = false;
+            for (u32 k = 1; k < geo.num_slots && k < 8; ++k) { if (geo.slot_nvmap[k] != geo.slot_nvmap[0]) { separate = true; } }
+            if (!separate) {
+                u64 want = FbSwapSize;
+                if (geo.num_slots != 0 && geo.buf_size != 0) {
+                    u32 top = 0;
+                    for (u32 k = 0; k < geo.num_slots && k < 8; ++k) { if (geo.slot_offset[k] > top) { top = geo.slot_offset[k]; } }
+                    want = static_cast<u64>(top) + geo.buf_size;
+                }
+                return FindSwapchainBySize(dbg, want, base);
+            }
+            u64 cand[MaxCand];
+            u32 nc = 0;
+            u64 addr = 0;
+            for (u32 steps = 0; steps < 4000 && nc < MaxCand; ++steps) {
+                ::ams::svc::MemoryInfo mi = {};
+                ::ams::svc::PageInfo   pi = {};
+                if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr)) || mi.size == 0) { break; }
+                const u32  attr = static_cast<u32>(mi.attribute);
+                const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
+                if (dev && mi.size == geo.buf_size) { cand[nc++] = mi.base_address; }
+                const u64 next = mi.base_address + mi.size;
+                if (next <= addr) { break; }
+                addr = next;
+            }
+            if (cand_out != nullptr && nc_out != nullptr) {
+                for (u32 i = 0; i < nc; ++i) { cand_out[i] = cand[i]; }
+                *nc_out = nc;
+            }
+            LogLine("   %s: %u slot(s), each its own buffer object; %u device-mapped region(s) of exactly %u B", who, geo.num_slots, nc, geo.buf_size);
+            for (u32 i = 0; i < nc; ++i) { LogLine("     region %u at 0x%010llx", i, static_cast<unsigned long long>(cand[i])); }
+            return false;
+        }
+
         [[noreturn]] void RunLive(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr) {
             LogLine("   ==== LIVE MODE (M86): streaming whenever a viewer is reading and a game is running ====");
             /* M98: a release install captures only on the firmware it was
@@ -2467,15 +2585,17 @@ namespace ams::mitm::applet {
                     geo = g_game_surface;
                     if (gen == g_game_surface.generation) { break; }
                 }
+                u64 slot_base = 0;
+                const u64 f0 = armTicksToNs(armGetSystemTick());
+                u64 cand[MaxCand];
+                u32 ncand = 0;
+                bool found = LocateSwapchain(dbg, geo, std::addressof(slot_base), "live", cand, std::addressof(ncand));
                 u64 want = FbSwapSize;
                 if (geo.num_slots != 0 && geo.buf_size != 0) {
                     u32 top = 0;
                     for (u32 k = 0; k < geo.num_slots && k < 8; ++k) { if (geo.slot_offset[k] > top) { top = geo.slot_offset[k]; } }
                     want = static_cast<u64>(top) + geo.buf_size;
                 }
-                u64 slot_base = 0;
-                const u64 f0 = armTicksToNs(armGetSystemTick());
-                const bool found = FindSwapchainBySize(dbg, want, std::addressof(slot_base));
                 /* the attach stopped the game: drain the attach burst, continue */
                 ::ams::svc::DebugEventInfo ev;
                 u32 nev = 0;
@@ -2492,12 +2612,36 @@ namespace ams::mitm::applet {
                     os::SleepThread(TimeSpan::FromSeconds(2));
                     continue;
                 }
-                if (!found) {
+                if (!found && g_slot_cache.valid && g_slot_cache.pid == pid.value && g_slot_cache.gen == geo.generation) {
+                    for (u32 k = 0; k < 8; ++k) { geo.slot_offset[k] = g_slot_cache.off[k]; }
+                    slot_base = g_slot_cache.base;
+                    found = true;
+                    LogLine("   live: this buffer set was calibrated before - reusing it");
+                    DebugPumpStart(dbg);
+                } else if (!found && ncand >= geo.num_slots && geo.num_slots >= 3) {
+                    /* v0.7.1: separate slot buffers the addresses cannot tell
+                     * apart (Minecraft): watch which region changes with which
+                     * present. The game runs meanwhile, so the pump too. */
+                    DebugPumpStart(dbg);
+                    found = CalibrateSlots(dbg, geo, cand, ncand, std::addressof(slot_base));
+                    if (found) {
+                        g_slot_cache.pid = pid.value; g_slot_cache.gen = geo.generation; g_slot_cache.base = slot_base;
+                        for (u32 k = 0; k < 8; ++k) { g_slot_cache.off[k] = geo.slot_offset[k]; }
+                        g_slot_cache.valid = true;
+                    }
+                    if (!found) {
+                        DebugPumpStop();
+                        ::ams::svc::CloseHandle(dbg);
+                        os::SleepThread(TimeSpan::FromSeconds(5));   /* a static screen: try again */
+                        continue;
+                    }
+                } else if (!found) {
                     ::ams::svc::CloseHandle(dbg);
                     skip_pid = pid.value;
                     continue;
+                } else {
+                    DebugPumpStart(dbg);
                 }
-                DebugPumpStart(dbg);
                 g_reconfig_request.store(false, std::memory_order_relaxed);   /* this session starts with the current settings */
                 const StreamEnd end = TryNvencStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true,
                                                      (geo.num_slots != 0 && geo.buf_size != 0) ? std::addressof(geo) : nullptr);
@@ -2510,6 +2654,7 @@ namespace ams::mitm::applet {
                 LogLine("   live[%u]: session ended - %s; detached", sessions, names[static_cast<int>(end)]);
                 if (end == StreamEnd::Failed) { os::SleepThread(TimeSpan::FromSeconds(5)); }
                 else if (end != StreamEnd::Reconfigure && end != StreamEnd::Disabled) { os::SleepThread(TimeSpan::FromSeconds(1)); }
+                else if (end == StreamEnd::Reconfigure) { os::SleepThread(TimeSpan::FromMilliSeconds(300)); }   /* a new buffer set registers slot by slot */
             }
         }
 
@@ -4759,6 +4904,7 @@ namespace ams::mitm::applet {
             u32 present_flip = 0;      /* v0.4.1: its transform: bit 0 flip H, bit 1 flip V */
             /* M88: waits on the present's acquire fence before reading */
             u32 fence_waits = 0, fence_timeouts = 0, fence_unknown = 0;
+            u32 reread = 0;            /* v0.7.1: reads thrown away - the slot may have been reused mid-read */
             u64 fence_wait_sum = 0, fence_wait_max = 0;
             size_t arena_base = NvfArenaBase;
             u32 arena_size = NvfArenaSize;
@@ -4880,6 +5026,14 @@ namespace ams::mitm::applet {
             void *idle_ctx = nullptr;
             u64 last_flush_ns = 0;
 
+            /* v0.7.1: was 30 ms. Pokemon Sword queues each frame ~20 ms
+             * before its GPU work ends (SooraMaru's log: avg 18 ms, max 68,
+             * 136 timeouts in 15 minutes), and a read past the timeout took
+             * a picture the GPU was still drawing - the dot-grid frames in
+             * fades and menu transitions. The GPU finishes in order, so a
+             * longer wait only delays the stream; it never deadlocks it. */
+            static constexpr u64 FenceTimeoutNs = UINT64_C(250000000);
+
             void WaitPresentFence(u32 n, const u64 fence[4]) {
                 if (n == 0 || n > 4) { ++fence_unknown; return; }
                 const u32 cfd = CtrlFd();
@@ -4895,7 +5049,7 @@ namespace ams::mitm::applet {
                         u32 e = 0;
                         if (R_FAILED(NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e))) || e != 0) { break; }
                         if (static_cast<s32>(r.value - want) >= 0) { break; }
-                        if (armTicksToNs(armGetSystemTick()) - t0 > UINT64_C(30000000)) { timed_out = true; break; }
+                        if (armTicksToNs(armGetSystemTick()) - t0 > FenceTimeoutNs) { timed_out = true; break; }
                         if (idle_fn != nullptr && idle_fn(idle_ctx)) { idle_fn = nullptr; continue; }
                         os::SleepThread(TimeSpan::FromMicroSeconds(250));
                     }
@@ -4966,12 +5120,21 @@ namespace ams::mitm::applet {
              * The slot is safe to read: a finished present stays on screen or
              * queued until the one after it is drawn, and its slot can only be
              * drawn into again after the present after THAT. */
+            bool SlotMayBeReused(u32 c) const {
+                PresentSnap next;
+                if (!ReadPresent(c + 1, std::addressof(next))) { return false; }
+                if (FenceState(next.fence_n, next.fence) != 1) { return false; }
+                return nslots <= 2 || g_queue_count.load(std::memory_order_acquire) - c >= nslots - 1;
+            }
+
             bool Capture(::ams::svc::Handle dbg, u64 slot_base, u64 *read_ns, u32 *sig, u32 *dropped = nullptr) {
                 for (u32 spins = 0; g_queue_count.load(std::memory_order_acquire) == seen && spins < 50; ++spins) {
                     os::SleepThread(TimeSpan::FromMilliSeconds(1));
                 }
+                for (u32 retry = 0; ; ) {
                 const u32 qnow = g_queue_count.load(std::memory_order_acquire);
-                if (qnow != seen) {
+                if (qnow == seen) { break; }
+                {
                     const u32 back = qnow - seen;
                     const u32 lo = back > PresentRingSize - 2 ? qnow - (PresentRingSize - 2) : seen;   /* candidates (lo, qnow] */
                     PresentSnap pick = {}, oldest = {};
@@ -4996,8 +5159,22 @@ namespace ams::mitm::applet {
                         present_tick = pick.tick;
                         present_flip = pick.transform & 3;
                         const s32 slot = pick.slot;
-                        return this->ReadSlot(dbg, slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0), read_ns, sig);
+                        if (!this->ReadSlot(dbg, slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0), read_ns, sig)) { return false; }
+                        /* v0.7.1: the slot is the game's again once the present
+                         * after it is on screen - and that needs its fence. If
+                         * it was reached before the read ended (a slow read, a
+                         * double-buffered game), the read may hold some of the
+                         * NEXT picture: take that newer one instead. Triple
+                         * buffering needs two presents queued after ours. */
+                        if (retry < 2 && SlotMayBeReused(pick.count)) {
+                            ++reread;
+                            ++retry;
+                            continue;
+                        }
+                        return true;
                     }
+                }
+                break;
                 }
                 ++pick_legacy;
                 /* M89: slot and fence as ONE snapshot, taken before the wait.
@@ -5089,21 +5266,41 @@ namespace ams::mitm::applet {
                 armDCacheFlush(x.a + NvfOffSetup + (off & ~0x3Fu), 0x40);
             }
 
-            void Stall(const char *who, const char *what) {
+            /* true: the job finished after all - the engine is not wedged */
+            bool Stall(const char *who, const char *what) {
+                LogLine("   %s: %s: no status from our job in 1 s.", who, what);
+                u32 now = 0;
+                /* v0.7.1: late is not wedged. In Minecraft our job waited behind
+                 * someone else's (grc's recorder, most likely: the syncpoint went
+                 * 64 past our fence with nothing more of ours submitted) and was
+                 * done within a second - but this used to end streaming for the
+                 * whole boot. Give it 3 s more; if the fence is reached the job
+                 * is over, the channel can close normally, and the next session
+                 * starts afresh. */
+                if (const u32 cfd = CtrlFd(); cfd != 0) {
+                    const u64 w0 = armTicksToNs(armGetSystemTick());
+                    for (;;) {
+                        struct { u32 id; u32 value; } r = { x.esyncpt, 0 };
+                        u32 e = 0;
+                        NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e));
+                        now = r.value;
+                        if (e == 0 && static_cast<s32>(now - g_nvf_last_fence) >= 0) {
+                            LogLine("   %s: the job finished %llu ms later (syncpt %u now %u, fence %u) - NVENC was busy, not wedged; the stream restarts",
+                                    who, static_cast<unsigned long long>((armTicksToNs(armGetSystemTick()) - w0) / 1000000), x.esyncpt, now, g_nvf_last_fence);
+                            return true;
+                        }
+                        if (armTicksToNs(armGetSystemTick()) - w0 > UINT64_C(3000000000)) { break; }
+                        os::SleepThread(TimeSpan::FromMilliSeconds(10));
+                    }
+                }
                 g_engine_wedged = true;
                 keep_open = true;
-                LogLine("   %s: %s: no status from our job in 1 s. Leaving the NVENC channel OPEN (M74).", who, what);
-                u32 now = 0;
-                if (const u32 cfd = CtrlFd(); cfd != 0) {
-                    struct { u32 id; u32 value; } r = { x.esyncpt, 0 };
-                    u32 e = 0;
-                    NvIoctl(cfd, NvHostIocCtrlSyncptRead, std::addressof(r), sizeof(r), std::addressof(e));
-                    now = r.value;
-                }
+                LogLine("   %s: still not done after 3 s more. Leaving the NVENC channel OPEN (M74).", who);
                 LogLine("   %s: syncpt %u now %u, fence %u %s; status picture index %#x %s", who, x.esyncpt, now,
                         g_nvf_last_fence, g_nvf_last_fence_done ? "REACHED" : "not reached",
                         g_nvf_last_pic, g_nvf_last_ours ? "(ours)" : "(not ours - the engine never wrote its status)");
                 LogLine("   No further engine work this boot.");
+                return false;
             }
 
             /* the clock, re-ensured: before the first submit, and in a long run
@@ -5114,6 +5311,110 @@ namespace ams::mitm::applet {
                 return ensured != 0 && ClockRateOf(PcvModule_NVENC, hz) && *hz != 0;
             }
         };
+
+        /* v0.7.1: which device-mapped region is which slot, for a game whose
+         * slots are separate buffer objects and whose addresses do not say
+         * (Minecraft: 3 slots, 4 regions of one slot's size). After each
+         * present's fence, a few KB of every candidate are hashed. A slot's
+         * buffer changes in the window(s) that end with its own present - and
+         * with the one before, while the GPU already draws into it - and then
+         * holds still while the next present is shown. A render target of the
+         * same size changes every frame, and a spare one never. So a candidate
+         * is slot s when it changes in windows ending with s and is still in
+         * the window ending with the present after s. */
+        bool CalibrateSlots(::ams::svc::Handle dbg, GameSurface &geo, const u64 *cand, u32 nc, u64 *base) {
+            const u32 ns = geo.num_slots < 8 ? geo.num_slots : 8;
+            /* 64 pieces of 512 B, spread over the whole buffer: 8 x 1 KB caught
+             * Smash's slots in only 13-40 % of their frames (a still corner) */
+            constexpr u32 Pieces = 64, PieceBytes = 512;
+            static u8 piece[PieceBytes];
+            u32 prev_h[MaxCand] = {}, chg[MaxCand][8] = {}, win[8] = {}, succ[8][8] = {};
+            bool have_prev = false;
+            s32 prev_slot = -1;
+            u32 seen = g_queue_count.load(std::memory_order_acquire);
+            const u64 t0 = armTicksToNs(armGetSystemTick());
+            u32 windows = 0;
+            while (windows < 150 && armTicksToNs(armGetSystemTick()) - t0 < UINT64_C(6000000000)) {
+                u32 waited = 0;
+                while (g_queue_count.load(std::memory_order_acquire) == seen && waited < 200) { os::SleepThread(TimeSpan::FromMilliSeconds(1)); ++waited; }
+                const u32 c = g_queue_count.load(std::memory_order_acquire);
+                if (c == seen) { continue; }
+                NvfSession::PresentSnap p;
+                const bool clean = c - seen == 1;
+                seen = c;
+                if (!NvfSession::ReadPresent(c, std::addressof(p)) || p.slot < 0 || static_cast<u32>(p.slot) >= ns) { have_prev = false; continue; }
+                for (u32 w = 0; w < 100 && NvfSession::FenceState(p.fence_n, p.fence) == 0; ++w) { os::SleepThread(TimeSpan::FromMicroSeconds(500)); }
+                u32 h[MaxCand] = {};
+                bool read_ok = true;
+                for (u32 k = 0; k < nc && read_ok; ++k) {
+                    u32 hk = 2166136261u;
+                    for (u32 i = 0; i < Pieces && read_ok; ++i) {
+                        const u64 off = (static_cast<u64>(geo.buf_size) / Pieces) * i + static_cast<u64>(geo.buf_size) / (2 * Pieces);
+                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(piece), dbg, cand[k] + (off & ~UINT64_C(0x1FF)), PieceBytes))) { read_ok = false; break; }
+                        for (u32 b = 0; b < PieceBytes; b += 4) { hk = (hk ^ (piece[b] | (piece[b + 1] << 8) | (piece[b + 2] << 16) | (static_cast<u32>(piece[b + 3]) << 24))) * 16777619u; }
+                    }
+                    h[k] = hk;
+                }
+                if (!read_ok) { return false; }   /* the game is gone */
+                /* a window counts only when no present was missed */
+                if (have_prev && clean) {
+                    ++windows;
+                    ++win[p.slot];
+                    for (u32 k = 0; k < nc; ++k) { if (h[k] != prev_h[k]) { ++chg[k][p.slot]; } }
+                    if (prev_slot >= 0) { ++succ[prev_slot][p.slot]; }
+                }
+                for (u32 k = 0; k < nc; ++k) { prev_h[k] = h[k]; }
+                have_prev = true;
+                prev_slot = p.slot;
+            }
+            /* the present that usually follows each slot */
+            u32 next[8];
+            for (u32 a = 0; a < ns; ++a) {
+                next[a] = a;
+                u32 best = 0;
+                for (u32 b = 0; b < ns; ++b) { if (succ[a][b] > best) { best = succ[a][b]; next[a] = b; } }
+            }
+            s32 slot_of[MaxCand];
+            u32 owner_count[8] = {};
+            for (u32 k = 0; k < nc; ++k) {
+                slot_of[k] = -1;
+                u32 m = 0;
+                for (u32 sl = 0; sl < ns; ++sl) { if (win[sl] != 0) { const u32 f = chg[k][sl] * 100 / win[sl]; if (f > m) { m = f; } } }
+                if (m < 5) { continue; }   /* (nearly) never changes */
+                u32 hits = 0;
+                for (u32 sl = 0; sl < ns; ++sl) {
+                    if (win[sl] < 5 || win[next[sl]] < 5 || next[sl] == sl) { continue; }
+                    const u32 f  = chg[k][sl] * 100 / win[sl];
+                    const u32 fn = chg[k][next[sl]] * 100 / win[next[sl]];
+                    if (chg[k][sl] >= 4 && f * 10 >= m * 6 && fn * 10 <= m * 3) { slot_of[k] = static_cast<s32>(sl); ++hits; }
+                }
+                if (hits != 1) { slot_of[k] = -1; }
+                else { ++owner_count[slot_of[k]]; }
+            }
+            LogLine("   calibrate: %u windows in %llu ms (per slot %u/%u/%u), successor %u->%u %u->%u %u->%u", windows,
+                    static_cast<unsigned long long>((armTicksToNs(armGetSystemTick()) - t0) / 1000000), win[0], win[1], win[2],
+                    0, next[0], 1, next[1], 2, next[2]);
+            for (u32 k = 0; k < nc; ++k) {
+                LogLine("     region %u at 0x%010llx changed %u%%/%u%%/%u%% of windows ending with slot 0/1/2 -> %s%d", k,
+                        static_cast<unsigned long long>(cand[k]),
+                        win[0] ? chg[k][0] * 100 / win[0] : 0, win[1] ? chg[k][1] * 100 / win[1] : 0, win[2] ? chg[k][2] * 100 / win[2] : 0,
+                        slot_of[k] >= 0 ? "slot " : "not a slot ", slot_of[k]);
+            }
+            u64 addr[8] = {};
+            for (u32 sl = 0; sl < ns; ++sl) {
+                if (owner_count[sl] != 1) { LogLine("   calibrate: slot %u has %u candidate region(s) - not streaming yet", sl, owner_count[sl]); return false; }
+                for (u32 k = 0; k < nc; ++k) { if (slot_of[k] == static_cast<s32>(sl)) { addr[sl] = cand[k]; } }
+            }
+            u64 b0 = addr[0];
+            for (u32 sl = 1; sl < ns; ++sl) { if (addr[sl] < b0) { b0 = addr[sl]; } }
+            for (u32 sl = 0; sl < ns; ++sl) {
+                if (addr[sl] - b0 > UINT32_MAX) { LogLine("   calibrate: slots too far apart"); return false; }
+                geo.slot_offset[sl] = static_cast<u32>(addr[sl] - b0);
+            }
+            *base = b0;
+            LogLine("   calibrate: slots found - streaming");
+            return true;
+        }
 
         /* M84: a read fails for one expected reason - the game was closed */
         const char *SlotReadFailure() {
@@ -5372,13 +5673,17 @@ namespace ams::mitm::applet {
                 if (gen == g_game_surface.generation) { break; }
             }
             if (geo.num_slots == 0 || geo.buf_size == 0) { ++g_shot_fail; LogLine("shot: this game's swapchain has not been seen"); return false; }
-            u32 top = 0;
-            for (u32 k = 0; k < geo.num_slots && k < 8; ++k) { if (geo.slot_offset[k] > top) { top = geo.slot_offset[k]; } }
-            const u64 want = static_cast<u64>(top) + geo.buf_size;
             ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
             if (R_FAILED(::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value))) { ++g_shot_fail; LogLine("shot: could not attach to the game"); return false; }
             u64 slot_base = 0;
-            const bool found = FindSwapchainBySize(dbg, want, std::addressof(slot_base));
+            bool found = LocateSwapchain(dbg, geo, std::addressof(slot_base), "shot");
+            /* v0.7.1: separate slot buffers (Minecraft, Smash) are only known
+             * from a stream's calibration of this buffer set */
+            if (!found && g_slot_cache.valid && g_slot_cache.pid == pid.value && g_slot_cache.gen == geo.generation) {
+                for (u32 k = 0; k < 8; ++k) { geo.slot_offset[k] = g_slot_cache.off[k]; }
+                slot_base = g_slot_cache.base;
+                found = true;
+            }
             ::ams::svc::DebugEventInfo ev;
             for (u32 nev = 0; nev < 256 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg)); ++nev) { }
             static_cast<void>(::ams::svc::ContinueDebugEvent(dbg, ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll, nullptr, 0));
@@ -5578,6 +5883,7 @@ namespace ams::mitm::applet {
             ON_SCOPE_EXIT { g_audio_active.store(false, std::memory_order_relaxed); };
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
             bool pending = false, stalled = false, need_idr = true;
+            u32 small_streak = 0;     /* v0.7.1: checks in a row that saw a 720p picture */
             /* v0.6: the experiment's window (one variant) */
             u64 ab_bytes_p = 0, ab_bytes_i = 0, ab_intra = 0, ab_inter = 0, ab_qp = 0, ab_t0 = armTicksToNs(armGetSystemTick());
             u32 ab_np = 0, ab_ni = 0, ab_frames = 0, ab_window = 0;
@@ -5627,7 +5933,11 @@ namespace ams::mitm::applet {
                 nvenc_pic_stat_s st = {};
                 u64 en = 0;
                 const int r = NvfWaitDone(s.x, f.pic, f.fence, f.t_submit, std::addressof(st), std::addressof(en));
-                if (r == 2) { g_vic_quiet = false; s.Stall("nvstream", f.is_idr ? "stream (IDR)" : "stream (P)"); stalled = true; why = "NVENC stalled"; end = StreamEnd::EngineStall; return true; }
+                if (r == 2) {
+                    g_vic_quiet = false;
+                    if (s.Stall("nvstream", f.is_idr ? "stream (IDR)" : "stream (P)")) { why = "NVENC was late - restarting"; end = StreamEnd::Failed; return true; }
+                    stalled = true; why = "NVENC stalled"; end = StreamEnd::EngineStall; return true;
+                }
                 const u64 t3 = armTicksToNs(armGetSystemTick());
                 const u64 enc_wait = t3 - w0;       /* what the encode cost us beyond the overlap */
                 const u32 bytes = st.total_bit_count / 8;
@@ -5773,6 +6083,9 @@ namespace ams::mitm::applet {
                 if (live && !g_stream_enabled.load(std::memory_order_relaxed)) { why = "turned off from the overlay"; end = StreamEnd::Disabled; break; }
                 if (live && g_reconfig_request.exchange(false, std::memory_order_relaxed)) { why = "new settings from the manager app"; end = StreamEnd::Reconfigure; break; }
                 if (live && g_app_excluded.load(std::memory_order_relaxed)) { why = "this app was excluded"; end = StreamEnd::Disabled; break; }
+                /* v0.7.1: the game made new frame buffers (Minecraft loading a
+                 * world): the ones we read are gone - start over on the new set */
+                if (live && geo != nullptr && g_game_surface.generation != geo->generation) { why = "the game made new frame buffers"; end = StreamEnd::Reconfigure; break; }
                 /* v0.4 webcam: a new commit starts from an IDR - or restarts the
                  * stream at the new size; a dropped frame breaks the P chain */
                 if (uvc) {
@@ -5889,11 +6202,19 @@ namespace ams::mitm::applet {
                 /* M93: every 120 frames in live mode, has the game switched between
                  * a 720p and a 1080p picture (docked/undocked, ReverseNX)? A
                  * handful of 4-byte reads outside the 720p corner, not a frame. */
-                if (live && s.mk8_layout && (i + 1) % 120 == 0) {
+                /* v0.7.1: every 30 frames, and to 720p only after 4 such checks in
+                 * a row. A 720p picture can never have anything outside the
+                 * corner, so 1080p is certain at once - but a docked game's
+                 * black menu transition looks just like a 720p picture, and
+                 * Smash in ReverseNX's docked mode flipped to the zoomed-in
+                 * corner for a few seconds at every menu change. */
+                if (live && s.mk8_layout && (i + 1) % 30 == 0) {
                     const s32 sl = g_queue_slot.load(std::memory_order_relaxed);
                     const u64 base = slot_base + ((sl >= 0 && static_cast<u32>(sl) < s.nslots) ? s.slot_off[sl] : 0);
                     const s32 now720 = RemoteContentIs720(dbg, base);
-                    if (now720 >= 0 && (now720 != 0) != started_corner) {
+                    const bool differs = now720 >= 0 && (now720 != 0) != started_corner;
+                    small_streak = (differs && now720 != 0) ? small_streak + 1 : 0;
+                    if (differs && (now720 == 0 || small_streak >= 4)) {
                         ++size_changes;
                         why = now720 ? "the game switched to a 720p picture" : "the game switched to a 1080p picture";
                         end = StreamEnd::Reconfigure;
@@ -5961,7 +6282,7 @@ namespace ams::mitm::applet {
                     u64 en = 0;
                     fl.active = false;
                     if (NvfWaitDone(s.x, fl.pic, fl.fence, fl.t_submit, std::addressof(st), std::addressof(en)) == 2) {
-                        s.Stall("nvstream", "the last frame in flight"); stalled = true;
+                        if (!s.Stall("nvstream", "the last frame in flight")) { stalled = true; }
                     }
                 }
             }
@@ -6000,9 +6321,9 @@ namespace ams::mitm::applet {
                     n_p, static_cast<unsigned long long>(n_p ? s_bytes_p / n_p : 0), clock_fixes);
             LogLine("   nvstream: console latency, the game's present -> header sent: avg %llu us, max %llu us",
                     static_cast<unsigned long long>(s_age / nd / 1000), static_cast<unsigned long long>(m_age / 1000));
-            LogLine("   nvstream: present fences: %u waited, avg %llu us, max %llu us, %u timed out (30 ms), %u presents without a readable fence",
+            LogLine("   nvstream: present fences: %u waited, avg %llu us, max %llu us, %u timed out (250 ms), %u presents without a readable fence; %u read(s) redone (the slot may have been reused while it was read)",
                     s.fence_waits, static_cast<unsigned long long>(s.fence_waits ? s.fence_wait_sum / s.fence_waits / 1000 : 0),
-                    static_cast<unsigned long long>(s.fence_wait_max / 1000), s.fence_timeouts, s.fence_unknown);
+                    static_cast<unsigned long long>(s.fence_wait_max / 1000), s.fence_timeouts, s.fence_unknown, s.reread);
             LogLine("   nvstream: presents taken (M96): %u already drawn, %u waited for (the oldest not yet drawn), %u by the old latest-present rule",
                     s.pick_ready, s.pick_waited, s.pick_legacy);
             LogLine("   nvstream: per-stage max us: read %llu  VIC %llu  NVENC %llu  USB wait %llu  copy %llu; %u frame(s) over 50 ms of work; %u USB wait(s) over 500 ms (IDR forced after each)",

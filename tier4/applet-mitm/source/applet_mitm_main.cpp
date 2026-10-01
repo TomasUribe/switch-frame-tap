@@ -59,7 +59,8 @@ namespace ams {
             static constexpr bool CanManageMitmServers  = true;
         };
 
-        constexpr size_t MaxSessions = 8;
+        /* v0.7.1: 16 (8 was tight with a game, a homebrew app and their sub-objects) */
+        constexpr size_t MaxSessions = 16;
 
         class ServerManager final : public sf::hipc::ServerManager<PortIndex_Count, ServerOptions, MaxSessions> {
             private:
@@ -67,6 +68,19 @@ namespace ams {
         };
 
         ServerManager g_server_manager;
+
+        /* v0.7.1: the vi server on several threads. With one, a forwarded call
+         * that blocks inside vi - a homebrew app's dequeueBuffer while the
+         * on-screen keyboard takes over the screen - held the only thread, and
+         * the keyboard applet's own vi:m connection waited on our ShouldMitm
+         * answer forever: the keyboard never opened (kingboxnt on GBAtemp;
+         * sphaira here, the binder traffic stopped dead at the key press). The
+         * same "one blocked call ties up one thread of several" design the grc
+         * server below uses. */
+        constexpr size_t ViThreads = 4;     /* this one and three more */
+        alignas(os::ThreadStackAlignment) constinit u8 g_vi_stacks[ViThreads - 1][32_KB];
+        constinit os::ThreadType g_vi_threads[ViThreads - 1];
+        void ViLoopThread(void *) { g_server_manager.LoopProcess(); }
 
         /* ---- M72: the grc recorder's own server --------------------------
          * Separate from vi:u on purpose. Anything forwarded for grc can block
@@ -674,7 +688,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.0: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm v0.7.1: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -810,13 +824,46 @@ namespace ams {
                                       mitm::applet::g_nvframe_armed || mitm::applet::g_nvstream_armed ||
                                       mitm::applet::g_nvp_armed);
 
+        /* v0.7.1: the sessions behind wrapped objects come from sm, so they do
+         * not use up the applets' session limit (the keyboard applet) */
+        ::ams::sf::impl::g_tier4_create_session = mitm::applet::CreateSessionViaSm;
+        /* v0.7.1: the first pair through sm, made here and thrown away. In
+         * every boot of the first sm build, the first app to open the display
+         * died right after its session was made (Mario Kart, Minecraft and
+         * sphaira alike: nn::vi got nothing back, then aborted) and every
+         * later one was fine; that first pair is also the one that registers
+         * sftap:s. Now no game ever gets it. */
+        {
+            os::NativeHandle ws = os::InvalidNativeHandle, wc = os::InvalidNativeHandle;
+            const Result wrc = mitm::applet::CreateSessionViaSm(std::addressof(ws), std::addressof(wc));
+            mitm::applet::LogLine("sessions: warm-up pair rc=0x%x (server 0x%x, client 0x%x) - closed", wrc.GetValue(), ws, wc);
+            if (R_SUCCEEDED(wrc)) { os::CloseNativeHandle(wc); os::CloseNativeHandle(ws); }
+        }
         R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");
         /* v0.1.1: after vi:u, and wrapping only the running application's own
          * sessions (ShouldMitm asks pm:dmnt) */
-        R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViManagerRootMitm>(PortIndex_ViManagerMitm, ViManagerMitmServiceName));
-        mitm::applet::LogLine("registered mitm server for vi:m (homebrew applications only)");
+        /* v0.7.1: "nohb" (config homebrew = 0, not in the manager) leaves vi:m
+         * alone - homebrew apps are then never streamed. Added while chasing
+         * the keyboard bug; kept as an escape hatch should wrapping homebrew
+         * ever break one. */
+        if (ArmFileContains("nohb")) {
+            mitm::applet::LogLine("vi:m NOT wrapped (homebrew = 0): homebrew apps are not streamed this boot");
+        } else {
+            R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViManagerRootMitm>(PortIndex_ViManagerMitm, ViManagerMitmServiceName));
+            mitm::applet::LogLine("registered mitm server for vi:m (homebrew applications only)");
+        }
 
+        {
+            const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
+            for (size_t i = 0; i < ViThreads - 1; ++i) {
+                R_ABORT_UNLESS(os::CreateThread(std::addressof(g_vi_threads[i]), ViLoopThread, nullptr,
+                                                g_vi_stacks[i], sizeof(g_vi_stacks[i]), prio));
+                os::SetThreadNamePointer(std::addressof(g_vi_threads[i]), "applet-mitm.Vi");
+                os::StartThread(std::addressof(g_vi_threads[i]));
+            }
+            mitm::applet::LogLine("vi server: %zu threads, %zu sessions", ViThreads, MaxSessions);
+        }
         mitm::applet::LogMark("main:LoopProcess");
         g_server_manager.LoopProcess();
         mitm::applet::LogMark("main:LoopProcess_RETURNED");

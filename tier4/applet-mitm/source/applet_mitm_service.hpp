@@ -127,11 +127,15 @@ namespace ams::mitm::applet {
      * and aborts if it fails), and pm can be waiting on sm while it launches a
      * program - a deadlock that would freeze the console. */
     extern std::atomic<u64> g_app_pid;
+
     inline bool IsRunningApplication(os::ProcessId pid) {
         const u64 ap = g_app_pid.load(std::memory_order_relaxed);
         return ap != 0 && ap == pid.value;
     }
     void StartAppWatch();
+
+    /* v0.7.1: libstratosphere's out-object session pairs, made through sm */
+    Result CreateSessionViaSm(os::NativeHandle *out_server, os::NativeHandle *out_client);
 
     class ViManagerRootMitm : public sf::MitmServiceImplBase {
         public:

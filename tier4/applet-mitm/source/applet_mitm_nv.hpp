@@ -35,6 +35,8 @@ namespace ams::mitm::applet {
         u64 color_format;      /* plane[0] NvColorFormat, raw                  */
         u32 layout;            /* plane[0] NvLayout: 3 = BlockLinear           */
         u32 generation;        /* bumped when a new buffer set (nvmap id) starts */
+        u32 slot_nvmap[8];     /* v0.7.1: each slot's nvmap id - Minecraft gives
+                                * every slot its own buffer object */
     };
     extern GameSurface g_game_surface;
 

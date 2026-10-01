@@ -20,7 +20,7 @@ rsync -a --delete \
   "$SRC"/ "$DST"/
 
 set +e
-docker run --rm -e MAKEFLAGS="${MAKEFLAGS:-}" -v "$AMS":/ams -w /ams/stratosphere/applet-mitm "$IMG" bash -lc 'make nx_release 2>&1'
+docker run --rm -e MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}" -v "$AMS":/ams -w /ams/stratosphere/applet-mitm "$IMG" bash -lc 'make nx_release 2>&1'
 rc=$?
 set -e
 

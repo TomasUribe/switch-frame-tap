@@ -34,13 +34,15 @@
         "time:u",
         "grc:d",
         "bsd:u",
-        "nifm:u"
+        "nifm:u",
+        "sftap:s"
     ],
     "service_host": [
         "vi:u",
         "vi:m",
         "nvdrv:s",
-        "sftap"
+        "sftap",
+        "sftap:s"
     ],
     "kernel_capabilities": [
         {
