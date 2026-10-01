@@ -46,6 +46,7 @@
 #include "applet_mitm_audio.hpp"
 #include "applet_mitm_uvc.hpp"
 #include "applet_mitm_net.hpp"
+#include "applet_mitm_slotmatch.hpp"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -1302,15 +1303,28 @@ namespace ams::mitm::applet {
 
         /* M87: a new buffer object is a new game (or a new swapchain): forget
          * the old slots. Before M87 the slot was a running count of these
-         * calls, so a relaunched game's buffers landed at slots 6 and 7. */
+         * calls, so a relaunched game's buffers landed at slots 6 and 7.
+         * Some games give every slot its own nvmap object (Smash Ultimate:
+         * slots 0, 1, 2 as three ids, each at offset 0), so a new id for a
+         * slot this set has not registered yet is the same swapchain. */
+        const bool known_slot = slot_arg >= 0 && slot_arg < 8;
         if (static_cast<u32>(gb->nvmap_id) != g_game_surface.nvmap_id) {
-            for (auto &o : g_game_surface.slot_offset) { o = 0; }
-            g_game_surface.num_slots = 0;
-            ++g_game_surface.generation;
+            const bool same_set = known_slot && slot_arg != 0 && g_game_surface.num_slots != 0 &&
+                                  (g_game_surface.slot_mask & (1u << slot_arg)) == 0;
+            if (same_set) {
+                g_game_surface.separate = true;
+            } else {
+                for (auto &o : g_game_surface.slot_offset) { o = 0; }
+                g_game_surface.num_slots = 0;
+                g_game_surface.slot_mask = 0;
+                g_game_surface.separate  = false;
+                ++g_game_surface.generation;
+            }
         }
-        const u32 slot = (slot_arg >= 0 && slot_arg < 8) ? static_cast<u32>(slot_arg) : g_game_surface.num_slots;
+        const u32 slot = known_slot ? static_cast<u32>(slot_arg) : g_game_surface.num_slots;
         if (slot < 8) {
             g_game_surface.slot_offset[slot] = p0->offset;
+            g_game_surface.slot_mask |= 1u << slot;
             if (slot + 1 > g_game_surface.num_slots) { g_game_surface.num_slots = slot + 1; }
         }
         g_game_surface.buf_size     = gb->total_size;
@@ -1326,10 +1340,11 @@ namespace ams::mitm::applet {
                                     ? vic::PIXFMT_A8R8G8B8 : vic::PIXFMT_A8B8G8R8;
         g_game_surface.armed        = true;
 
-        LogLine("   captured slot %u: nvmap=%u %ux%u stride_px=%u blk_h_log2=%u off=0x%x pixfmt=%u (slots=%u)",
+        LogLine("   captured slot %u: nvmap=%u %ux%u stride_px=%u blk_h_log2=%u off=0x%x pixfmt=%u (slots=%u%s)",
                 slot, g_game_surface.nvmap_id, g_game_surface.width, g_game_surface.height,
                 g_game_surface.stride_px, g_game_surface.block_h_log2, p0->offset,
-                g_game_surface.pix_format, g_game_surface.num_slots);
+                g_game_surface.pix_format, g_game_surface.num_slots,
+                g_game_surface.separate ? ", one nvmap object per slot" : "");
     }
 
     namespace {
@@ -2374,6 +2389,33 @@ namespace ams::mitm::applet {
                 return true;
             }
             return false;
+        }
+
+        /* A swapchain with one nvmap object per slot (GameSurface::separate)
+         * has no single region holding every slot: each slot is a buffer of
+         * its own somewhere in the game's memory. Every device-mapped region
+         * that is a whole number of buffers (adjacent buffers can share one
+         * memory block) gives that many candidates, in address order; which
+         * candidate is which slot is worked out while streaming
+         * (NvfSession::Calibrate). */
+        u32 FindSlotCandidates(::ams::svc::Handle dbg, u64 buf, u64 *out, u32 max) {
+            if (buf == 0) { return 0; }
+            u64 addr = 0;
+            u32 n = 0;
+            for (u32 steps = 0; steps < 4000 && n < max; ++steps) {
+                ::ams::svc::MemoryInfo mi = {};
+                ::ams::svc::PageInfo   pi = {};
+                if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr)) || mi.size == 0) { break; }
+                const u32  attr = static_cast<u32>(mi.attribute);
+                const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
+                if (dev && mi.size % buf == 0 && mi.size / buf <= 8) {
+                    for (u64 o = 0; o < mi.size && n < max; o += buf) { out[n++] = mi.base_address + o; }
+                }
+                const u64 next = mi.base_address + mi.size;
+                if (next <= addr) { break; }
+                addr = next;
+            }
+            return n;
         }
 
         [[noreturn]] void RunLive(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr) {
@@ -4757,6 +4799,12 @@ namespace ams::mitm::applet {
             return len;
         }
 
+        /* the last per-slot buffer match (NvfSession::Calibrate): the next
+         * session's first guess, so a restart (a size change, the viewer
+         * reopened) starts on the right buffers */
+        struct SlotMatch { u64 addr[8]; u32 n; u32 buf; };
+        constinit SlotMatch g_slot_match = {};
+
         /* Everything one real-frame run needs, opened fresh and torn down in
          * reverse: the slot copy pinned for the VIC, the arena pinned for the
          * VIC and for a new msenc channel. A channel whose job stalled is left
@@ -4786,6 +4834,100 @@ namespace ams::mitm::applet {
             u32 buf_bytes = static_cast<u32>(FbSlotSize);
             bool mk8_layout = true;
 
+            /* One nvmap object per slot (GameSurface::separate, Smash
+             * Ultimate): every slot_off is 0, and slot_base + slot_off read
+             * ONE buffer for every slot - each picture sent three times, 20
+             * fps of picture in a 60 fps stream. Each slot reads its own
+             * buffer instead: cand[] from FindSlotCandidates, slot_cand[k]
+             * the candidate slot k reads. Until Calibrate has matched them,
+             * slot k reads candidate k (address order), or the match the last
+             * session found if its buffers are all still there. */
+            static constexpr u32 MaxSlotCand = slotmatch::MaxCand;
+            static constexpr u32 SigPoints = 32;
+            bool sep_layout = false;       /* the geometry says one object per slot */
+            bool sep = false;              /* reading per-slot buffers */
+            bool sep_locked = false;       /* matched (or given up): no more sampling */
+            u64 cand[MaxSlotCand] = {};
+            u32 ncand = 0;
+            u8 slot_cand[8] = {};
+            slotmatch::Matcher matcher;
+
+            u64 SlotAddr(u64 slot_base, s32 slot) const {
+                const bool valid = slot >= 0 && static_cast<u32>(slot) < nslots;
+                if (sep) { return cand[slot_cand[valid ? slot : 0]]; }
+                return slot_base + (valid ? slot_off[slot] : 0);
+            }
+
+            /* after SetGeometry, while attached: the per-slot buffers */
+            void PrepareSlots(::ams::svc::Handle dbg, const char *who) {
+                sep = sep_locked = false;
+                if (!sep_layout) { return; }
+                ncand = FindSlotCandidates(dbg, buf_bytes, cand, MaxSlotCand);
+                if (ncand < nslots) {
+                    LogLine("   %s: %u slot(s), each its own buffer, but %u buffer(s) of %u B in the game's memory - every slot reads the same one",
+                            who, nslots, ncand, buf_bytes);
+                    return;
+                }
+                for (u32 k = 0; k < nslots; ++k) { slot_cand[k] = static_cast<u8>(k); }
+                bool reused = false;
+                if (g_slot_match.n == nslots && g_slot_match.buf == buf_bytes) {
+                    u8 m[8] = {};
+                    u32 hits = 0;
+                    for (u32 k = 0; k < nslots; ++k) {
+                        for (u32 c = 0; c < ncand; ++c) {
+                            if (cand[c] == g_slot_match.addr[k]) { m[k] = static_cast<u8>(c); ++hits; break; }
+                        }
+                    }
+                    if (hits == nslots) { std::memcpy(slot_cand, m, sizeof(slot_cand)); reused = true; }
+                }
+                matcher.Reset(nslots, ncand);
+                sep = true;
+                LogLine("   %s: %u slot(s), each its own nvmap object; %u candidate buffer(s) of %u B from 0x%010llx%s - matching them to slots while streaming",
+                        who, nslots, ncand, buf_bytes, static_cast<unsigned long long>(cand[0]),
+                        reused ? " (starting from the last session's match)" : "");
+            }
+
+            /* a hash of SigPoints 64-byte samples spread over the buffer */
+            u32 SampleSig(::ams::svc::Handle dbg, u64 base) const {
+                const u64 step = (buf_bytes / SigPoints) & ~UINT64_C(63);
+                u32 h = 2166136261u;
+                for (u32 j = 0; j < SigPoints; ++j) {
+                    alignas(64) u8 b[64];
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(b), dbg, base + j * step + ((step / 2) & ~UINT64_C(63)), sizeof(b)))) { return 0; }
+                    for (u32 i = 0; i < sizeof(b); ++i) { h = (h ^ b[i]) * 16777619u; }
+                }
+                return h;
+            }
+
+            /* once the present of `slot` (present number `count`) is
+             * finished, before it is read: a sample for the slot matcher
+             * (applet_mitm_slotmatch.hpp) until it has matched every slot */
+            void Calibrate(::ams::svc::Handle dbg, u32 count, s32 slot) {
+                if (!sep || sep_locked || slot < 0 || static_cast<u32>(slot) >= nslots) { return; }
+                u32 sig[MaxSlotCand];
+                for (u32 c = 0; c < ncand; ++c) { sig[c] = this->SampleSig(dbg, cand[c]); }
+                matcher.Add(count, static_cast<u32>(slot), sig);
+                u8 m[8] = {};
+                s32 weakest = 0;
+                if (matcher.Match(m, std::addressof(weakest))) {
+                    std::memcpy(slot_cand, m, nslots);
+                    sep_locked = true;
+                    g_slot_match.n = nslots;
+                    g_slot_match.buf = buf_bytes;
+                    char line[200];
+                    int len = std::snprintf(line, sizeof(line), "   swapchain: slots matched to their buffers after %u frame intervals (weakest score %d/1000):",
+                                            matcher.intervals, weakest);
+                    for (u32 s = 0; s < nslots && len > 0 && static_cast<size_t>(len) < sizeof(line); ++s) {
+                        g_slot_match.addr[s] = cand[m[s]];
+                        len += std::snprintf(line + len, sizeof(line) - len, " %u->0x%010llx", s, static_cast<unsigned long long>(cand[m[s]]));
+                    }
+                    LogLine("%s", line);
+                } else if (matcher.GaveUp()) {
+                    sep_locked = true;
+                    LogLine("   swapchain: slots not told apart in %u frame intervals - keeping the first guess", matcher.intervals);
+                }
+            }
+
             bool SetGeometry(const GameSurface &g, const char *who) {
                 if (g.num_slots == 0 || g.buf_size == 0 || g.width == 0 || g.height == 0) {
                     LogLine("   %s: no buffer geometry recorded for this game", who); return false;
@@ -4801,6 +4943,7 @@ namespace ams::mitm::applet {
                 for (u32 k = 0; k < 8; ++k) { slot_off[k] = g.slot_offset[k]; }
                 nslots = g.num_slots;
                 buf_bytes = g.buf_size;
+                sep_layout = g.separate && g.num_slots > 1;
                 /* MK8's A8B8G8R8 surface reads correctly as the VIC's
                  * A8R8G8B8 (M36/M83: R,G,B,A in memory); the same is assumed
                  * for any other format and said in the log */
@@ -5010,7 +5153,8 @@ namespace ams::mitm::applet {
                         present_tick = pick.tick;
                         present_flip = pick.transform & 3;
                         const s32 slot = pick.slot;
-                        return this->ReadSlot(dbg, slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0), read_ns, sig);
+                        this->Calibrate(dbg, pick.count, slot);
+                        return this->ReadSlot(dbg, this->SlotAddr(slot_base, slot), read_ns, sig);
                     }
                 }
                 ++pick_legacy;
@@ -5038,7 +5182,8 @@ namespace ams::mitm::applet {
                 if (now != seen) { this->WaitPresentFence(fn, fence); }
                 if (dropped != nullptr && now - seen > 1) { *dropped += now - seen - 1; }
                 seen = now;
-                return this->ReadSlot(dbg, slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0), read_ns, sig);
+                this->Calibrate(dbg, now, slot);
+                return this->ReadSlot(dbg, this->SlotAddr(slot_base, slot), read_ns, sig);
             }
 
             bool ReadSlot(::ams::svc::Handle dbg, u64 base, u64 *read_ns, u32 *sig) {
@@ -5402,6 +5547,7 @@ namespace ams::mitm::applet {
             } else {
                 NvfSession s;
                 if (s.SetGeometry(geo, "shot")) {
+                    s.PrepareSlots(dbg, "shot");
                     s.seen = g_queue_count.load(std::memory_order_acquire) - 1;   /* the latest present counts as new */
                     u64 rn = 0; u32 sg = 0;
                     if (s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) {
@@ -5488,6 +5634,7 @@ namespace ams::mitm::applet {
             ON_SCOPE_EXIT { ClockWatchStop(); };
             NvfSession s;
             if (geo != nullptr && !s.SetGeometry(*geo, "nvstream")) { VicStage("ns:geometry"); return StreamEnd::Failed; }
+            s.PrepareSlots(dbg, "nvstream");
             /* M93: the first frame decides the size. A 1280x720 picture in the
              * corner of the 1920x1080 surface (handheld) streams at 720p; full
              * 1920x1080 content (docked, or a game told it is docked) streams
@@ -5905,7 +6052,7 @@ namespace ams::mitm::applet {
                  * handful of 4-byte reads outside the 720p corner, not a frame. */
                 if (live && s.mk8_layout && (i + 1) % 120 == 0) {
                     const s32 sl = g_queue_slot.load(std::memory_order_relaxed);
-                    const u64 base = slot_base + ((sl >= 0 && static_cast<u32>(sl) < s.nslots) ? s.slot_off[sl] : 0);
+                    const u64 base = s.SlotAddr(slot_base, sl);
                     const s32 now720 = RemoteContentIs720(dbg, base);
                     if (now720 >= 0 && (now720 != 0) != started_corner) {
                         ++size_changes;

@@ -35,6 +35,9 @@ namespace ams::mitm::applet {
         u64 color_format;      /* plane[0] NvColorFormat, raw                  */
         u32 layout;            /* plane[0] NvLayout: 3 = BlockLinear           */
         u32 generation;        /* bumped when a new buffer set (nvmap id) starts */
+        u32 slot_mask;         /* the slots registered in this set             */
+        bool separate;         /* every slot its own nvmap object (Smash Ultimate),
+                                * not slots at offsets of one (MK8)            */
     };
     extern GameSurface g_game_surface;
 
