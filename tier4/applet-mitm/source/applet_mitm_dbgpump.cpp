@@ -27,9 +27,16 @@ namespace ams::mitm::applet {
 
     namespace {
 
-        /* os priorities are svc - 28: 20 is svc 48, main/IPC is svc 49 */
+        /* os priorities are svc - 28: 20 is svc 48, main/IPC is svc 49.
+         * A helper continues on a game core, where svc 48 sits below any
+         * game thread from svc 47 up: DuckStation's busy emulation threads
+         * kept a helper off its core while the new thread's event held the
+         * game - 10 s once, 26.6 s another time, until HOME took the game off
+         * the CPU. -4 is svc 24, the NPDM's best and above every application
+         * priority (28 and up); a helper runs one ContinueDebugEvent and
+         * blocks again. */
         constexpr s32 PumpPriority   = 20;
-        constexpr s32 HelperPriority = 20;
+        constexpr s32 HelperPriority = -4;
         constexpr s64 WaitTimeoutNs  = 50'000'000;
         constexpr u32 PumpCore       = 3;
         constexpr u32 NumHelpers     = 3;   /* cores 0, 1, 2 */
@@ -57,18 +64,27 @@ namespace ams::mitm::applet {
         constinit os::SdkMutex g_stats_lock;
         constinit DebugPumpStats g_pump_stats = {};
 
-        Result Continue(::ams::svc::Handle h) {
-            R_RETURN(::ams::svc::ContinueDebugEvent(h,
-                     ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll,
-                     nullptr, 0));
+        /* A real exception (a fault, svcBreak) is left to the game, as if no
+         * debugger were attached: its own handler runs, or it crashes the
+         * way it would have. ExceptionHandled would tell the kernel we dealt
+         * with it - the faulting instruction runs again, and an app that
+         * handles its own faults (an emulator's fast memory) never gets the
+         * chance. The attach and break pseudo-exceptions are ours. */
+        Result Continue(::ams::svc::Handle h, bool fault) {
+            const u32 flags = (fault ? 0u : static_cast<u32>(::ams::svc::ContinueFlag_ExceptionHandled)) |
+                              static_cast<u32>(::ams::svc::ContinueFlag_ContinueAll);
+            R_RETURN(::ams::svc::ContinueDebugEvent(h, flags, nullptr, 0));
         }
+
+        /* the helper's request: the handle, and bit 32 for a fault */
+        constexpr uintptr_t FaultBit = static_cast<uintptr_t>(1) << 32;
 
         void HelperThread(void *arg) {
             const u32 i = static_cast<u32>(reinterpret_cast<uintptr_t>(arg));
             for (;;) {
                 uintptr_t h = 0;
                 os::ReceiveMessageQueue(std::addressof(h), std::addressof(g_req_mq[i]));
-                const Result rc = Continue(static_cast<::ams::svc::Handle>(h));
+                const Result rc = Continue(static_cast<::ams::svc::Handle>(h & 0xFFFFFFFFu), (h & FaultBit) != 0);
                 os::SendMessageQueue(std::addressof(g_res_mq[i]), static_cast<uintptr_t>(rc.GetValue()));
             }
         }
@@ -76,7 +92,7 @@ namespace ams::mitm::applet {
         /* One wake: drain, continue. False when the game is gone. */
         bool Service(::ams::svc::Handle h) {
             const u64 t0 = armTicksToNs(armGetSystemTick());
-            u32 n = 0, created = 0, exited = 0, other = 0;
+            u32 n = 0, created = 0, exited = 0, other = 0, faults = 0;
             u32 core = PumpCore;
             bool process_exited = false;
             ::ams::svc::DebugEventInfo ev;
@@ -95,6 +111,11 @@ namespace ams::mitm::applet {
                     }
                     case ::ams::svc::DebugEvent_ExitThread:  ++exited; break;
                     case ::ams::svc::DebugEvent_ExitProcess: ++other; process_exited = true; break;
+                    case ::ams::svc::DebugEvent_Exception:
+                        ++other;
+                        if (ev.info.exception.type != ::ams::svc::DebugException_DebuggerAttached &&
+                            ev.info.exception.type != ::ams::svc::DebugException_DebuggerBreak) { ++faults; }
+                        break;
                     default:                                  ++other; break;
                 }
             }
@@ -110,13 +131,13 @@ namespace ams::mitm::applet {
             Result rc;
             u32 ran_on = PumpCore;
             if (core < NumHelpers && g_helper_ok[core]) {
-                os::SendMessageQueue(std::addressof(g_req_mq[core]), static_cast<uintptr_t>(h));
+                os::SendMessageQueue(std::addressof(g_req_mq[core]), static_cast<uintptr_t>(h) | (faults != 0 ? FaultBit : 0));
                 uintptr_t v = 0;
                 os::ReceiveMessageQueue(std::addressof(v), std::addressof(g_res_mq[core]));
                 rc = ::ams::Result(static_cast<u32>(v));
                 ran_on = core;
             } else {
-                rc = Continue(h);
+                rc = Continue(h, faults != 0);
             }
             const u64 held = armTicksToNs(armGetSystemTick()) - t0;
 
@@ -126,6 +147,7 @@ namespace ams::mitm::applet {
             g_pump_stats.created += created;
             g_pump_stats.exited  += exited;
             g_pump_stats.other   += other;
+            g_pump_stats.faults  += faults;
             if (held > g_pump_stats.max_hold_ns) { g_pump_stats.max_hold_ns = held; }
             if (R_SUCCEEDED(rc)) {
                 ++g_pump_stats.continues;
@@ -242,8 +264,8 @@ namespace ams::mitm::applet {
     void DebugPumpLogStats(const char *who) {
         DebugPumpStats s;
         DebugPumpGetStats(std::addressof(s));
-        LogLine("   %s: debug events %u (+%u threads, -%u threads, %u other) in %u wakes; continued %u (cores 0-3: %u/%u/%u/%u), busy %u, failed %u (last rc 0x%x); longest hold %llu us%s",
-                who, s.events, s.created, s.exited, s.other, s.wakes, s.continues,
+        LogLine("   %s: debug events %u (+%u threads, -%u threads, %u other, %u faults left to the game) in %u wakes; continued %u (cores 0-3: %u/%u/%u/%u), busy %u, failed %u (last rc 0x%x); longest hold %llu us%s",
+                who, s.events, s.created, s.exited, s.other, s.faults, s.wakes, s.continues,
                 s.per_core[0], s.per_core[1], s.per_core[2], s.per_core[3], s.busy, s.failed, s.last_fail_rc,
                 static_cast<unsigned long long>(s.max_hold_ns / 1000), s.gone ? "; GAME GONE" : "");
     }

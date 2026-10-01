@@ -31,6 +31,7 @@ namespace ams::mitm::applet {
         u32 created;            /* DebugEvent_CreateThread */
         u32 exited;             /* DebugEvent_ExitThread */
         u32 other;              /* CreateProcess / ExitProcess / Exception */
+        u32 faults;             /* real exceptions, left to the game (not marked handled) */
         u32 continues;          /* successful ContinueDebugEvent calls */
         u32 busy;               /* ContinueDebugEvent said Busy: an event came in between */
         u32 failed;             /* any other ContinueDebugEvent failure */
