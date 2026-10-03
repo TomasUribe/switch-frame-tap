@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.3** (WillMidia's PR #4 ported: slots matched while streaming, homebrew swapchains, debug pump and encode-wait fixes; Sonic Frontiers; the 720p/1080p switch). Released: v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.4** (dvr-patches bundled, off; "Sound in no-record games"). Released: v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,21 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.7.4: dvr-patches bundled, off ***
+
+- `third_party/dvr-patches` (fw-22.5, BSD-3, how to refresh them in its
+  README); the release zip puts them in `config/switch-frame-tap/dvr-patches`
+  (not read by Atmosphere). `common/sound_patch.hpp` (manager + overlay): on
+  copies them to `atmosphere/exefs_patches/switch-frame-tap-sound`, off deletes
+  the copy; a hand install in `exefs_patches/am` counts as on and is parked
+  at `config/switch-frame-tap/dvr-patches-am-off` when turned off.
+- The sysmodule refreshes the copy from the bundle at boot while it is on
+  ("sound in no-record games: on (dvr-patches, N current, M refreshed)").
+- Tested: off by default (Smash silent), on from the manager (sound), off
+  from the overlay (silent again).
+- **After a firmware update that changes am:** new patches in
+  third_party/dvr-patches, then a release.
 
 ## *** v0.7.3: WillMidia's PR #4; Sonic Frontiers; the 720p/1080p switch ***
 
