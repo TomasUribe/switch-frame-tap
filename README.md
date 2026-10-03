@@ -132,12 +132,12 @@ manager app:
 
 Nothing else: no other sysmodule, no sigpatches, no capture card.
 
-## Install (v0.7.2)
+## Install (v0.7.3)
 
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.7.2-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.7.3-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -151,7 +151,7 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.7.2-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.7.3-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -170,7 +170,7 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.7.2-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.7.3-linux-viewer.tar.gz` with the same files.
 
 On both, the viewer opens a window that says what it is waiting for (the
 Switch, its USB driver, or a game) and lists its keys; the same screen comes
@@ -372,7 +372,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.7.2       # -> dist/switch-frame-tap-0.7.2-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.7.3       # -> dist/switch-frame-tap-0.7.3-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -630,6 +630,7 @@ dock works over the network since v0.7.0, with the quality adapting to the link.
 | Bitrate tuning (better P frames, QP) | **done** (v0.6.0): P frames at QP+2 and the temporal motion hint, ~15-20 % smaller; the encoder measured against x264 (89 % of our bits at the same QP) |
 | **Network streaming, docked play** (TCP from the sysmodule, discovery by last address / beacon / subnet scan, rate control from the sender's busy time) | **done, on hardware** (v0.7.0) |
 | Games with one buffer object per slot (Minecraft, Smash: found by watching which buffer changes with which frame), finished frames only (Pokemon's fades), the on-screen keyboard with the module on | **done, on hardware** (v0.7.1) |
+| Frame buffers matched while streaming - no wait, still screens, homebrew whose buffers sit in larger blocks (Moonlight, DuckStation), games with two lookalike memory pools (Sonic Frontiers); the 720p/1080p switch when the old docked picture stays around the new one | **done, on hardware** (v0.7.3, much of it [WillMidia's PR #4](https://github.com/TomasUribe/switch-frame-tap/pull/4)) |
 | Game audio (grc:d PCM alongside the video; paced playback) | **done** (v0.3.0); games that block recording with dvr-patches, switchable from the overlay (v0.7.2) |
 | Stats overlay in the viewer (FPS / graphs / full) | **done** (v0.7.2) |
 | Windows viewer, and paced display (reader / decoder / vsync threads) on both | **done** (v0.2.0) |
@@ -667,6 +668,16 @@ genuinely like to hear about it.
 
 
 Forks are welcome and no permission is needed.
+
+## Thanks
+
+- **[WillMidia](https://github.com/WillMidia)** (PR #4): the slot matcher that
+  finds a game's frame buffers while it streams, homebrew swapchains in larger
+  memory blocks, the debug-event fix that kept games frozen for seconds, real
+  crashes reaching the game's own handler, and the encoder-wait fix.
+- **[exelix11](https://github.com/exelix11)**: SysDVR, whose socket setup the
+  network mode follows, and dvr-patches, which bring sound to games that block
+  recording.
 
 ## License
 

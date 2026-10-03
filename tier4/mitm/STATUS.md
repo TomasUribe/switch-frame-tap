@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.2** (the viewer's stats overlay; sound in games that block recording, through dvr-patches). Released: v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.3** (WillMidia's PR #4 ported: slots matched while streaming, homebrew swapchains, debug pump and encode-wait fixes; Sonic Frontiers; the 720p/1080p switch). Released: v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,48 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.7.3: WillMidia's PR #4; Sonic Frontiers; the 720p/1080p switch ***
+
+PR #4 (William Tedros / WillMidia, opened 2026-10-01 against v0.7.0) found
+much of v0.7.1's work independently, and more. It no longer merged (v0.7.1
+rewrote the same code), so the parts worth having were ported, with credit:
+
+- **Debug pump** (cherry-picked): helpers continue on a game's core at svc 24
+  (os -4), above every application thread - at svc 48 a busy game kept the
+  helper off its core and the game held for up to 26.6 s (DuckStation). Real
+  faults and svcBreak are continued unhandled, as with no debugger (an
+  emulator's fast-memory faults reach its own handler; a crash crashes).
+- **NvfWaitDone** (cherry-picked): re-sample the fence and status at the 1 s
+  deadline, and count a fence read only when its ioctl succeeded - the root
+  cause of "NVENC stalled" on a late wake (v0.7.1's 3 s grace stays behind it).
+- **The slot matcher** (applet_mitm_slotmatch.hpp + host test, NvfSession::
+  PrepareSlots / Calibrate / SlotAddr, FindSlotCandidates): replaces v0.7.1's
+  calibration before the stream. Candidates: one object per slot - regions that
+  are whole numbers of buffers, rounded to power-of-two alignments (Moonlight's
+  3.75 MB in 4 MB); one object for all slots with no exact region - every
+  region that holds the set, base + each slot's offset (DuckStation, Sonic).
+  Scores per slot from change rates; StillGuess for a still picture; the match
+  is reused by the next session. Also its ChangedSinceRead, as confirmation
+  before v0.7.1's fence-based re-copy (Smash's menus: 78 re-copies -> 0-6).
+  Not ported: the overlay's keyframe toggle (the manager has it), its own
+  re-copy (ours covers it).
+- **Ours on top:** the first frames of a set the matcher has not seen wait for
+  the match (up to 2.5 s; Sonic's first ~0.75 s was noise); MaxCand 48 with a
+  64-bit mask (Minecraft back in handheld had 41 candidates, the slots past
+  24); for one object in several regions, only the regions with the most
+  device mappings - Sonic Frontiers has two 640 MB/1152 MB pools laid out
+  alike, the matcher once took the render-target pool (score 675); the
+  swapchain's region has 2 device mappings (the display's), the other 1 -
+  3/3 launches right after that.
+- **720p/1080p:** Smash going docked -> handheld draws 720p into the corner
+  and leaves the docked picture around it, not black. Every 15 frames a probe
+  hashes 140 points outside the corner and 64 inside: 720p when outside is
+  black (8 checks) or the corner moves and the outside does not (3 checks);
+  1080p when the game's crop is 1920x1080 (MK8, Minecraft docked; Smash keeps
+  1280x720 even fake-docked) or the outside moves (2 checks); a hint carries
+  the finding into the restarted session (its first frame cannot tell).
+  ReverseNX does not reach Sonic Frontiers (no new buffers after switching).
 
 ## *** v0.7.2: the viewer's stats overlay; sound in games that block recording ***
 

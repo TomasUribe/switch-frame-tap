@@ -1,0 +1,494 @@
+[    10.479] grc IPC interceptor: off
+[    10.500] applet-mitm v0.7.2: up (grc IPC interceptor off)
+[    10.504] install type from GetEntryType(sdmc:/applet-mitm.armed) rc=0x202
+[    10.508] release install, sdmc:/config/switch-frame-tap/config.ini ->: vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio
+[    10.512] sftap: stream on at boot (stream-off: rc=0x202)
+[    10.516] sftap: 0 app(s) excluded (never attached)
+[    10.520] ARMED FLAGS: vic=1 exec=1 dbg=1 dump=0 usb=1 bench=0 nvenc=0 jpg=0 sweep=0 mtx=0 stream=0 grc=0 grcscan=0 clk=0 jpgdec=0 nvgrc=0 csc=0 nvframe=0(120) nvstream=1(3600, qp 20, gop 60) nvp=0(30) live=1 nv1080=0(120) wait=20
+[    10.524] arm file (sdmc:/applet-mitm.armed): vic=ARMED exec=PhaseB-full-blit
+[    10.528] ---- physical memory pools (svcGetSystemInfo) ----
+[    10.531]    pool 0 Application  total= 3363840 KB  used=       0 KB  free=  3363840 KB   rc=0/0
+[    10.544]    pool 1 Applet       total=  512000 KB  used=    4504 KB  free=   507496 KB   rc=0/0
+[    10.553]    pool 2 System       total=  237728 KB  used=  220752 KB  free=    16976 KB   rc=0/0
+[    10.563]    pool 3 SystemUnsafe total=   45184 KB  used=   43180 KB  free=     2004 KB   rc=0/0
+[    10.570]    THIS PROCESS (pool_partition 1 = Applet, at boot): total=511936 KB used=4440 KB free=507496 KB
+[    10.576]    for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB
+[    10.579] ---- USB device enumeration (usb:ds) ----
+[    10.584]    usbDsInitialize rc=0x0 
+[    10.591]    string descriptors rc=0x0
+[    10.599]    device descriptors (Full+High+Super) rc=0x0
+[    10.603]    usbDsSetBinaryObjectStore rc=0x0
+[    10.607]    usbDsRegisterInterface rc=0x0
+[    10.624]    configuration descriptors (Full+High+Super) rc=0x0
+[    10.638]    endpoints IN=0x81 OUT=0x01 rc=0x0
+[    10.642]    EnableInterface rc=0x0
+[    10.749]    usbDsEnable rc=0x0
+[    11.268]    usb state high-water = 5 (Configured)
+[    11.277]    *** NEGOTIATED SPEED = 3 (High(480Mbps)) *** rc=0x0
+[    11.283]    not SuperSpeed - check the CABLE is USB 3.0, and that the PC port is blue/SS
+[    11.291]    *** HOST CONFIGURED US - we own the bus, expect 1209:5f1e in lsusb ***
+[    11.296] probe fires at t=20 s; frame dump to SD: off
+[    11.300] debug-capture route: ARMED   pmdmntInitialize rc=0x0
+[    11.320] -> main:heartbeat_started
+[    11.326] sftap: control service rc=0x0
+[    11.333] VIC worker started (execute=PhaseB-full-blit)
+[    11.341] app watch: application pid 0, program 0000000000000000
+[    14.326] -> hb:1 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    17.369] -> hb:2 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    20.498] -> hb:3 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    21.215] audio: grc:d open
+[    21.252] sessions: wrapped objects get their sessions through sm (sftap:s), not from the Applet group's 6
+[    21.279] shot: input up (read-only) - hid rc=0x0, time ok
+[    21.296] audio: grc:d Begin rc=0x0
+[    21.359] sessions: warm-up pair rc=0x0 (server 0xd81e5, client 0xd01e6) - closed
+[    21.426] registered mitm server for vi:u
+[    21.472] registered mitm server for vi:m (homebrew applications only)
+[    21.506] vi server: 4 threads, 16 sessions
+[    21.595] -> main:LoopProcess
+[    23.677] -> hb:4 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    26.781] -> hb:5 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    29.817] -> hb:6 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    32.853] -> hb:7 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    35.902] -> hb:8 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    37.345] app watch: application pid 141, program 01006a800016e000
+[    38.929] -> hb:9 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    40.254] audio: game audio flowing (4096 B chunks)
+[    42.422] -> hb:10 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    43.333] OnNeedsToAccept port=0 program=01006a800016e000
+[    43.342]   AcceptMitmImpl rc=0x0
+[    44.235] -> GetDisplayService:enter
+[    44.246]    program=01006a800016e000 cmd 0 mode=0
+[    44.313] -> GetDisplayService:done
+[    44.345] -> GetRelayService:enter
+[    44.398] -> GetRelayService:wrapped
+[    44.431] -> OpenDisplay:enter
+[    44.437]    OpenDisplay "Default" -> display_id=17
+[    45.498] -> hb:11 sess=1 getdisp=1 relay=1 txn=0 vic=waiting
+[    48.594] -> hb:12 sess=1 getdisp=1 relay=1 txn=0 vic=waiting
+[    50.650] *** binder txn #1  program=01006a800016e000  session=20  code=10(connect) x1  flags=0x0  in=108 out=4096
+[    50.765] -> binder:first_txn
+[    50.797] *** binder txn #2  program=01006a800016e000  session=20  code=9(query) x1  flags=0x0  in=100 out=4096
+[    50.830] *** binder txn #3  program=01006a800016e000  session=20  code=14(setPreallocatedBuffer) x1  flags=0x0  in=476 out=4096
+[    50.883] -> binder:parse_preallocated
+[    50.892] === setPreallocatedBuffer#1 slot 0 NvGraphicBuffer ===
+[    50.900]     nvmap_id=1388  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    50.908]     plane[0] 1920x1080  pitch=7680 B  offset=0x0  size=8847360 B
+[    50.916]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    50.923]    captured slot 0: nvmap=1388 1920x1080 stride_px=1920 blk_h_log2=4 off=0x0 pixfmt=33 (slots=1)
+[    50.933] *** binder txn #4  program=01006a800016e000  session=20  code=14(setPreallocatedBuffer) x2  flags=0x0  in=476 out=4096
+[    50.963] -> binder:parse_preallocated
+[    50.969] === setPreallocatedBuffer#2 slot 1 NvGraphicBuffer ===
+[    50.974]     nvmap_id=1392  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    50.979]     plane[0] 1920x1080  pitch=7680 B  offset=0x0  size=8847360 B
+[    50.983]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    50.987]    captured slot 1: nvmap=1392 1920x1080 stride_px=1920 blk_h_log2=4 off=0x0 pixfmt=33 (slots=2)
+[    50.993] *** binder txn #5  program=01006a800016e000  session=20  code=14(setPreallocatedBuffer) x3  flags=0x0  in=476 out=4096
+[    51.020] -> binder:parse_preallocated
+[    51.028] === setPreallocatedBuffer#3 slot 2 NvGraphicBuffer ===
+[    51.034]     nvmap_id=1400  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    51.038]     plane[0] 1920x1080  pitch=7680 B  offset=0x0  size=8847360 B
+[    51.042]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    51.047]    captured slot 2: nvmap=1400 1920x1080 stride_px=1920 blk_h_log2=4 off=0x0 pixfmt=33 (slots=3)
+[    51.055] *** binder txn #6  program=01006a800016e000  session=20  code=3(dequeueBuffer) x1  flags=0x0  in=116 out=4096
+[    51.060] *** binder txn #7  program=01006a800016e000  session=20  code=1(requestBuffer) x1  flags=0x0  in=100 out=4096
+[    51.633] -> hb:13 sess=1 getdisp=1 relay=1 txn=7 vic=waiting
+[    52.465] *** binder txn #8  program=01006a800016e000  session=20  code=7(queueBuffer) x1  flags=0x0  in=192 out=4096
+[    52.483]    present transform 0x0, crop (0,0)-(0,0)
+[    52.507] -> binder:vic_blit_requested
+[    52.515]    queueBuffer txn#8 parcel=192 slot=0 -> handed to VIC worker
+[    52.552] *** binder txn #9  program=01006a800016e000  session=20  code=3(dequeueBuffer) x2  flags=0x0  in=116 out=4096
+[    52.594] *** binder txn #10  program=01006a800016e000  session=20  code=1(requestBuffer) x2  flags=0x0  in=100 out=4096
+[    52.606] -> vb:0_heap
+[    52.616]    [probe, BEFORE heap grab] process total=412984 KB used=4440 KB free=408544 KB
+[    52.621]    [before heap grab] pool 0 Application  used= 1610544 KB  free=  1753296 KB
+[    52.628] *** binder txn #11  program=01006a800016e000  session=20  code=7(queueBuffer) x2  flags=0x0  in=192 out=4096
+[    52.636]    [before heap grab] pool 1 Applet       used=  103468 KB  free=   408532 KB
+[    52.642] *** binder txn #12  program=01006a800016e000  session=20  code=3(dequeueBuffer) x3  flags=0x0  in=116 out=4096
+[    52.698]    [before heap grab] pool 2 System       used=  229352 KB  free=     8376 KB
+[    52.709] *** binder txn #13  program=01006a800016e000  session=20  code=1(requestBuffer) x3  flags=0x0  in=100 out=4096
+[    52.720]    [before heap grab] pool 3 SystemUnsafe used=   43180 KB  free=     2004 KB
+[    52.787]    SetMemoryHeapSize(40 MB) rc=0x0
+[    52.805] *** binder txn #14  program=01006a800016e000  session=20  code=7(queueBuffer) x3  flags=0x0  in=192 out=4096
+[    52.814]    [after heap grab] pool 0 Application  used= 1634800 KB  free=  1729040 KB
+[    52.826]    present transform 0x0, crop (0,0)-(1280,720)
+[    52.845]    [after heap grab] pool 1 Applet       used=  144428 KB  free=   367572 KB
+[    52.852]    [after heap grab] pool 2 System       used=  229344 KB  free=     8384 KB
+[    52.885]    [after heap grab] pool 3 SystemUnsafe used=   43180 KB  free=     2004 KB
+[    52.954]    [probe, AFTER heap grab] total=412984 KB used=45400 KB free=367584 KB | sysresource 0/0 KB
+[    53.068]    one 1080p frame is 7913 KB; heap granted 40960 KB; NVENC must fit in what is left
+[    53.130]    VIC heap 40 MB at 0x3885000000 (capture buffer 37504 KB on heap): cfg=0x3885000000 cmd=0x3885004000 dst=0x3885010000 src=0x3885350000
+[    53.135]    capture region 37504 KB vs one 1080p frame 8100 KB -> FITS
+[    53.144]    stage buf at +8640 KB; full-frame capture clear of staging
+[    53.175] -> vb:1_smGetService
+[    53.183]    using nvdrv:t rc=0x0
+[    53.207] -> vb:2_tmem
+[    53.346] -> vb:3_Initialize
+[    53.417]    Initialize rc=0x0
+[    53.429]    live mode: our own nvdrv identity (no game aruid, no FROM_ID)
+[    53.480] -> vb:4_open_nvmap
+[    53.503]    /dev/nvmap rc=0x0 fd=23396352 nverr=0
+[    53.518]    perm probe: /dev/nvhost-gpu rc=0x0 nverr=0 -> OPEN (bit0 set: full mask)
+[    53.565] -> vb:4b_node_survey
+[    53.593]    node /dev/nvhost-display    OPEN (rc=0x0 nverr=0)
+[    53.601]    node /dev/nvdisp-ctrl       OPEN (rc=0x0 nverr=0)
+[    53.606]    node /dev/nvdisp-disp0      OPEN (rc=0x0 nverr=0)
+[    53.616]    node /dev/nvdisp-disp1      OPEN (rc=0x0 nverr=0)
+[    53.620]    node /dev/nvdcutil-disp0    OPEN (rc=0x0 nverr=0)
+[    53.629]    node /dev/nvcec-ctrl        OPEN (rc=0x0 nverr=0)
+[    53.634]    node /dev/nvhost-as-gpu     OPEN (rc=0x0 nverr=0)
+[    53.638]    node /dev/nvhost-ctrl-gpu   OPEN (rc=0x0 nverr=0)
+[    53.644]    node /dev/nvhost-msenc      OPEN (rc=0x0 nverr=0)
+[    53.650]    node /dev/nvhost-nvdec      OPEN (rc=0x0 nverr=0)
+[    53.656]    node /dev/nvhost-tsec       denied (rc=0x0 nverr=196611)
+[    53.665]    node /dev/nvhost-nvjpg      OPEN (rc=0x0 nverr=0)
+[    53.694] -> vb:5_FROM_ID
+[    53.729] -> vb:6_alloc_bufs
+[    53.737]    SetMemoryAttribute(0x3885000000, 0x4000, uncached) rc=0x0
+[    53.742]    nvmapOwn ok handle=3916 id=3916 kind=0 size=0x4000
+[    53.747]    SetMemoryAttribute(0x3885004000, 0x1000, uncached) rc=0x0
+[    53.752]    nvmapOwn ok handle=3920 id=3920 kind=0 size=0x1000
+[    53.756]    SetMemoryAttribute(0x3885010000, 0x340000, uncached) rc=0x0
+[    53.765]    nvmapOwn ok handle=3924 id=3924 kind=0 size=0x340000
+[    53.775]    SetMemoryAttribute(0x3885350000, 0x10000, uncached) rc=0x0
+[    53.780]    nvmapOwn ok handle=3928 id=3928 kind=0 size=0x10000
+[    53.804] -> vb:7_open_vic
+[    53.813]    /dev/nvhost-vic rc=0x0 fd=23396353 nverr=0
+[    53.819]    GET_SYNCPOINT rc=0x0 nverr=0 -> syncpt=12
+[    53.850] -> vb:8_set_nvmap_fd
+[    53.861]    SET_NVMAP_FD(23396352) rc=0x0 nverr=0
+[    53.867]    SET_SUBMIT_TIMEOUT rc=0x0 nverr=0
+[    53.890] -> vb:8_guard
+[    53.902]    SetMemoryAttribute(0x3885008000, 0x1000, uncached) rc=0x0
+[    53.910]    nvmapOwn ok handle=3944 id=3944 kind=0 size=0x1000
+[    53.915]    MAP_CMD_BUFFER(guard (holds device address 0) handle=3944 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x1980000
+[    53.942] -> vb:8a_map_cfg
+[    53.951]    MAP_CMD_BUFFER(cfg handle=3916 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x19a0000
+[    53.976] -> vb:8b_map_dst
+[    53.987]    MAP_CMD_BUFFER(dst handle=3924 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x19c0000
+[    54.015] -> vb:8c_map_src
+[    54.045] -> vb:8d_map_self
+[    54.049]    MAP_CMD_BUFFER(src(ours) handle=3928 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x1d00000
+[    54.053]    pinned: cfg=0x19a0000 dst=0x19c0000 self=0x1d00000 game_src=0x0 (+slot off 0x0)
+[    54.061]    self-src pattern: row0[0..8]=ff 00 00 11 ff 04 00 11
+[    54.085] -> vb:job_fill
+[    54.095]    [vb:job_fill] setcl=1 words=18 cmd[0..3]=00001740 10100002 00000080 00000001
+[    54.100]    [vb:job_fill] req=0xc0340001 sz=52 nr=0 rc=0x0 nverr=0 -> fence=844
+[    54.104]    [vb:job_fill] resolved addrs: cfg=0x00019a00 dst=0x00019c00 src=0x00000000 (<<8: 0x19a0000 0x19c0000 0x0)
+[    54.111]    [vb:job_fill] WAIT nverr=0  syncpt=846 (want >= 844)  OP_DONE fired
+[    54.116]    [vb:job_fill] dst sum32=11022336 changed=16384/65536  *** ENGINE WROTE OUR MEMORY ***
+[    54.129]    [vb:job_fill] dst[0..32]: ff c0 80 40 ff c0 80 40 ff c0 80 40 ff c0 80 40 ff c0 80 40 ff c0 80 40 ff c0 80 40 ff c0 80 40 
+[    54.135]    [vb:job_fill] row 32: ff c0 80 40 ff c0 80 40
+[    54.167] -> vb:job_blit_self
+[    54.176]    [vb:job_blit_self] setcl=1 words=21 cmd[0..3]=00001740 10100002 00000080 00000001
+[    54.182]    [vb:job_blit_self] req=0xc0340001 sz=52 nr=0 rc=0x0 nverr=0 -> fence=851
+[    54.186]    [vb:job_blit_self] resolved addrs: cfg=0x00019a00 dst=0x00019c00 src=0x0001d000 (<<8: 0x19a0000 0x19c0000 0x1d00000)
+[    54.194]    [vb:job_blit_self] WAIT nverr=0  syncpt=851 (want >= 851)  OP_DONE fired
+[    54.200]    [vb:job_blit_self] dst sum32=10551296 changed=16384/65536  *** ENGINE WROTE OUR MEMORY ***
+[    54.204]    [vb:job_blit_self] dst[0..32]: ff 00 00 11 ff 04 00 11 ff 08 00 11 ff 0c 00 11 ff 10 00 11 ff 14 00 11 ff 18 00 11 ff 1c 00 11 
+[    54.211]    [vb:job_blit_self] row 32: ff 00 80 11 ff 04 80 11
+[    54.215]    game blit still not possible: handle pins to phys=0
+[    54.238] -> vb:game_blit_SKIPPED
+[    54.264] -> vb:ALL_JOBS_DONE
+[    54.272]    ==== LIVE MODE (M86): streaming whenever a viewer is reading and a game is running ====
+[    54.480]    live[1]: attached to pid 141; 1920x1080, 3 slot(s); swapchain (8847360 B) at 0x1439d00000; game held 832 us; 26 attach events, continue rc=0x0
+[    54.485]    debug pump: running on core 3; helpers on cores 0/1/2: yes/yes/yes
+[    54.505] -> ns:1
+[    54.513]    ---- LIVE H.264 STREAM (M86): until the viewer or the game goes, an IDR every 60, QP 20 ----
+[    54.518]    nvstream: game swapchain 1920x1080 stride 1920 px, block height 2^4, 3 slot(s) of 8847360 B, format 0x100532120
+[    54.527]    nvstream: 3 slot(s), each its own nvmap object; 16 candidate buffer(s) of 8847360 B from 0x140eb43000 - matching them to slots while streaming
+[    54.545]    nvstream: content 1280x720 (handheld) (140 samples outside the top-left 1280x720 all zero) -> the VIC converts the corner 1:1; later frames read only its 3.9 MB
+[    54.552]    nvstream: encoding 1280x720 (the handheld picture, 1:1)
+[    54.556]    nvmapOwn(0x3885360000, 0x870000) kept CACHEABLE - caller must flush before submit
+[    54.566]    nvmapOwn ok handle=3960 id=3960 kind=0 size=0x870000
+[    54.570]    MAP_CMD_BUFFER(nvf-slot handle=3960 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x1d40000
+[    54.579]    nvmapOwn(0x3886230000, 0x6c5000) kept CACHEABLE - caller must flush before submit
+[    54.584]    nvmapOwn ok handle=3964 id=3964 kind=0 size=0x6c5000
+[    54.597]    MAP_CMD_BUFFER(nvf-arena(vic) handle=3964 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x25c0000
+[    54.602]    MAP_CMD_BUFFER(nvf-arena(enc) handle=3964 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x25c0000
+[    54.608]    nvstream: arena 6932 KB at +15168 KB; VIC sees it at 0x25c0000, NVENC at 0x25c0000 (syncpt 14); picture 0x27f0000/0x28d1000, bits 0x25d0000
+[    54.615]    clk(nvstream): smGetService(mm:u) rc=0x0
+[    54.620]    clk: mm id 5 (libnx: NVENC, nvtegra: NVDEC) req=1  get=0 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=979200000 Hz (rc=0x0)
+[    54.629]    clk: mm id 6 (libnx: NVDEC) req=2  get=979200000 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=979200000 Hz (rc=0x0)
+[    54.635]    clk: mm id 7 (NVJPG) req=3  get=0 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=652800000 Hz (rc=0x0)
+[    54.645]    clk-ensure(nvstream) #1 re-set max     : 2 request(s), SetAndWait rc=0x0 -> clkrst NVENC=979200000 Hz
+[    54.668] -> hb:14 sess=1 getdisp=1 relay=1 txn=227 vic=ns:1
+[    56.362]    swapchain: slots matched to their buffers after 24 frame intervals (weakest score 875/1000): 0->0x1439d00000 1->0x143a710000 2->0x143b120000
+[    57.755] -> hb:15 sess=1 getdisp=1 relay=1 txn=577 vic=ns:vic
+[    58.193] *** binder txn #600  program=01006a800016e000  session=20  code=7(queueBuffer) x296  flags=0x0  in=192 out=4096
+[    60.864] -> hb:16 sess=1 getdisp=1 relay=1 txn=883 vic=ns:vic
+[    63.528] *** binder txn #1200  program=01006a800016e000  session=20  code=7(queueBuffer) x596  flags=0x0  in=192 out=4096
+[    63.961] -> hb:17 sess=1 getdisp=1 relay=1 txn=1245 vic=ns:vic
+[    67.010] -> hb:18 sess=1 getdisp=1 relay=1 txn=1459 vic=ns:vic
+[    69.828] *** binder txn #1800  program=01006a800016e000  session=20  code=7(queueBuffer) x896  flags=0x0  in=192 out=4096
+[    70.039] -> hb:19 sess=1 getdisp=1 relay=1 txn=1823 vic=ns:vic
+[    73.097] -> hb:20 sess=1 getdisp=1 relay=1 txn=2176 vic=ns:vic
+[    73.331] shot: combo 0 pressed
+[    75.634] *** binder txn #2400  program=01006a800016e000  session=20  code=7(queueBuffer) x1196  flags=0x0  in=192 out=4096
+[    75.873] shot: 1280x720 -> sdmc:/switch/switch-frame-tap/screenshots/2026-10-02_19-48-29.png (2712 KB, 2501 ms)
+[    76.199] -> hb:21 sess=1 getdisp=1 relay=1 txn=2455 vic=ns:vic
+[    79.336] -> hb:22 sess=1 getdisp=1 relay=1 txn=2671 vic=ns:vic
+[    82.486] -> hb:23 sess=1 getdisp=1 relay=1 txn=2878 vic=ns:vic
+[    83.520] *** binder txn #3000  program=01006a800016e000  session=20  code=7(queueBuffer) x1496  flags=0x0  in=192 out=4096
+[    85.566] -> hb:24 sess=1 getdisp=1 relay=1 txn=3238 vic=ns:vic
+[    88.515] *** binder txn #3600  program=01006a800016e000  session=20  code=7(queueBuffer) x1796  flags=0x0  in=192 out=4096
+[    88.621] -> hb:25 sess=1 getdisp=1 relay=1 txn=3609 vic=ns:vic
+[    89.454]    nvstream: STALL at frame 119 (+2126 ms): read 21588 us, VIC 683 us, NVENC 14650 us, waiting for the previous USB transfer 22328 us, copy 1 us
+[    89.466]    nvstream: STALL at frame 122 (+2297 ms): read 36504 us, VIC 6791 us, NVENC 3771 us, waiting for the previous USB transfer 15574 us, copy 2 us
+[    89.470]    nvstream: STALL at frame 123 (+2453 ms): read 10424 us, VIC 510 us, NVENC 38784 us, waiting for the previous USB transfer 1702 us, copy 1 us
+[    89.482]    nvstream: STALL at frame 210 (+4643 ms): read 96127 us, VIC 1392 us, NVENC 3894 us, waiting for the previous USB transfer 12050 us, copy 0 us
+[    89.486]    nvstream: STALL at frame 226 (+5358 ms): read 11088 us, VIC 28312 us, NVENC 3649 us, waiting for the previous USB transfer 31964 us, copy 1 us
+[    89.489]    nvstream: STALL at frame 229 (+5625 ms): read 15651 us, VIC 3121 us, NVENC 81870 us, waiting for the previous USB transfer 1301 us, copy 0 us
+[    89.498]    nvstream: STALL at frame 231 (+5886 ms): read 36061 us, VIC 2207 us, NVENC 11272 us, waiting for the previous USB transfer 4440 us, copy 0 us
+[    89.503]    nvstream: STALL at frame 243 (+6418 ms): read 15132 us, VIC 522 us, NVENC 3480 us, waiting for the previous USB transfer 41249 us, copy 0 us
+[    89.514]    nvstream window: 34.3 fps sent; per frame avg us: read 6761 (flush 2562 of it)  VIC 3768  NVENC wait 2544  GPU fence 5; presents: 1226 already drawn, 25 waited for, 495 skipped
+[    89.520]    nvstream: 1200 frames in 34870 ms, 1199 sent, avg 7536 B/frame (IDR 62641, P 6602), NVENC 979200000 Hz; game presented 50.0 fps this window
+[    89.532]    nvstream: debug events 43 (+22 threads, -21 threads, 0 other, 0 faults left to the game) in 43 wakes; continued 43 (cores 0-3: 11/6/5/21), busy 0, failed 0 (last rc 0x0); longest hold 681 us
+[    91.666] -> hb:26 sess=1 getdisp=1 relay=1 txn=3973 vic=ns:vic
+[    93.515] *** binder txn #4200  program=01006a800016e000  session=20  code=7(queueBuffer) x2096  flags=0x0  in=192 out=4096
+[    94.766] -> hb:27 sess=1 getdisp=1 relay=1 txn=4343 vic=ns:vic
+[    97.914] -> hb:28 sess=1 getdisp=1 relay=1 txn=4715 vic=ns:vic
+[    98.514] *** binder txn #4800  program=01006a800016e000  session=20  code=7(queueBuffer) x2396  flags=0x0  in=192 out=4096
+[   101.002] -> hb:29 sess=1 getdisp=1 relay=1 txn=5091 vic=ns:vic
+[   103.512] *** binder txn #5400  program=01006a800016e000  session=20  code=7(queueBuffer) x2696  flags=0x0  in=192 out=4096
+[   104.060] -> hb:30 sess=1 getdisp=1 relay=1 txn=5463 vic=ns:vic
+[   104.611] shot: combo 0 pressed
+[   104.885] shot: 1280x720 -> sdmc:/switch/switch-frame-tap/screenshots/2026-10-02_19-49-00.png (2712 KB, 266 ms)
+[   107.096] -> hb:31 sess=1 getdisp=1 relay=1 txn=5827 vic=ns:vic
+[   108.513] *** binder txn #6000  program=01006a800016e000  session=20  code=7(queueBuffer) x2996  flags=0x0  in=192 out=4096
+[   109.355]    nvstream: stopped: the game switched to a 1080p picture
+[   109.365]    nvstream: game audio 9592 KB in 1873 packets (51157 ms of sound)
+[   109.369]    nvstream: 2370 frames sent in 54705 ms -> 43.3 fps (game presented 53.6 fps, 519 presents skipped), 0 encodes with errors
+[   109.380]    nvstream: per frame avg us: read+flush 4363  VIC 2300  NVENC 1860  copy 9  usb 1705; worst work 2660593 us
+[   109.385]    nvstream: avg 6154 B/frame (max 137097) -> 2 Mbps at the achieved rate; 40 IDR avg 83417 B, 2330 P avg 4828 B; clock re-ensured 0 time(s)
+[   109.388]    nvstream: console latency, the game's present -> header sent: avg 18621 us, max 2664721 us
+[   109.399]    nvstream: present fences: 2421 waited, avg 46 us, max 4381 us, 0 timed out (250 ms), 0 presents without a readable fence; 78 read(s) redone (the slot may have been reused while it was read)
+[   109.403]    nvstream: presents taken (M96): 2323 already drawn, 98 waited for (the oldest not yet drawn), 28 by the old latest-present rule
+[   109.413]    nvstream: per-stage max us: read 131005  VIC 2638721  NVENC 96331  USB wait 44684  copy 13450; 40 frame(s) over 50 ms of work; 0 USB wait(s) over 500 ms (IDR forced after each)
+[   109.418]    nvstream: debug events 43 (+22 threads, -21 threads, 0 other, 0 faults left to the game) in 43 wakes; continued 43 (cores 0-3: 11/6/5/21), busy 0, failed 0 (last rc 0x0); longest hold 681 us
+[   109.422]    nvstream: ended to restart at the game's new picture size
+[   109.454] -> ns:stopped
+[   109.490]    live[1]: session ended - the picture size changed - restarting at the new size; detached
+[   110.005]    live[2]: attached to pid 141; 1920x1080, 3 slot(s); swapchain (8847360 B) at 0x1439d00000; game held 497 us; 27 attach events, continue rc=0x0
+[   110.035] -> ns:1
+[   110.046]    ---- LIVE H.264 STREAM (M86): until the viewer or the game goes, an IDR every 60, QP 20 ----
+[   110.052]    nvstream: game swapchain 1920x1080 stride 1920 px, block height 2^4, 3 slot(s) of 8847360 B, format 0x100532120
+[   110.066]    nvstream: 3 slot(s), each its own nvmap object; 16 candidate buffer(s) of 8847360 B from 0x140eb43000 (starting from the last session's match) - matching them to slots while streaming
+[   110.072]    swapchain: the picture stands still - slot 0 shows 0x1439d00000 (the same picture in every slot) until motion tells them apart
+[   110.087]    nvstream: content 1920x1080 (docked) (140 samples outside the top-left 1280x720 not all zero) -> the VIC scales it to 1280x720
+[   110.099]    nvstream: encoding 1920x1080 (1920x1088 coded, SPS-cropped); pipelined: the next frame is read while this one encodes
+[   110.104]    nvmapOwn(0x3885360000, 0x870000) kept CACHEABLE - caller must flush before submit
+[   110.136]    nvmapOwn ok handle=9376 id=9376 kind=0 size=0x870000
+[   110.146] -> hb:32 sess=1 getdisp=1 relay=1 txn=6191 vic=ns:1
+[   110.153]    MAP_CMD_BUFFER(nvf-slot handle=9376 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x2ca0000
+[   110.169]    nvmapOwn(0x3886230000, 0x10b0000) kept CACHEABLE - caller must flush before submit
+[   110.180]    nvmapOwn ok handle=9380 id=9380 kind=0 size=0x10b0000
+[   110.185]    MAP_CMD_BUFFER(nvf-arena(vic) handle=9380 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x3520000
+[   110.189]    MAP_CMD_BUFFER(nvf-arena(enc) handle=9380 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x3520000
+[   110.198]    nvstream: arena 17088 KB at +15168 KB; VIC sees it at 0x3520000, NVENC at 0x3520000 (syncpt 14); picture 0x38d5000/0x3ad3000, bits 0x3550000
+[   110.203]    clk-ensure(nvstream) #1 re-set max     : 2 request(s), SetAndWait rc=0x0 -> clkrst NVENC=979200000 Hz
+[   110.969]    swapchain: slots matched to their buffers after 24 frame intervals (weakest score 875/1000): 0->0x1439d00000 1->0x143a710000 2->0x143b120000
+[   113.179] -> hb:33 sess=1 getdisp=1 relay=1 txn=6557 vic=ns:vic
+[   113.512] *** binder txn #6600  program=01006a800016e000  session=20  code=7(queueBuffer) x3296  flags=0x0  in=192 out=4096
+[   116.226] -> hb:34 sess=1 getdisp=1 relay=1 txn=6921 vic=ns:vic
+[   118.515] *** binder txn #7200  program=01006a800016e000  session=20  code=7(queueBuffer) x3596  flags=0x0  in=192 out=4096
+[   119.341] -> hb:35 sess=1 getdisp=1 relay=1 txn=7276 vic=ns:vic
+[   122.376] -> hb:36 sess=1 getdisp=1 relay=1 txn=7629 vic=ns:vic
+[   125.306] *** binder txn #7800  program=01006a800016e000  session=20  code=7(queueBuffer) x3896  flags=0x0  in=192 out=4096
+[   125.435] -> hb:37 sess=1 getdisp=1 relay=1 txn=7804 vic=ns:vic
+[   128.510] -> hb:38 sess=1 getdisp=1 relay=1 txn=8136 vic=ns:vic
+[   130.835] *** binder txn #8400  program=01006a800016e000  session=20  code=7(queueBuffer) x4196  flags=0x0  in=192 out=4096
+[   131.583] -> hb:39 sess=1 getdisp=1 relay=1 txn=8469 vic=ns:vic
+[   134.672] -> hb:40 sess=1 getdisp=1 relay=1 txn=8783 vic=ns:vic
+[   135.682]    nvstream: STALL at frame 276 (+4763 ms): read 39796 us, VIC 7392 us, NVENC 16 us, waiting for the previous USB transfer 4198 us, copy 7 us
+[   135.705]    nvstream: STALL at frame 491 (+8968 ms): read 3282 us, VIC 885 us, NVENC 18 us, waiting for the previous USB transfer 77295 us, copy 1 us
+[   135.720]    nvstream: STALL at frame 670 (+12300 ms): read 10028 us, VIC 41820 us, NVENC 14 us, waiting for the previous USB transfer 6729 us, copy 0 us
+[   135.736]    nvstream: STALL at frame 684 (+12890 ms): read 8218 us, VIC 36625 us, NVENC 43 us, waiting for the previous USB transfer 5520 us, copy 1 us
+[   135.755]    nvstream window: 46.9 fps sent; per frame avg us: read 9364 (flush 1313 of it)  VIC 2632  NVENC wait 64  GPU fence 2119; presents: 780 already drawn, 441 waited for, 117 skipped
+[   135.772]    nvstream: 1200 frames in 25558 ms, 1198 sent, avg 26368 B/frame (IDR 222453, P 23041), NVENC 979200000 Hz; game presented 52.5 fps this window
+[   135.795]    nvstream: debug events 2 (+1 threads, -1 threads, 0 other, 0 faults left to the game) in 2 wakes; continued 2 (cores 0-3: 0/0/1/1), busy 0, failed 0 (last rc 0x0); longest hold 27 us
+[   136.697] *** binder txn #9000  program=01006a800016e000  session=20  code=7(queueBuffer) x4496  flags=0x0  in=192 out=4096
+[   137.709] -> hb:41 sess=1 getdisp=1 relay=1 txn=9117 vic=ns:vic
+[   140.767] -> hb:42 sess=1 getdisp=1 relay=1 txn=9483 vic=ns:vic
+[   141.696] *** binder txn #9600  program=01006a800016e000  session=20  code=7(queueBuffer) x4796  flags=0x0  in=192 out=4096
+[   143.804] -> hb:43 sess=1 getdisp=1 relay=1 txn=9849 vic=ns:vic
+[   146.700] *** binder txn #10200  program=01006a800016e000  session=20  code=7(queueBuffer) x5096  flags=0x0  in=192 out=4096
+[   146.839] -> hb:44 sess=1 getdisp=1 relay=1 txn=10215 vic=ns:vic
+[   149.875] -> hb:45 sess=1 getdisp=1 relay=1 txn=10579 vic=ns:vic
+[   151.077] shot: combo 0 pressed
+[   151.699] *** binder txn #10800  program=01006a800016e000  session=20  code=7(queueBuffer) x5396  flags=0x0  in=192 out=4096
+[   151.756] shot: 1920x1080 -> sdmc:/switch/switch-frame-tap/screenshots/2026-10-02_19-49-47.png (6094 KB, 668 ms)
+[   152.916] -> hb:46 sess=1 getdisp=1 relay=1 txn=10941 vic=ns:vic
+[   155.964] -> hb:47 sess=1 getdisp=1 relay=1 txn=11307 vic=ns:vic
+[   156.700] *** binder txn #11400  program=01006a800016e000  session=20  code=7(queueBuffer) x5696  flags=0x0  in=192 out=4096
+[   157.556]    nvstream: STALL at frame 2072 (+40847 ms): read 18049 us, VIC 697367 us, NVENC 341 us, waiting for the previous USB transfer 2286 us, copy 520 us
+[   157.572]    nvstream window: 55.0 fps sent; per frame avg us: read 6893 (flush 1057 of it)  VIC 2395  NVENC wait 41  GPU fence 1885; presents: 471 already drawn, 745 waited for, 97 skipped
+[   157.580]    nvstream: 2400 frames in 47367 ms, 2398 sent, avg 75600 B/frame (IDR 263547, P 72413), NVENC 979200000 Hz; game presented 59.9 fps this window
+[   157.585]    nvstream: debug events 4 (+2 threads, -2 threads, 0 other, 0 faults left to the game) in 4 wakes; continued 4 (cores 0-3: 0/0/2/2), busy 0, failed 0 (last rc 0x0); longest hold 36 us
+[   159.012] -> hb:48 sess=1 getdisp=1 relay=1 txn=11674 vic=ns:vic
+[   160.235]    nvstream: stopped: the game switched to a 720p picture
+[   160.245]    nvstream: game audio 9304 KB in 2014 packets (49621 ms of sound)
+[   160.251]    nvstream: 2550 frames sent in 50021 ms -> 50.9 fps (game presented 56.1 fps, 220 presents skipped), 0 encodes with errors
+[   160.256]    nvstream: per frame avg us: read+flush 7949  VIC 2433  NVENC 54  copy 100  usb 1654; worst work 718897 us
+[   160.264]    nvstream: avg 81260 B/frame (max 540638) -> 33 Mbps at the achieved rate; 43 IDR avg 273201 B, 2507 P avg 77968 B; clock re-ensured 0 time(s)
+[   160.269]    nvstream: console latency, the game's present -> header sent: avg 32680 us, max 737603 us
+[   160.272]    nvstream: present fences: 2591 waited, avg 1884 us, max 34775 us, 0 timed out (250 ms), 0 presents without a readable fence; 52 read(s) redone (the slot may have been reused while it was read)
+[   160.279]    nvstream: presents taken (M96): 1404 already drawn, 1187 waited for (the oldest not yet drawn), 12 by the old latest-present rule
+[   160.284]    nvstream: per-stage max us: read 39796  VIC 697367  NVENC 9499  USB wait 77295  copy 9421; 5 frame(s) over 50 ms of work; 0 USB wait(s) over 500 ms (IDR forced after each)
+[   160.288]    nvstream: debug events 4 (+2 threads, -2 threads, 0 other, 0 faults left to the game) in 4 wakes; continued 4 (cores 0-3: 0/0/2/2), busy 0, failed 0 (last rc 0x0); longest hold 36 us
+[   160.297]    nvstream: ended to restart at the game's new picture size
+[   160.322] -> ns:stopped
+[   160.347]    live[2]: session ended - the picture size changed - restarting at the new size; detached
+[   160.856]    live[3]: attached to pid 141; 1920x1080, 3 slot(s); swapchain (8847360 B) at 0x1439d00000; game held 739 us; 27 attach events, continue rc=0x0
+[   160.885] -> ns:1
+[   160.890]    ---- LIVE H.264 STREAM (M86): until the viewer or the game goes, an IDR every 60, QP 20 ----
+[   160.901]    nvstream: game swapchain 1920x1080 stride 1920 px, block height 2^4, 3 slot(s) of 8847360 B, format 0x100532120
+[   160.912]    nvstream: 3 slot(s), each its own nvmap object; 16 candidate buffer(s) of 8847360 B from 0x140eb43000 (starting from the last session's match) - matching them to slots while streaming
+[   160.922]    nvstream: the last check found a 720p picture - starting at that size
+[   160.930]    nvstream: content 1280x720 (handheld) (140 samples outside the top-left 1280x720 all zero) -> the VIC converts the corner 1:1; later frames read only its 3.9 MB
+[   160.934]    nvstream: encoding 1280x720 (the handheld picture, 1:1)
+[   160.939]    nvmapOwn(0x3885360000, 0x870000) kept CACHEABLE - caller must flush before submit
+[   160.945]    nvmapOwn ok handle=18176 id=18176 kind=0 size=0x870000
+[   160.950]    MAP_CMD_BUFFER(nvf-slot handle=18176 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x45e0000
+[   160.956]    nvmapOwn(0x3886230000, 0x6c5000) kept CACHEABLE - caller must flush before submit
+[   160.963]    nvmapOwn ok handle=18180 id=18180 kind=0 size=0x6c5000
+[   160.969]    MAP_CMD_BUFFER(nvf-arena(vic) handle=18180 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x4e60000
+[   160.972]    MAP_CMD_BUFFER(nvf-arena(enc) handle=18180 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x4e60000
+[   160.979]    nvstream: arena 6932 KB at +15168 KB; VIC sees it at 0x4e60000, NVENC at 0x4e60000 (syncpt 14); picture 0x5090000/0x5171000, bits 0x4e70000
+[   160.997]    clk-ensure(nvstream) #1 re-set max     : 2 request(s), SetAndWait rc=0x0 -> clkrst NVENC=979200000 Hz
+[   161.548]    swapchain: slots matched to their buffers after 25 frame intervals (weakest score 1000/1000): 0->0x1439d00000 1->0x143a710000 2->0x143b120000
+[   161.697] *** binder txn #12000  program=01006a800016e000  session=20  code=7(queueBuffer) x5996  flags=0x0  in=192 out=4096
+[   162.037] -> hb:49 sess=1 getdisp=1 relay=1 txn=12039 vic=ns:vic
+[   165.061] -> hb:50 sess=1 getdisp=1 relay=1 txn=12401 vic=ns:vic
+[   166.697] *** binder txn #12600  program=01006a800016e000  session=20  code=7(queueBuffer) x6296  flags=0x0  in=192 out=4096
+[   168.081] -> hb:51 sess=1 getdisp=1 relay=1 txn=12764 vic=ns:vic
+[   171.102] -> hb:52 sess=1 getdisp=1 relay=1 txn=13127 vic=ns:vic
+[   171.697] *** binder txn #13200  program=01006a800016e000  session=20  code=7(queueBuffer) x6596  flags=0x0  in=192 out=4096
+[   174.122] -> hb:53 sess=1 getdisp=1 relay=1 txn=13489 vic=ns:vic
+[   176.698] *** binder txn #13800  program=01006a800016e000  session=20  code=7(queueBuffer) x6896  flags=0x0  in=192 out=4096
+[   177.143] -> hb:54 sess=1 getdisp=1 relay=1 txn=13851 vic=ns:vic
+[   180.165] -> hb:55 sess=1 getdisp=1 relay=1 txn=14215 vic=ns:vic
+[   181.070]    nvstream window: 59.7 fps sent; per frame avg us: read 1841 (flush 311 of it)  VIC 535  NVENC wait 1526  GPU fence 0; presents: 1198 already drawn, 4 waited for, 4 skipped
+[   181.076]    nvstream: 1200 frames in 20075 ms, 1199 sent, avg 59800 B/frame (IDR 137814, P 58478), NVENC 979200000 Hz; game presented 59.9 fps this window
+[   181.082]    nvstream: debug events 0 (+0 threads, -0 threads, 0 other, 0 faults left to the game) in 0 wakes; continued 0 (cores 0-3: 0/0/0/0), busy 0, failed 0 (last rc 0x0); longest hold 0 us
+[   181.698] *** binder txn #14400  program=01006a800016e000  session=20  code=7(queueBuffer) x7196  flags=0x0  in=192 out=4096
+[   182.894] shot: combo 0 pressed
+[   183.154] shot: 1280x720 -> sdmc:/switch/switch-frame-tap/screenshots/2026-10-02_19-50-19.png (2712 KB, 250 ms)
+[   183.202] -> hb:56 sess=1 getdisp=1 relay=1 txn=14577 vic=ns:vic
+[   186.235] -> hb:57 sess=1 getdisp=1 relay=1 txn=14941 vic=ns:vic
+[   186.699] *** binder txn #15000  program=01006a800016e000  session=20  code=7(queueBuffer) x7496  flags=0x0  in=192 out=4096
+[   187.880]    nvstream: stopped: the game switched to a 1080p picture
+[   187.885]    nvstream: game audio 5036 KB in 1239 packets (26858 ms of sound)
+[   187.889]    nvstream: 1590 frames sent in 26879 ms -> 59.1 fps (game presented 59.9 fps, 22 presents skipped), 0 encodes with errors
+[   187.899]    nvstream: per frame avg us: read+flush 1871  VIC 748  NVENC 1654  copy 29  usb 915; worst work 316383 us
+[   187.904]    nvstream: avg 62232 B/frame (max 185708) -> 29 Mbps at the achieved rate; 27 IDR avg 142000 B, 1563 P avg 60854 B; clock re-ensured 0 time(s)
+[   187.914]    nvstream: console latency, the game's present -> header sent: avg 5770 us, max 317204 us
+[   187.919]    nvstream: present fences: 1592 waited, avg 1 us, max 570 us, 0 timed out (250 ms), 0 presents without a readable fence; 1 read(s) redone (the slot may have been reused while it was read)
+[   187.931]    nvstream: presents taken (M96): 1578 already drawn, 14 waited for (the oldest not yet drawn), 0 by the old latest-present rule
+[   187.936]    nvstream: per-stage max us: read 11368  VIC 310377  NVENC 12651  USB wait 12649  copy 6810; 1 frame(s) over 50 ms of work; 0 USB wait(s) over 500 ms (IDR forced after each)
+[   187.946]    nvstream: STALL at frame 1309 (+21885 ms): read 2232 us, VIC 310377 us, NVENC 1365 us, waiting for the previous USB transfer 2022 us, copy 50 us
+[   187.952]    nvstream: debug events 0 (+0 threads, -0 threads, 0 other, 0 faults left to the game) in 0 wakes; continued 0 (cores 0-3: 0/0/0/0), busy 0, failed 0 (last rc 0x0); longest hold 0 us
+[   187.955]    nvstream: ended to restart at the game's new picture size
+[   187.985] -> ns:stopped
+[   188.036]    live[3]: session ended - the picture size changed - restarting at the new size; detached
+[   188.550]    live[4]: attached to pid 141; 1920x1080, 3 slot(s); swapchain (8847360 B) at 0x1439d00000; game held 1365 us; 27 attach events, continue rc=0x0
+[   188.581] -> ns:1
+[   188.585]    ---- LIVE H.264 STREAM (M86): until the viewer or the game goes, an IDR every 60, QP 20 ----
+[   188.589]    nvstream: game swapchain 1920x1080 stride 1920 px, block height 2^4, 3 slot(s) of 8847360 B, format 0x100532120
+[   188.603]    nvstream: 3 slot(s), each its own nvmap object; 16 candidate buffer(s) of 8847360 B from 0x140eb43000 (starting from the last session's match) - matching them to slots while streaming
+[   188.622]    nvstream: content 1920x1080 (docked) (140 samples outside the top-left 1280x720 not all zero) -> the VIC scales it to 1280x720
+[   188.633]    nvstream: encoding 1920x1080 (1920x1088 coded, SPS-cropped); pipelined: the next frame is read while this one encodes
+[   188.638]    nvmapOwn(0x3885360000, 0x870000) kept CACHEABLE - caller must flush before submit
+[   188.647]    nvmapOwn ok handle=18204 id=18204 kind=0 size=0x870000
+[   188.653]    MAP_CMD_BUFFER(nvf-slot handle=18204 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x5540000
+[   188.671]    nvmapOwn(0x3886230000, 0x10b0000) kept CACHEABLE - caller must flush before submit
+[   188.681]    nvmapOwn ok handle=18208 id=18208 kind=0 size=0x10b0000
+[   188.697]    MAP_CMD_BUFFER(nvf-arena(vic) handle=18208 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x5dc0000
+[   188.703]    MAP_CMD_BUFFER(nvf-arena(enc) handle=18208 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x5dc0000
+[   188.713]    nvstream: arena 17088 KB at +15168 KB; VIC sees it at 0x5dc0000, NVENC at 0x5dc0000 (syncpt 14); picture 0x6175000/0x6373000, bits 0x5df0000
+[   188.719]    clk-ensure(nvstream) #1 re-set max     : 2 request(s), SetAndWait rc=0x0 -> clkrst NVENC=979200000 Hz
+[   189.235]    swapchain: slots matched to their buffers after 25 frame intervals (weakest score 826/1000): 0->0x1439d00000 1->0x143a710000 2->0x143b120000
+[   189.269] -> hb:58 sess=1 getdisp=1 relay=1 txn=15305 vic=ns:vic
+[   191.700] *** binder txn #15600  program=01006a800016e000  session=20  code=7(queueBuffer) x7796  flags=0x0  in=192 out=4096
+[   192.317] -> hb:59 sess=1 getdisp=1 relay=1 txn=15669 vic=ns:vic
+[   195.400] -> hb:60 sess=1 getdisp=1 relay=1 txn=16035 vic=ns:vic
+[   196.699] *** binder txn #16200  program=01006a800016e000  session=20  code=7(queueBuffer) x8096  flags=0x0  in=192 out=4096
+[   198.499] -> hb:61 sess=1 getdisp=1 relay=1 txn=16407 vic=ns:vic
+[   201.603] -> hb:62 sess=1 getdisp=1 relay=1 txn=16779 vic=ns:vic
+[   201.699] *** binder txn #16800  program=01006a800016e000  session=20  code=7(queueBuffer) x8396  flags=0x0  in=192 out=4096
+[   204.671] -> hb:63 sess=1 getdisp=1 relay=1 txn=17151 vic=ns:vic
+[   206.699] *** binder txn #17400  program=01006a800016e000  session=20  code=7(queueBuffer) x8696  flags=0x0  in=192 out=4096
+[   207.745] -> hb:64 sess=1 getdisp=1 relay=1 txn=17519 vic=ns:vic
+[   209.589]    nvstream: STALL at frame 222 (+4423 ms): read 49151 us, VIC 1188 us, NVENC 14 us, waiting for the previous USB transfer 792 us, copy 65 us
+[   209.596]    nvstream window: 57.3 fps sent; per frame avg us: read 6543 (flush 1036 of it)  VIC 1963  NVENC wait 23  GPU fence 1706; presents: 268 already drawn, 945 waited for, 40 skipped
+[   209.605]    nvstream: 1200 frames in 20881 ms, 1198 sent, avg 150803 B/frame (IDR 364869, P 147171), NVENC 979200000 Hz; game presented 60.0 fps this window
+[   209.611]    nvstream: debug events 0 (+0 threads, -0 threads, 0 other, 0 faults left to the game) in 0 wakes; continued 0 (cores 0-3: 0/0/0/0), busy 0, failed 0 (last rc 0x0); longest hold 0 us
+[   210.772] -> hb:65 sess=1 getdisp=1 relay=1 txn=17887 vic=ns:vic
+[   211.699] *** binder txn #18000  program=01006a800016e000  session=20  code=7(queueBuffer) x8996  flags=0x0  in=192 out=4096
+[   213.802] -> hb:66 sess=1 getdisp=1 relay=1 txn=18249 vic=ns:vic
+[   216.700] *** binder txn #18600  program=01006a800016e000  session=20  code=7(queueBuffer) x9296  flags=0x0  in=192 out=4096
+[   216.836] -> hb:67 sess=1 getdisp=1 relay=1 txn=18613 vic=ns:vic
+[   219.870] -> hb:68 sess=1 getdisp=1 relay=1 txn=18977 vic=ns:vic
+[   221.699] *** binder txn #19200  program=01006a800016e000  session=20  code=7(queueBuffer) x9596  flags=0x0  in=192 out=4096
+[   222.097] shot: combo 0 pressed
+[   222.751] shot: 1920x1080 -> sdmc:/switch/switch-frame-tap/screenshots/2026-10-02_19-50-58.png (6094 KB, 631 ms)
+[   222.904] -> hb:69 sess=1 getdisp=1 relay=1 txn=19341 vic=ns:vic
+[   225.948] -> hb:70 sess=1 getdisp=1 relay=1 txn=19705 vic=ns:vic
+[   226.703] *** binder txn #19800  program=01006a800016e000  session=20  code=7(queueBuffer) x9896  flags=0x0  in=192 out=4096
+[   228.977] -> hb:71 sess=1 getdisp=1 relay=1 txn=20071 vic=ns:vic
+[   230.668]    nvstream: stopped: the game switched to a 720p picture
+[   230.677]    nvstream: game audio 7796 KB in 1842 packets (41578 ms of sound)
+[   230.682]    nvstream: 2400 frames sent in 41944 ms -> 57.2 fps (game presented 60.0 fps, 99 presents skipped), 0 encodes with errors
+[   230.685]    nvstream: per frame avg us: read+flush 6015  VIC 2039  NVENC 36  copy 132  usb 1280; worst work 684232 us
+[   230.696]    nvstream: avg 131418 B/frame (max 445499) -> 60 Mbps at the achieved rate; 40 IDR avg 318803 B, 2360 P avg 128242 B; clock re-ensured 0 time(s)
+[   230.700]    nvstream: console latency, the game's present -> header sent: avg 24667 us, max 705494 us
+[   230.704]    nvstream: present fences: 2418 waited, avg 1372 us, max 14970 us, 0 timed out (250 ms), 0 presents without a readable fence; 17 read(s) redone (the slot may have been reused while it was read)
+[   230.712]    nvstream: presents taken (M96): 771 already drawn, 1647 waited for (the oldest not yet drawn), 0 by the old latest-present rule
+[   230.717]    nvstream: per-stage max us: read 49151  VIC 666169  NVENC 10130  USB wait 14060  copy 10871; 2 frame(s) over 50 ms of work; 0 USB wait(s) over 500 ms (IDR forced after each)
+[   230.721]    nvstream: STALL at frame 1947 (+33366 ms): read 16505 us, VIC 666169 us, NVENC 14 us, waiting for the previous USB transfer 1254 us, copy 33 us
+[   230.729]    nvstream: debug events 0 (+0 threads, -0 threads, 0 other, 0 faults left to the game) in 0 wakes; continued 0 (cores 0-3: 0/0/0/0), busy 0, failed 0 (last rc 0x0); longest hold 0 us
+[   230.735]    nvstream: ended to restart at the game's new picture size
+[   230.752] -> ns:stopped
+[   230.796]    live[4]: session ended - the picture size changed - restarting at the new size; detached
+[   231.309]    live[5]: attached to pid 141; 1920x1080, 3 slot(s); swapchain (8847360 B) at 0x1439d00000; game held 1130 us; 27 attach events, continue rc=0x0
+[   231.369] -> ns:1
+[   231.385]    ---- LIVE H.264 STREAM (M86): until the viewer or the game goes, an IDR every 60, QP 20 ----
+[   231.395]    nvstream: game swapchain 1920x1080 stride 1920 px, block height 2^4, 3 slot(s) of 8847360 B, format 0x100532120
+[   231.407]    nvstream: 3 slot(s), each its own nvmap object; 16 candidate buffer(s) of 8847360 B from 0x140eb43000 (starting from the last session's match) - matching them to slots while streaming
+[   231.434]    nvstream: the last check found a 720p picture - starting at that size
+[   231.445]    nvstream: content 1280x720 (handheld) (140 samples outside the top-left 1280x720 all zero) -> the VIC converts the corner 1:1; later frames read only its 3.9 MB
+[   231.454]    nvstream: encoding 1280x720 (the handheld picture, 1:1)
+[   231.466]    nvmapOwn(0x3885360000, 0x870000) kept CACHEABLE - caller must flush before submit
+[   231.476]    nvmapOwn ok handle=18360 id=18360 kind=0 size=0x870000
+[   231.495]    MAP_CMD_BUFFER(nvf-slot handle=18360 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x6e80000
+[   231.506]    nvmapOwn(0x3886230000, 0x6c5000) kept CACHEABLE - caller must flush before submit
+[   231.517]    nvmapOwn ok handle=18364 id=18364 kind=0 size=0x6c5000
+[   231.530]    MAP_CMD_BUFFER(nvf-arena(vic) handle=18364 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x7700000
+[   231.544]    MAP_CMD_BUFFER(nvf-arena(enc) handle=18364 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x7700000
+[   231.554]    nvstream: arena 6932 KB at +15168 KB; VIC sees it at 0x7700000, NVENC at 0x7700000 (syncpt 14); picture 0x7930000/0x7a11000, bits 0x7710000
+[   231.565]    clk-ensure(nvstream) #1 re-set max     : 2 request(s), SetAndWait rc=0x0 -> clkrst NVENC=979200000 Hz
+[   231.697] *** binder txn #20400  program=01006a800016e000  session=20  code=7(queueBuffer) x10196  flags=0x0  in=192 out=4096
+[   231.983]    swapchain: slots matched to their buffers after 24 frame intervals (weakest score 1000/1000): 0->0x1439d00000 1->0x143a710000 2->0x143b120000
+[   232.026] -> hb:72 sess=1 getdisp=1 relay=1 txn=20435 vic=ns:vic
+[   235.092] -> hb:73 sess=1 getdisp=1 relay=1 txn=20789 vic=ns:vic
+[   236.232] app watch: application pid 0, program 0000000000000000
+[   236.298]    nvstream: stopped: slot read failed: the game exited
+[   236.336]    nvstream: game audio 636 KB in 157 packets (3392 ms of sound)
+[   236.367]    nvstream: 220 frames sent in 4722 ms -> 46.5 fps (game presented 42.7 fps, 0 presents skipped), 0 encodes with errors
+[   236.403]    nvstream: per frame avg us: read+flush 1838  VIC 526  NVENC 1601  copy 26  usb 754; worst work 7951 us
+[   236.438]    nvstream: avg 67589 B/frame (max 182014) -> 25 Mbps at the achieved rate; 4 IDR avg 170673 B, 216 P avg 65680 B; clock re-ensured 0 time(s)
+[   236.489]    nvstream: console latency, the game's present -> header sent: avg 56434 us, max 1177097 us
+[   236.529]    nvstream: present fences: 203 waited, avg 97 us, max 1692 us, 0 timed out (250 ms), 0 presents without a readable fence; 0 read(s) redone (the slot may have been reused while it was read)
+[   236.558]    nvstream: presents taken (M96): 179 already drawn, 24 waited for (the oldest not yet drawn), 19 by the old latest-present rule
+[   236.580]    nvstream: per-stage max us: read 5477  VIC 2515  NVENC 3378  USB wait 1234  copy 316; 0 frame(s) over 50 ms of work; 0 USB wait(s) over 500 ms (IDR forced after each)
+[   236.663]    nvstream: debug events 1 (+0 threads, -0 threads, 1 other, 0 faults left to the game) in 1 wakes; continued 1 (cores 0-3: 0/0/0/1), busy 0, failed 0 (last rc 0x0); longest hold 5 us; GAME GONE
+[   236.762] -> ns:stopped
+[   236.866]    live[5]: session ended - the game went away; detached
+[   237.934]    live: viewer present; waiting for a game (no application)
+[   237.986] -> live:no_game
+[   238.145] -> hb:74 sess=1 getdisp=1 relay=1 txn=20789 vic=live:no_game
+[   238.954] shot: combo 0 pressed
+[   239.597] shot: no game is running
+[   241.196] -> hb:75 sess=1 getdisp=1 relay=1 txn=20789 vic=live:no_game
+[   244.243] -> hb:76 sess=1 getdisp=1 relay=1 txn=20789 vic=live:no_game
+[   244.416]    live: waiting for a viewer (raw-view) to read the stream
+[   244.456] -> live:no_viewer

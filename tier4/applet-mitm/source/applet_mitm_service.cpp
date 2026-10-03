@@ -185,6 +185,10 @@ namespace ams::mitm::applet {
                 }
             }
             g_queue_transform.store(xf, std::memory_order_relaxed);
+            {
+                const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
+                g_queue_crop_wh.store((cw > 0 && chh > 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
+            }
             /* M89: seqlock - odd while slot, fence, tick and count change
              * together, so the capture never pairs one present's slot with
              * another's fence */

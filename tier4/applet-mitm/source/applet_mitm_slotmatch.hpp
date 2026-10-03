@@ -25,7 +25,9 @@
 namespace ams::mitm::applet::slotmatch {
 
     constexpr uint32_t MaxSlots = 8;
-    constexpr uint32_t MaxCand  = 24;
+    /* v0.7.3: 48 (was 24) - Minecraft back in handheld after docked had
+     * more than 24 regions of a 720p buffer's size, its new buffers past them */
+    constexpr uint32_t MaxCand  = 48;
 
     constexpr uint32_t MinPerSlot = 8;      /* counted intervals per slot before any match */
     constexpr int32_t  MinScore   = 600;    /* of 1000 */
@@ -79,7 +81,7 @@ namespace ams::mitm::applet::slotmatch {
             if (nslots < 2) { return false; }
             for (uint32_t s = 0; s < nslots; ++s) { if (tot[s] < MinPerSlot) { return false; } }
             uint8_t m[MaxSlots] = {};
-            uint32_t used = 0;
+            uint64_t used = 0;
             int32_t worst = 1000;
             for (uint32_t s = 0; s < nslots; ++s) {
                 int32_t best = -1, best_score = -100000, second = -100000;
@@ -93,9 +95,9 @@ namespace ams::mitm::applet::slotmatch {
                     if (score > best_score) { second = best_score; best_score = score; best = static_cast<int32_t>(c); }
                     else if (score > second) { second = score; }
                 }
-                if (best < 0 || best_score < MinScore || best_score - second < MinMargin || (used & (1u << best)) != 0) { return false; }
+                if (best < 0 || best_score < MinScore || best_score - second < MinMargin || (used & (UINT64_C(1) << best)) != 0) { return false; }
                 m[s] = static_cast<uint8_t>(best);
-                used |= 1u << best;
+                used |= UINT64_C(1) << best;
                 if (best_score < worst) { worst = best_score; }
             }
             std::memcpy(out, m, nslots);

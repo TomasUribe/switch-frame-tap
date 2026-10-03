@@ -1336,6 +1336,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<u32> g_queue_fence_n{0};
     constinit bool g_nvab_armed = false;
     constinit std::atomic<u32> g_queue_transform{0};
+    constinit std::atomic<u32> g_queue_crop_wh{0};
     constinit std::atomic<u64> g_queue_fence[4] = {};
     constinit std::atomic<u32> g_queue_seq{0};
     constinit PresentRec g_present_ring[PresentRingSize] = {};
@@ -2459,7 +2460,7 @@ namespace ams::mitm::applet {
          * One object for every slot (DuckStation: two slots at 0 and
          * 0x3C0000): every device-mapped region that holds the whole set
          * gives one candidate per slot, its base plus that slot's offset. */
-        u32 FindSlotCandidates(::ams::svc::Handle dbg, u64 buf, const u32 *slot_off, u32 nslots, bool separate, u64 *out, u32 max) {
+        u32 FindSlotCandidates(::ams::svc::Handle dbg, u64 buf, const u32 *slot_off, u32 nslots, bool separate, u64 *out, u32 max, u32 *devc = nullptr) {
             if (buf == 0 || nslots == 0) { return 0; }
             static constexpr u64 Aligns[] = { 0x1000, 0x10000, 0x20000, 0x40000, 0x100000, 0x200000, 0x400000 };
             u64 span = buf;
@@ -2476,12 +2477,17 @@ namespace ams::mitm::applet {
                     for (const u64 a : Aligns) {
                         const u64 step = (buf + a - 1) & ~(a - 1);
                         if (mi.size % step == 0 && mi.size / step <= 8) {
-                            for (u64 o = 0; o < mi.size && n < max; o += step) { out[n++] = mi.base_address + o; }
+                            for (u64 o = 0; o < mi.size && n < max; o += step) { if (devc) { devc[n] = mi.device_count; } out[n++] = mi.base_address + o; }
                             break;
                         }
                     }
                 } else if (dev && mi.size >= span) {
-                    for (u32 k = 0; k < nslots && n < max; ++k) { out[n++] = mi.base_address + slot_off[k]; }
+                    /* v0.7.3: what kind of region - Sonic Frontiers has two 640 MB
+                     * pools laid out alike, and the matcher once took the wrong one */
+                    LogLine("     region 0x%010llx, %llu MB: state 0x%x attr 0x%x perm 0x%x, device mappings %u, ipc %u",
+                            static_cast<unsigned long long>(mi.base_address), static_cast<unsigned long long>(mi.size >> 20),
+                            static_cast<u32>(mi.state), attr, static_cast<u32>(mi.permission), mi.device_count, mi.ipc_count);
+                    for (u32 k = 0; k < nslots && n < max; ++k) { if (devc) { devc[n] = mi.device_count; } out[n++] = mi.base_address + slot_off[k]; }
                 }
                 const u64 next = mi.base_address + mi.size;
                 if (next <= addr) { break; }
@@ -4859,27 +4865,39 @@ namespace ams::mitm::applet {
             return zero;
         }
 
-        /* M93: SlotContentIs720's samples, read straight from the game's slot
-         * (140 reads of 4 bytes) - 1 if all outside the corner are black, 0 if
-         * not, -1 if a read failed. */
-        s32 RemoteContentIs720(::ams::svc::Handle dbg, u64 base) {
+        /* v0.7.3: what a 1080p slot holds, for the 720p/1080p decision. Smash
+         * drawing 720p into the corner after docked mode leaves the docked
+         * picture around it - not black, so "all black outside" kept the
+         * stream at 1080p with the old frame framing the new one. So also:
+         * a hash of the same 140 points outside the corner and of 64 inside,
+         * compared from one check to the next - a 720p picture changes inside
+         * only. */
+        struct ContentProbe { bool ok, outside_black; u32 outside_hash, inside_hash; };
+
+        /* v0.7.3: what the last size check decided, for the session it
+         * restarts: its first frame cannot tell a 720p picture framed by an
+         * old docked one from a 1080p picture (pid, buffer set, 1 = 720p) */
+        struct SizeHint { u64 pid; u32 gen; s32 corner; };
+        constinit SizeHint g_size_hint = { 0, 0, -1 };
+
+        ContentProbe ProbeContent(::ams::svc::Handle dbg, u64 base) {
             auto off = [](u32 x, u32 y) -> u64 {
                 const u32 xb = x * 4;
                 return static_cast<u64>((y / 128) * 120 * 8192 + (xb / 64) * 8192 + ((y % 128) / 8) * 512
                      + ((xb % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((xb % 32) / 16) * 32 + (y % 2) * 16 + (xb % 16));
             };
+            ContentProbe r = { true, true, 2166136261u, 2166136261u };
             alignas(8) u8 px[8];
-            auto black = [&](u32 x, u32 y) -> s32 {
-                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(px), dbg, base + off(x, y), 4))) { return -1; }
-                return (px[0] | px[1] | px[2]) == 0 ? 1 : 0;
+            auto sample = [&](u32 x, u32 y, u32 *h, bool outside) {
+                if (!r.ok) { return; }
+                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(px), dbg, base + off(x, y), 4))) { r.ok = false; return; }
+                if (outside && (px[0] | px[1] | px[2]) != 0) { r.outside_black = false; }
+                for (u32 i = 0; i < 3; ++i) { *h = (*h ^ px[i]) * 16777619u; }
             };
-            for (u32 y = 10; y < 1080; y += 100) {
-                for (u32 x = 1300; x < 1920; x += 100) { const s32 b = black(x, y); if (b <= 0) { return b; } }
-            }
-            for (u32 y = 740; y < 1080; y += 50) {
-                for (u32 x = 10; x < 1280; x += 150) { const s32 b = black(x, y); if (b <= 0) { return b; } }
-            }
-            return 1;
+            for (u32 y = 10; y < 1080; y += 100) { for (u32 x = 1300; x < 1920; x += 100) { sample(x, y, std::addressof(r.outside_hash), true); } }
+            for (u32 y = 740; y < 1080; y += 50) { for (u32 x = 10; x < 1280; x += 150) { sample(x, y, std::addressof(r.outside_hash), true); } }
+            for (u32 y = 30; y < 720; y += 90) { for (u32 x = 40; x < 1280; x += 160) { sample(x, y, std::addressof(r.inside_hash), false); } }
+            return r;
         }
 
         /* the encode's bitstream length, as M81 sized it */
@@ -4948,6 +4966,9 @@ namespace ams::mitm::applet {
             bool sep = false;              /* reading per-slot buffers */
             bool sep_locked = false;       /* matched (or given up): no more sampling */
             bool still_guessed = false;    /* slot_cand from StillGuess (a still picture), not yet matched */
+            bool guess_trusted = false;    /* v0.7.3: slot_cand is the last session's match */
+            u32 held_ms = 0;               /* v0.7.3: how long the first frames waited for the match */
+            bool hold_done = false;        /* v0.7.3: the wait happens once a session */
             u64 cand[MaxSlotCand] = {};
             u32 ncand = 0;
             u8 slot_cand[8] = {};
@@ -4971,7 +4992,25 @@ namespace ams::mitm::applet {
                 const bool exact = R_SUCCEEDED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, slot_base)) &&
                                    mi.base_address == slot_base && mi.size == span;
                 if (!sep_layout && exact) { return; }
-                ncand = FindSlotCandidates(dbg, buf_bytes, slot_off, nslots, sep_layout, cand, MaxSlotCand);
+                u32 devc[MaxSlotCand] = {};
+                ncand = FindSlotCandidates(dbg, buf_bytes, slot_off, nslots, sep_layout, cand, MaxSlotCand, devc);
+                /* v0.7.3: one object holding the slots, in more than one region
+                 * that could hold it (Sonic: two pools laid out alike) - the
+                 * swapchain's region is also mapped for the display, so keep
+                 * the regions with the most device mappings, if they differ */
+                if (!sep_layout && ncand > nslots) {
+                    u32 top = 0, low = ~0u;
+                    for (u32 c = 0; c < ncand; ++c) { if (devc[c] > top) { top = devc[c]; } if (devc[c] < low) { low = devc[c]; } }
+                    if (top != low) {
+                        u32 kept = 0;
+                        for (u32 c = 0; c < ncand; ++c) { if (devc[c] == top) { cand[kept] = cand[c]; devc[kept] = devc[c]; ++kept; } }
+                        if (kept >= nslots) {
+                            LogLine("   %s: %u of %u candidates kept - the regions mapped for %u devices (the others %u)", who, kept, ncand, top, low);
+                            ncand = kept;
+                        }
+                    }
+                }
+                if (ncand == MaxSlotCand) { LogLine("   %s: the candidate list is full (%u) - the slots may be past it", who, ncand); }
                 if (ncand < nslots) {
                     LogLine("   %s: %u slot(s)%s, but %u candidate buffer(s) of %u B in the game's memory - reading from 0x%010llx as before",
                             who, nslots, sep_layout ? ", each its own buffer" : "", ncand, buf_bytes, static_cast<unsigned long long>(slot_base));
@@ -4993,6 +5032,7 @@ namespace ams::mitm::applet {
                         }
                     }
                     if (hits == nslots) { std::memcpy(slot_cand, m, sizeof(slot_cand)); reused = true; }
+                    guess_trusted = reused;
                 }
                 matcher.Reset(nslots, ncand);
                 sep = true;
@@ -5268,7 +5308,33 @@ namespace ams::mitm::applet {
                 return nslots <= 2 || g_queue_count.load(std::memory_order_acquire) - c >= nslots - 1;
             }
 
+            /* v0.7.3: before the first frame of a buffer set the matcher has
+             * not seen, watch presents go by - every one, in order, once its
+             * fence is reached - until it matches or sees a still picture, for
+             * up to 2.5 s. Sonic Frontiers keeps both slots 32 MB into one
+             * large object: the first guess was another region and the first
+             * ~0.75 s of the stream (22 frames at 30 fps) was noise. */
+            void HoldForMatch(::ams::svc::Handle dbg) {
+                if (hold_done || !sep || sep_locked || still_guessed || guess_trusted) { return; }
+                hold_done = true;
+                const u64 t0 = armTicksToNs(armGetSystemTick());
+                u32 c = g_queue_count.load(std::memory_order_acquire);
+                while (!sep_locked && !still_guessed && armTicksToNs(armGetSystemTick()) - t0 < UINT64_C(2500000000)) {
+                    if (g_queue_count.load(std::memory_order_acquire) == c) { os::SleepThread(TimeSpan::FromMilliSeconds(1)); continue; }
+                    ++c;
+                    PresentSnap p;
+                    if (!ReadPresent(c, std::addressof(p))) { c = g_queue_count.load(std::memory_order_acquire); continue; }   /* fell behind the ring */
+                    for (u32 w = 0; w < 100 && FenceState(p.fence_n, p.fence) == 0; ++w) { os::SleepThread(TimeSpan::FromMicroSeconds(500)); }
+                    this->Calibrate(dbg, p.count, p.slot);
+                }
+                held_ms = static_cast<u32>((armTicksToNs(armGetSystemTick()) - t0) / 1000000);
+                LogLine("   swapchain: the first frame waited %u ms for the slot match (%s)", held_ms,
+                        sep_locked ? "matched" : still_guessed ? "a still picture" : "not yet - streaming the first guess");
+                seen = g_queue_count.load(std::memory_order_acquire) - 1;   /* the latest present is new */
+            }
+
             bool Capture(::ams::svc::Handle dbg, u64 slot_base, u64 *read_ns, u32 *sig, u32 *dropped = nullptr) {
+                this->HoldForMatch(dbg);
                 for (u32 spins = 0; g_queue_count.load(std::memory_order_acquire) == seen && spins < 50; ++spins) {
                     os::SleepThread(TimeSpan::FromMilliSeconds(1));
                 }
@@ -5308,7 +5374,7 @@ namespace ams::mitm::applet {
                          * double-buffered game), the read may hold some of the
                          * NEXT picture: take that newer one instead. Triple
                          * buffering needs two presents queued after ours. */
-                        if (retry < 2 && SlotMayBeReused(pick.count)) {
+                        if (retry < 2 && SlotMayBeReused(pick.count) && ChangedSinceRead(dbg)) {
                             ++reread;
                             ++retry;
                             continue;
@@ -5347,8 +5413,27 @@ namespace ams::mitm::applet {
                 return this->ReadSlot(dbg, this->SlotAddr(slot_base, slot), read_ns, sig);
             }
 
+            /* v0.7.3, from WillMidia's PR #4: did the slot change after it
+             * was copied? Eight 64-byte samples of the slot against the copy -
+             * the cheap confirmation before a re-read (SlotMayBeReused only
+             * knows the slot MAY be the game's again: Smash's menus re-read
+             * 78 frames in one session, each a full copy). */
+            u64 last_read = 0;
+
+            bool ChangedSinceRead(::ams::svc::Handle dbg) const {
+                for (u32 k = 0; k < 8; ++k) {
+                    const u64 off = corner ? static_cast<u64>(k % CornerBlockRows) * FbBlockRow + ((static_cast<u64>(k) * 0x2340u % CornerBlockRowBytes) & ~UINT64_C(63))
+                                           : ((static_cast<u64>(buf_bytes) / 8 * k + 1024) & ~UINT64_C(63));
+                    alignas(64) u8 b[64];
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(b), dbg, last_read + off, sizeof(b)))) { return false; }
+                    if (std::memcmp(b, g_ind_buf + off, sizeof(b)) != 0) { return true; }
+                }
+                return false;
+            }
+
             bool ReadSlot(::ams::svc::Handle dbg, u64 base, u64 *read_ns, u32 *sig) {
                 const u64 t0 = armTicksToNs(armGetSystemTick());
+                last_read = base;
                 if (corner) {
                     for (u32 br = 0; br < CornerBlockRows; ++br) {
                         u8 *dst = g_ind_buf + br * FbBlockRow;
@@ -5384,6 +5469,14 @@ namespace ams::mitm::applet {
                 }
                 u32 samples = 0;
                 corner = SlotContentIs720(g_ind_buf, std::addressof(samples));
+                /* v0.7.3: a size check just restarted the stream - its finding
+                 * stands (the first frame alone cannot see old docked content) */
+                if (g_size_hint.corner >= 0 && g_size_hint.pid == g_app_pid.load(std::memory_order_relaxed) && g_size_hint.gen == g_game_surface.generation) {
+                    if ((g_size_hint.corner != 0) != corner) {
+                        LogLine("   %s: the last check found a %s picture - starting at that size", who, g_size_hint.corner ? "720p" : "1080p");
+                    }
+                    corner = g_size_hint.corner != 0;
+                }
                 if (corner) { src.rect_w = NvfW; src.rect_h = NvfH; }
                 LogLine("   %s: content %s (%u samples outside the top-left 1280x720 %s) -> %s",
                         who, corner ? "1280x720 (handheld)" : "1920x1080 (docked)", samples, corner ? "all zero" : "not all zero",
@@ -5918,6 +6011,9 @@ namespace ams::mitm::applet {
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
             bool pending = false, stalled = false, need_idr = true;
             u32 small_streak = 0;     /* v0.7.1: checks in a row that saw a 720p picture */
+            u32 big_streak = 0;       /* v0.7.3: ... and a 1080p one */
+            u32 stale_streak = 0;     /* v0.7.3: ... and a 720p one framed by an unchanging old picture */
+            ContentProbe last_probe = {};
             /* v0.6: the experiment's window (one variant) */
             u64 ab_bytes_p = 0, ab_bytes_i = 0, ab_intra = 0, ab_inter = 0, ab_qp = 0, ab_t0 = armTicksToNs(armGetSystemTick());
             u32 ab_np = 0, ab_ni = 0, ab_frames = 0, ab_window = 0;
@@ -6236,19 +6332,42 @@ namespace ams::mitm::applet {
                 /* M93: every 120 frames in live mode, has the game switched between
                  * a 720p and a 1080p picture (docked/undocked, ReverseNX)? A
                  * handful of 4-byte reads outside the 720p corner, not a frame. */
-                /* v0.7.1: every 30 frames, and to 720p only after 4 such checks in
-                 * a row. A 720p picture can never have anything outside the
-                 * corner, so 1080p is certain at once - but a docked game's
-                 * black menu transition looks just like a 720p picture, and
-                 * Smash in ReverseNX's docked mode flipped to the zoomed-in
-                 * corner for a few seconds at every menu change. */
-                if (live && s.mk8_layout && (i + 1) % 30 == 0) {
+                /* every 15 frames: is the game drawing 720p (the corner) or
+                 * 1080p? v0.7.1: black outside the corner is not certain - a
+                 * docked game's black menu transition looks just like a 720p
+                 * picture. v0.7.3: nor is it the only sign - Smash going from
+                 * docked to handheld leaves the docked picture there,
+                 * unchanging. A check votes 720p when outside is black, or the
+                 * corner changed and the outside did not; 1080p when the
+                 * game's crop is the whole 1920x1080, or the outside changed
+                 * too; nothing when nothing moved (a still menu). */
+                if (live && s.mk8_layout && (i + 1) % 15 == 0) {
                     const s32 sl = g_queue_slot.load(std::memory_order_relaxed);
-                    const u64 base = s.SlotAddr(slot_base, sl);
-                    const s32 now720 = RemoteContentIs720(dbg, base);
-                    const bool differs = now720 >= 0 && (now720 != 0) != started_corner;
-                    small_streak = (differs && now720 != 0) ? small_streak + 1 : 0;
-                    if (differs && (now720 == 0 || small_streak >= 4)) {
+                    const ContentProbe pr = ProbeContent(dbg, s.SlotAddr(slot_base, sl));
+                    s32 vote = -1;    /* 1: 720p (black outside), 2: 720p (old picture outside), 0: 1080p, -1: no evidence */
+                    if (pr.ok) {
+                        const u32 crop = g_queue_crop_wh.load(std::memory_order_relaxed);
+                        const bool crop_full = (crop >> 16) >= 1920 && (crop & 0xFFFF) >= 1080;
+                        const bool moved_in  = last_probe.ok && pr.inside_hash != last_probe.inside_hash;
+                        const bool moved_out = last_probe.ok && pr.outside_hash != last_probe.outside_hash;
+                        if (pr.outside_black)          { vote = 1; }
+                        else if (crop_full)            { vote = 0; }
+                        else if (moved_out)            { vote = 0; }
+                        else if (moved_in)             { vote = 2; }
+                    }
+                    last_probe = pr;
+                    /* checked every 15 frames (~0.25 s): an unchanging old picture
+                     * around a moving corner is clear after 3 (~0.75 s), black
+                     * outside only after 8 (~2 s - a menu transition), 1080p
+                     * after 2 (~0.5 s) */
+                    small_streak = (vote == 1 || vote == 2) ? small_streak + 1 : 0;
+                    stale_streak = vote == 2 ? stale_streak + 1 : 0;
+                    big_streak   = vote == 0 ? big_streak + 1 : 0;
+                    const bool to720  = !started_corner && (small_streak >= 8 || stale_streak >= 3);
+                    const bool to1080 = started_corner && big_streak >= 2;
+                    if (to720 || to1080) {
+                        const s32 now720 = to720 ? 1 : 0;
+                        g_size_hint = { g_app_pid.load(std::memory_order_relaxed), g_game_surface.generation, now720 };
                         ++size_changes;
                         why = now720 ? "the game switched to a 720p picture" : "the game switched to a 1080p picture";
                         end = StreamEnd::Reconfigure;

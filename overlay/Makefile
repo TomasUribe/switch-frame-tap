@@ -39,7 +39,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 
 APP_TITLE			:=		Switch Frame Tap
-APP_VERSION 	:= 		0.7.2
+APP_VERSION 	:= 		0.7.3
 
 TARGET		:=	switch-frame-tap
 BUILD		:=	build
