@@ -4872,7 +4872,7 @@ namespace ams::mitm::applet {
          * a hash of the same 140 points outside the corner and of 64 inside,
          * compared from one check to the next - a 720p picture changes inside
          * only. */
-        struct ContentProbe { bool ok, outside_black; u32 outside_hash, inside_hash; };
+        struct ContentProbe { bool ok, outside_black, inside_black; u32 outside_hash, inside_hash; };
 
         /* v0.7.3: what the last size check decided, for the session it
          * restarts: its first frame cannot tell a 720p picture framed by an
@@ -4886,12 +4886,12 @@ namespace ams::mitm::applet {
                 return static_cast<u64>((y / 128) * 120 * 8192 + (xb / 64) * 8192 + ((y % 128) / 8) * 512
                      + ((xb % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((xb % 32) / 16) * 32 + (y % 2) * 16 + (xb % 16));
             };
-            ContentProbe r = { true, true, 2166136261u, 2166136261u };
+            ContentProbe r = { true, true, true, 2166136261u, 2166136261u };
             alignas(8) u8 px[8];
             auto sample = [&](u32 x, u32 y, u32 *h, bool outside) {
                 if (!r.ok) { return; }
                 if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(px), dbg, base + off(x, y), 4))) { r.ok = false; return; }
-                if (outside && (px[0] | px[1] | px[2]) != 0) { r.outside_black = false; }
+                if ((px[0] | px[1] | px[2]) != 0) { (outside ? r.outside_black : r.inside_black) = false; }
                 for (u32 i = 0; i < 3; ++i) { *h = (*h ^ px[i]) * 16777619u; }
             };
             for (u32 y = 10; y < 1080; y += 100) { for (u32 x = 1300; x < 1920; x += 100) { sample(x, y, std::addressof(r.outside_hash), true); } }
@@ -6350,26 +6350,37 @@ namespace ams::mitm::applet {
                         const bool crop_full = (crop >> 16) >= 1920 && (crop & 0xFFFF) >= 1080;
                         const bool moved_in  = last_probe.ok && pr.inside_hash != last_probe.inside_hash;
                         const bool moved_out = last_probe.ok && pr.outside_hash != last_probe.outside_hash;
-                        if (pr.outside_black)          { vote = 1; }
-                        else if (crop_full)            { vote = 0; }
+                        /* v0.7.6: the game's own word first - MK8 docked crops
+                         * 1920x1080, and its long black loading screens were
+                         * taken for a 720p picture (a zoom and a restart). And a
+                         * picture black inside too is a transition, not 720p. */
+                        if (crop_full)                                   { vote = 0; }
+                        else if (pr.outside_black && pr.inside_black)    { vote = -1; }
+                        else if (pr.outside_black)                       { vote = 1; }
                         else if (moved_out)            { vote = 0; }
                         else if (moved_in)             { vote = 2; }
                     }
                     last_probe = pr;
-                    /* checked every 15 frames (~0.25 s): an unchanging old picture
-                     * around a moving corner is clear after 3 (~0.75 s), black
-                     * outside only after 8 (~2 s - a menu transition), 1080p
-                     * after 2 (~0.5 s) */
+                    /* checked every 15 frames (~0.25 s): 720p after 8 checks in a
+                     * row (~2 s) that saw black or an unchanging picture outside
+                     * the corner, 1080p after 2 (~0.5 s). v0.7.6: the old
+                     * picture case took 3 (~0.75 s) - but a fake-docked Smash
+                     * menu that only moves in its top-left area looks just the
+                     * same for a moment, and the stream zoomed in for a split
+                     * second at menu changes. A real switch to handheld leaves
+                     * the old picture there for good, so 2 s still finds it. */
                     small_streak = (vote == 1 || vote == 2) ? small_streak + 1 : 0;
                     stale_streak = vote == 2 ? stale_streak + 1 : 0;
                     big_streak   = vote == 0 ? big_streak + 1 : 0;
-                    const bool to720  = !started_corner && (small_streak >= 8 || stale_streak >= 3);
+                    const bool to720  = !started_corner && small_streak >= 8;
                     const bool to1080 = started_corner && big_streak >= 2;
                     if (to720 || to1080) {
                         const s32 now720 = to720 ? 1 : 0;
                         g_size_hint = { g_app_pid.load(std::memory_order_relaxed), g_game_surface.generation, now720 };
                         ++size_changes;
-                        why = now720 ? "the game switched to a 720p picture" : "the game switched to a 1080p picture";
+                        why = !now720 ? "the game switched to a 1080p picture"
+                            : stale_streak != 0 ? "the game switched to a 720p picture (an unchanging old picture outside the corner)"
+                                                : "the game switched to a 720p picture (black outside the corner)";
                         end = StreamEnd::Reconfigure;
                         break;
                     }
