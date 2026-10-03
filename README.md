@@ -132,12 +132,12 @@ manager app:
 
 Nothing else: no other sysmodule, no sigpatches, no capture card.
 
-## Install (v0.7.1)
+## Install (v0.7.2)
 
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.7.1-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.7.2-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -151,7 +151,7 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.7.1-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.7.2-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -170,7 +170,7 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.7.1-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.7.2-linux-viewer.tar.gz` with the same files.
 
 On both, the viewer opens a window that says what it is waiting for (the
 Switch, its USB driver, or a game) and lists its keys; the same screen comes
@@ -186,12 +186,24 @@ default audio device.
 | **Esc** | leave fullscreen / close |
 | **Tab** | the connection: USB / Network (v0.7.0; remembered) |
 | **I** | type the Switch's IP address (Network, if it is not found by itself) |
+| **O** or **F3** | the stats overlay: off / FPS / graphs / full (v0.7.2; remembered) |
 
 It reads USB, decodes and draws on separate threads and shows the frames in
 order, one per screen refresh (vsync), so the picture stays smooth. Its
 statistics - frame rate, latencies, decode and draw times, once a second - go
 to the terminal on Linux and to `%APPDATA%\switch-frame-tap\viewer\viewer.log`
 on Windows.
+
+**The stats overlay** (v0.7.2): **O** or **F3** steps through four levels -
+off; **FPS**, a counter in the corner (yellow or red when frames come
+unevenly); **graphs**, frame rate, bitrate and latency with a frame-time graph
+and a latency graph split into the Switch's part and the PC's; and **full**,
+every number the viewer keeps (decode and draw times, skipped frames, lost
+packets, keyframes, the audio buffer, ...) with six graphs. It scales with the
+window, and the level is remembered.
+
+| ![Stats overlay: graphs](docs/viewer-stats-graphs.jpg) | ![Stats overlay: full](docs/viewer-stats-full.jpg) |
+|---|---|
 
 **Recording (v0.5.0).** Press **R** in the viewer: from the next keyframe (within
 a second) it saves an MP4 to `Videos/Switch Frame Tap` - the console's H.264
@@ -241,8 +253,29 @@ them. Settings live in `sdmc:/config/switch-frame-tap/config.ini`.
 
 Needs an overlay menu (Tesla Menu or Ultrahand, on nx-ovlloader): stream
 on/off (remembered across reboots), live status, **Stream this app** (see
-below), and Game default / Handheld (720p) / Docked (1080p) through
-ReverseNX-RT.
+below), **Enable sound in no-record games** (below), and Game default /
+Handheld (720p) / Docked (1080p) through ReverseNX-RT.
+
+### Sound in games that block recording
+
+The game's sound comes from the console's own video recorder, and some games
+turn it off (Super Smash Bros. Ultimate, for one): the picture streams, the
+sound does not. [dvr-patches](https://github.com/exelix11/dvr-patches) (by
+exelix11, made for SysDVR) patch the system so the recorder runs for every
+game, and then the sound comes through:
+
+1. Download `dvr-patches.zip` from their
+   [releases](https://github.com/exelix11/dvr-patches/releases) - the one for
+   your firmware - and unzip it onto the root of the SD card
+   (`atmosphere/exefs_patches/am/`).
+2. Restart the console.
+
+They are on from then on, for every game. The overlay's **Enable sound in
+no-record games** switches them off and on again (a restart applies it) - if a
+game crashes with them (a crash report for `0100000000000023`), turn them off.
+They need a new version after each firmware update. (Recording the console's
+final mix through `audrec:u` instead was tried in v0.7.2's testing: it records,
+but a game that blocks recording is silent in it.)
 
 ### Webcam mode
 
@@ -339,7 +372,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.7.1       # -> dist/switch-frame-tap-0.7.1-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.7.2       # -> dist/switch-frame-tap-0.7.2-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -375,7 +408,8 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   picture (Kirby: v0.4.1) are flipped back the same way; a 90-degree rotation
   is not handled (none seen yet - the log would say "rot-90").
 - **Game audio** comes from the console's own video recorder (as with SysDVR):
-  games that turn video capture off have no sound in the stream.
+  games that turn video capture off have no sound in the stream unless
+  [dvr-patches](#sound-in-games-that-block-recording) are installed.
 - **Webcam mode:** picture only, higher latency in OBS than the viewer, not
   visible to the Windows Camera app; switching modes needs a restart.
 - **PC viewer: Windows and Linux** (x86_64). No macOS viewer yet. On Windows
@@ -596,7 +630,8 @@ dock works over the network since v0.7.0, with the quality adapting to the link.
 | Bitrate tuning (better P frames, QP) | **done** (v0.6.0): P frames at QP+2 and the temporal motion hint, ~15-20 % smaller; the encoder measured against x264 (89 % of our bits at the same QP) |
 | **Network streaming, docked play** (TCP from the sysmodule, discovery by last address / beacon / subnet scan, rate control from the sender's busy time) | **done, on hardware** (v0.7.0) |
 | Games with one buffer object per slot (Minecraft, Smash: found by watching which buffer changes with which frame), finished frames only (Pokemon's fades), the on-screen keyboard with the module on | **done, on hardware** (v0.7.1) |
-| Game audio (grc:d PCM alongside the video; paced playback) | **done** (v0.3.0) |
+| Game audio (grc:d PCM alongside the video; paced playback) | **done** (v0.3.0); games that block recording with dvr-patches, switchable from the overlay (v0.7.2) |
+| Stats overlay in the viewer (FPS / graphs / full) | **done** (v0.7.2) |
 | Windows viewer, and paced display (reader / decoder / vsync threads) on both | **done** (v0.2.0) |
 | Recording from the viewer (MP4: the console's H.264 untouched + AAC) | **done, on hardware** (v0.5.0) |
 | Webcam mode (UVC 1.5 H.264 camera, 1080p/720p60) | **done, on hardware** (v0.4.0). MJPEG (for the Windows Camera app) would have to be software JPEG on the Switch's CPU - its NVJPG engine only decodes - probably 720p30; parked |

@@ -25,6 +25,9 @@
  *   ./raw-view --file s.sft --paced --seconds 5   # v0.2: a recording through the LIVE
  *                              # pipeline (reader thread, decoder thread, vsync display)
  *                              # game audio (v0.3) plays on the default sound device; M mutes
+ *   ./raw-view --file s.sft --paced --seconds 4 --stats full --shot hud.bmp
+ *                              # v0.7.2: the stats overlay at a level (off/fps/graphs/full;
+ *                              # O or F3 cycles it), and the last frame saved as BMP (tests)
  *   ./raw-view --net 192.168.1.23   # v0.7: the stream over the network (the console
  *                              # with network streaming on); --app finds it by itself
  *   R records to MP4 (v0.5) in Videos/Switch Frame Tap: the console's H.264 as it
@@ -94,6 +97,7 @@ static int g_app = 0;               /* --app: survive the console leaving the bu
 static int g_lost = 0;              /* --app: the console left; wait for it again */
 static int g_paced = 0;             /* --paced: a recording fed through the live pipeline at 60 fps, looped (tests) */
 static double g_run_secs = 0;       /* --seconds: stop the live pipeline after this long (tests) */
+static const char *g_shot = NULL;    /* --shot: save the last frame drawn (overlay included) as BMP (tests) */
 static const char *g_mp4 = NULL;     /* --mp4 FILE: record into FILE from the start (tests) */
 static const char *g_rec_dir = NULL; /* --rec-dir DIR: where R saves (default Videos/Switch Frame Tap) */
 
@@ -136,6 +140,7 @@ static int conn_for_menu(void);
 static const char *net_status_for_menu(void);
 static const char *ip_edit_for_menu(void);   /* NULL unless an address is being typed */
 #include "menu.h"              /* v0.5: the main screen while there is no picture */
+#include "hud.h"               /* v0.7.2: the stats overlay (O / F3) */
 static libusb_device_handle *g_usb = NULL;
 
 /* ---- v0.7: the network transport ------------------------------------------
@@ -263,6 +268,8 @@ static void prefs_load(void)
         char v[128];
         if (sscanf(line, "connection=%127s", v) == 1) g_conn = strcmp(v, "network") == 0 ? CONN_NET : CONN_USB;
         if (sscanf(line, "last_ip=%63s", v) == 1) snprintf(g_last_ip, sizeof(g_last_ip), "%.63s", v);
+        int hm;
+        if (sscanf(line, "stats_overlay=%d", &hm) == 1 && hm >= 0 && hm < HUD_MODES) g_hud = hm;
     }
     fclose(f);
 }
@@ -273,7 +280,7 @@ static void prefs_save(void)
     prefs_path(path, sizeof(path));
     FILE *f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "connection=%s\nlast_ip=%s\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip);
+    fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud);
     fclose(f);
 }
 
@@ -726,6 +733,11 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
             snprintf(t, sizeof(t), "Switch Frame Tap%s", rs[0] ? rs : "  |  recording stopped");
             SDL_SetWindowTitle(win, t);
             if (g_menu) menu_draw(ren);
+        } else if (e.type == SDL_KEYDOWN && (e.key.keysym.sym == SDLK_o || e.key.keysym.sym == SDLK_F3) && !e.key.repeat) {
+            /* v0.7.2: the stats overlay - off, FPS, graphs, full */
+            hud_cycle();
+            prefs_save();
+            fprintf(stderr, "\nstats overlay: %s\n", hud_mode_name[g_hud]);
         } else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_m) {
             g_mute = !g_mute;
             if (g_adev) { SDL_ClearQueuedAudio(g_adev); SDL_PauseAudioDevice(g_adev, 1); g_a_paused = 1; }
@@ -850,6 +862,8 @@ static SDL_cond *g_f_put = NULL;
 static volatile int g_dec_stop = 0;
 static Uint64 g_t_rx[256];           /* header arrival per frame number */
 static double g_age_ms[256];         /* the console's own age of that frame */
+static float g_kb_pts[256], g_dec_pts[256];   /* v0.7.2 overlay: its size, its decode time */
+static unsigned char g_key_pts[256];          /* and whether it was a keyframe */
 
 /* counters the decoder writes and the display loop reads (benign races) */
 static volatile long s_packets = 0, s_decoded = 0, s_undecoded = 0, s_lost = 0, s_keyframes = 0, s_sessions = 1;
@@ -881,6 +895,9 @@ static int decoder_main(void *arg)
         const Uint64 d0 = SDL_GetPerformanceCounter();
         const int got = h264_decode(a->dec, payload, (int)hdr.length, (int64_t)hdr.kind);
         const double dm = (double)(SDL_GetPerformanceCounter() - d0) * 1000.0 / (double)freq;
+        g_kb_pts[hdr.kind & 255] = hdr.length / 1024.0f;
+        g_dec_pts[hdr.kind & 255] = (float)dm;
+        g_key_pts[hdr.kind & 255] = (hdr.flags & SFT_FLAG_KEY) != 0;
         s_dec_ms += dm;
         if (dm > s_dec_max) s_dec_max = dm;
         if (got < 0) { s_undecoded++; continue; }
@@ -1029,6 +1046,25 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                 SDL_RenderFillRect(ren, &r);
                 SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
             }
+            if (g_hud != HUD_OFF || g_hud_toast) {     /* v0.7.2: the stats overlay */
+                char rs[200], cs[96];
+                rec_status(rs, sizeof(rs));
+                if (g_conn == CONN_NET) snprintf(cs, sizeof(cs), "Network%s%s", net_peer_for_menu()[0] ? " " : "", net_peer_for_menu());
+                else snprintf(cs, sizeof(cs), "USB");
+                hud_draw(ren, (int)W, (int)H, cs, rs[0] ? rs + 5 : "");
+                SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+            }
+            if (g_shot && g_run_secs > 0 && (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq >= g_run_secs - 1.0) {
+                int ow = 0, oh = 0;
+                SDL_GetRendererOutputSize(ren, &ow, &oh);
+                SDL_Surface *sf = SDL_CreateRGBSurfaceWithFormat(0, ow, oh, 32, SDL_PIXELFORMAT_ARGB8888);
+                if (sf && SDL_RenderReadPixels(ren, NULL, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch) == 0) {
+                    SDL_SaveBMP(sf, g_shot);
+                    fprintf(stderr, "\nsaved %dx%d to %s\n", ow, oh, g_shot);
+                }
+                if (sf) SDL_FreeSurface(sf);
+                g_shot = NULL;
+            }
             SDL_RenderPresent(ren);            /* waits for the display's refresh (vsync) */
             const Uint64 now = SDL_GetPerformanceCounter();
             w_draw += (double)(now - r0) * 1000.0 / (double)freq;
@@ -1037,7 +1073,11 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
             const double l = (double)(now - g_t_rx[k]) * 1000.0 / (double)freq;
             if (l >= 0 && l < 5000) { lat_sum += l; lat_n++; w_lat += l; w_lat_n++; if (l > lat_max) lat_max = l; }
             if (g_age_ms[k] >= 0) { age_sum += g_age_ms[k]; age_n++; w_age += g_age_ms[k]; w_age_n++; if (g_age_ms[k] > age_max) age_max = g_age_ms[k]; }
-            if (t_prev_show) { const double gap = (double)(now - t_prev_show) * 1000.0 / (double)freq; if (gap > w_gap) w_gap = gap; }
+            {
+                const double gap = t_prev_show ? (double)(now - t_prev_show) * 1000.0 / (double)freq : 0.0;
+                if (gap > w_gap) w_gap = gap;
+                hud_frame((float)gap, (l >= 0 && l < 5000) ? (float)l : 0.0f, (float)g_age_ms[k], g_kb_pts[k], g_key_pts[k], g_dec_pts[k]);
+            }
             t_prev_show = now;
             av_frame_unref(show);
         }
@@ -1062,6 +1102,16 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                         w_lat_n ? w_lat / w_lat_n : 0.0, w_age_n ? w_age / w_age_n : 0.0,
                         dms, s_dec_max, w_shown ? w_draw / w_shown : 0.0, w_gap, w_qmax_seen,
                         a_kbs, a_q, (long)g_a_underruns, (long)g_a_resyncs, g_mute ? " (muted)" : "");
+                {
+                    hud_sec hs = { 0 };
+                    hs.fps = w_shown / secs; hs.dec_fps = dec / secs; hs.mbps = mbps;
+                    hs.pc = w_lat_n ? w_lat / w_lat_n : 0.0; hs.con = w_age_n ? w_age / w_age_n : 0.0;
+                    hs.dec_ms = dms; hs.dec_max = s_dec_max; hs.draw_ms = w_shown ? w_draw / w_shown : 0.0; hs.gap_max = w_gap;
+                    hs.a_kbs = a_kbs; hs.a_q = a_q; hs.skipped = w_skipped; hs.lost = s_lost; hs.keyframes = s_keyframes;
+                    hs.underruns = g_a_underruns; hs.resyncs = g_a_resyncs; hs.sessions = s_sessions; hs.packets = s_packets;
+                    hs.qmax = w_qmax_seen; hs.w = (int)W; hs.h = (int)H;
+                    hud_second(&hs);
+                }
                 w_a_bytes0 = g_a_bytes;
                 t_win = now; w_shown = w_skipped = 0; w_dec0 = s_decoded; w_bytes0 = s_bytes; w_dec_ms0 = s_dec_ms;
                 w_lat = w_age = w_gap = w_draw = 0; w_lat_n = w_age_n = 0; s_dec_max = 0; g_qmax = 0; w_qmax_seen = 0;
@@ -1117,6 +1167,11 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--app")) g_app = 1;
         else if (!strcmp(argv[i], "--paced")) g_paced = 1;
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) g_run_secs = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--shot") && i + 1 < argc) g_shot = argv[++i];
+        else if (!strcmp(argv[i], "--stats") && i + 1 < argc) {
+            const char *m = argv[++i];
+            for (int k = 0; k < HUD_MODES; k++) if (!strcmp(m, hud_mode_name[k]) || (k == HUD_FPS && !strcmp(m, "fps"))) g_hud = k;
+        }
         else if (!strcmp(argv[i], "--mp4") && i + 1 < argc) g_mp4 = argv[++i];
         else if (!strcmp(argv[i], "--rec-dir") && i + 1 < argc) g_rec_dir = argv[++i];
         else if (!strcmp(argv[i], "--net") && i + 1 < argc) net_host = argv[++i];

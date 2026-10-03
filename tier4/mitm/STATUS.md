@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.1** (the keyboard, finished frames, Minecraft and Smash). Released: v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.2** (the viewer's stats overlay; sound in games that block recording, through dvr-patches). Released: v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,35 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.7.2: the viewer's stats overlay; sound in games that block recording ***
+
+- **Sound in games that block recording (Smash).** grc:d has nothing for them:
+  am never starts the console's recorder for a game whose NACP turns video
+  capture off, and grcdTransfer just blocks. Tried first, and dropped:
+  **audrec:u** (IFinalOutputRecorder, the console's final mix). It opens from
+  the sysmodule (aruid 0), delivers 48 kHz stereo s16 in real time (8 KB
+  buffers, ~1 MB / 5 s) - and Smash is silent in it the whole time (peak 0;
+  one 3185 blip, a system sound). The game's record volume (aud:a
+  GetAudioOutputProcessRecordVolume, 11.0.0+, by pid) read 100 % for Smash,
+  so that is not the switch; MK8 read 0 % while exiting. What works:
+  **dvr-patches** (exelix11, BSD-3) - IPS patches for `am` that treat every
+  game as auto-recording, so grc records Smash and its sound arrives through
+  the existing grc:d path, nothing else changed (Smash 57.9 fps over 3.5
+  min, a few stalls at transitions while grc's own encoder starts; VIC once
+  2 s). Not bundled: the README links them; the overlay's "Enable sound in
+  no-record games" moves `atmosphere/exefs_patches/am` to and from
+  `config/switch-frame-tap/dvr-patches` (am reads it at boot). The overlay
+  must wrap stdio in tsl::hlp::doWithSDCardHandle - libtesla keeps no
+  sdmc: mounted (the first build saw nothing and the toggle was stuck).
+- **The viewer's stats overlay** (`tools/raw-recv/hud.h`): O / F3 cycles off /
+  FPS / graphs / full, remembered in viewer.ini (`stats_overlay=`). Per frame
+  shown: the gap, PC and console latency, the frame's size and keyframe flag
+  and its decode time (the decoder keeps them by frame number); per second the
+  same summary the log prints. Drawn in 720p units through
+  SDL_RenderSetScale on top of the logical size; loads the font itself (a
+  replay never draws the menu). `--stats MODE --shot FILE.bmp` saves the
+  drawn frame for tests and the README pictures.
 
 ## *** v0.7.1: the keyboard, finished frames, games with one buffer per slot ***
 

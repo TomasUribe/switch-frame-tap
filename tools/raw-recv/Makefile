@@ -22,7 +22,7 @@ endif
 
 all: raw-view raw-recv
 
-raw-view: raw-view.c record.h menu.h font_dejavu.h
+raw-view: raw-view.c record.h menu.h hud.h font_dejavu.h
 	$(CC) $(CFLAGS) $(VIEW_CFLAGS) -o $@ $< $(VIEW_LIBS)
 	@echo "raw-view built $(if $(filter 1,$(H264)),WITH,WITHOUT) H.264 (libavcodec)"
 

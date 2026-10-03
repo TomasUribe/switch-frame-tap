@@ -10,11 +10,17 @@
  *    "SaltySD" port for the handle (command 7), map 0x1000 bytes, find the
  *    block whose magic is "NXRT", and write its def/isDocked flags. SaltyNX
  *    applies them to the running game.
+ *  - v0.7.2: sound in games that block recording, through dvr-patches
+ *    (github.com/exelix11/dvr-patches, BSD-3): patches to `am` that let the
+ *    console's recorder run for every game, so grc:d has their sound. The
+ *    toggle moves their folder in and out of atmosphere/exefs_patches; am
+ *    reads it at boot, so a change applies after a restart.
  */
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
 #include <cstdio>
 #include <cstring>
+#include <sys/stat.h>
 
 namespace {
 
@@ -182,6 +188,38 @@ namespace {
         r->def = false;
     }
 
+    /* ---- dvr-patches: sound in games that block recording --------------- */
+
+    constexpr const char *PatchOn  = "sdmc:/atmosphere/exefs_patches/am";       /* where dvr-patches installs */
+    constexpr const char *PatchOff = "sdmc:/config/switch-frame-tap/dvr-patches"; /* parked: Atmosphere does not look here */
+
+    enum class PatchState { Missing, On, Off };
+
+    bool IsDir(const char *path) {
+        struct stat st;
+        return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+    }
+
+    /* libtesla keeps no sdmc: mounted - only for the duration of a call */
+    PatchState GetPatchState() {
+        PatchState st = PatchState::Missing;
+        tsl::hlp::doWithSDCardHandle([&] {
+            if (IsDir(PatchOn))       { st = PatchState::On; }
+            else if (IsDir(PatchOff)) { st = PatchState::Off; }
+        });
+        return st;
+    }
+
+    bool SetPatch(bool on) {
+        bool ok = false;
+        tsl::hlp::doWithSDCardHandle([&] {
+            mkdir("sdmc:/config", 0777);
+            mkdir("sdmc:/config/switch-frame-tap", 0777);
+            ok = on ? rename(PatchOff, PatchOn) == 0 : rename(PatchOn, PatchOff) == 0;
+        });
+        return ok;
+    }
+
     /* ---- the GUI -------------------------------------------------------- */
 
     std::string StatusText(bool have, const StreamStatus &st) {
@@ -206,7 +244,7 @@ namespace {
     class MainGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("Switch Frame Tap", "v0.7.1");
+                auto *frame = new tsl::elm::OverlayFrame("Switch Frame Tap", "v0.7.2");
                 auto *list = new tsl::elm::List();
 
                 list->addItem(new tsl::elm::CategoryHeader("Stream to PC"));
@@ -231,6 +269,23 @@ namespace {
                     r->drawString(m_status.c_str(), false, x + 15, y + 22, 18, r->a(tsl::style::color::ColorText));
                     r->drawString(m_game.c_str(), false, x + 15, y + 46, 16, r->a(tsl::style::color::ColorDescription));
                 }), 60);
+
+                list->addItem(new tsl::elm::CategoryHeader("Game sound"));
+                m_patch_state = GetPatchState();
+                m_patch = new tsl::elm::ToggleListItem("Enable sound in no-record games", m_patch_state == PatchState::On);
+                m_patch->setStateChangedListener([this](bool on) {
+                    if (m_patch_state == PatchState::Missing) { m_patch->setState(false); return; }
+                    if (SetPatch(on)) { m_patch_changed = !m_patch_changed; }
+                    m_patch_state = GetPatchState();
+                    m_patch->setState(m_patch_state == PatchState::On);
+                });
+                list->addItem(m_patch);
+                list->addItem(new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
+                    const char *l1 = m_patch_state == PatchState::Missing ? "dvr-patches not installed - see the README"
+                                   : m_patch_changed ? "Restart the console to apply"
+                                   : "For games like Smash. Turn off if a game crashes.";
+                    r->drawString(l1, false, x + 15, y + 22, 16, r->a(m_patch_changed ? tsl::style::color::ColorHighlight : tsl::style::color::ColorDescription));
+                }), 36);
 
                 list->addItem(new tsl::elm::CategoryHeader("Display mode (ReverseNX-RT)"));
                 static const char *const names[] = { "", "Game default", "Handheld (720p)", "Docked (1080p)" };
@@ -291,6 +346,9 @@ namespace {
             tsl::elm::ToggleListItem *m_toggle = nullptr;
             tsl::elm::ListItem *m_app = nullptr;
             tsl::elm::ListItem *m_modes[4] = {};
+            tsl::elm::ToggleListItem *m_patch = nullptr;
+            PatchState m_patch_state = PatchState::Missing;
+            bool m_patch_changed = false;     /* toggled since the last restart (in this overlay session) */
     };
 
     class FrameTapOverlay : public tsl::Overlay {

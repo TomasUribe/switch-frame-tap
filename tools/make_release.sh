@@ -51,7 +51,7 @@ make -s -B -C "$REPO/tools/raw-recv" raw-view | grep -q "WITH H.264"
 LSTAGE="$OUT/stage-linux/switch-frame-tap-$VER-linux-viewer"
 rm -rf "$OUT/stage-linux"
 mkdir -p "$LSTAGE/tools/raw-recv"
-for f in raw-view.c record.h menu.h font_dejavu.h raw-view uvc-check.c mp4-check.c Makefile 99-switch-frame-tap.rules install-launcher.sh switch-frame-tap.svg README.md; do
+for f in raw-view.c record.h menu.h hud.h font_dejavu.h raw-view uvc-check.c mp4-check.c Makefile 99-switch-frame-tap.rules install-launcher.sh switch-frame-tap.svg README.md; do
     cp "$REPO/tools/raw-recv/$f" "$LSTAGE/tools/raw-recv/"
 done
 cp "$REPO/LICENSE" "$LSTAGE/"

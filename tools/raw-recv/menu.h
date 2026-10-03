@@ -168,7 +168,7 @@ static void menu_draw(SDL_Renderer *ren)
     text_draw(ren, l2, 640, 250, 22, 0, ip_edit_for_menu() ? ink : dim, 1);
 
     /* the keys */
-    const int px0 = 250, pw = 780, py0 = 296, ph = 320;
+    const int px0 = 250, pw = 780, py0 = 296, ph = 332;
     fill(ren, px0, py0, pw, ph, panel);
     text_draw(ren, "KEYS", px0 + 30, py0 + 18, 18, 1, dim, 0);
     struct { const char *k, *what; } rows[] = {
@@ -178,9 +178,10 @@ static void menu_draw(SDL_Renderer *ren)
         { "Esc", "Leave fullscreen / close" },
         { "Tab", "Switch the connection: USB / Network" },
         { "I", "Type the Switch's IP address (Network)" },
+        { "O", "Stats overlay: off / FPS / graphs / full (or F3)" },
     };
-    for (int i = 0; i < 6; i++) {
-        const int y = py0 + 48 + i * 44;
+    for (int i = 0; i < 7; i++) {
+        const int y = py0 + 46 + i * 40;
         key_cap(ren, rows[i].k, px0 + 30, y);
         text_draw(ren, rows[i].what, px0 + 140, y + 5, 24, 0, (i == 5 && !conn_for_menu()) ? dim : ink, 0);
     }
@@ -189,8 +190,8 @@ static void menu_draw(SDL_Renderer *ren)
         char rs[200];
         rec_status(rs, sizeof(rs));
         const char *r = rs[0] ? rs + 5 : "";             /* rec_status starts with "  |  " */
-        if (rec_active()) text_draw(ren, r, px0 + pw - 30, py0 + 53, 22, 1, red, 2);
-        if (g_mute) text_draw(ren, "muted", px0 + pw - 30, py0 + 97, 22, 1, warn, 2);
+        if (rec_active()) text_draw(ren, r, px0 + pw - 30, py0 + 51, 22, 1, red, 2);
+        if (g_mute) text_draw(ren, "muted", px0 + pw - 30, py0 + 91, 22, 1, warn, 2);
         if (!rec_active() && r[0]) text_draw(ren, r, 640, 690, 18, 0, dim, 1);
     }
 
