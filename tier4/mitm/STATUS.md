@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.4** (dvr-patches bundled, off; "Sound in no-record games"). Released: v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.5** (Get extras in the manager). Released: v0.7.4 (dvr-patches bundled, off), v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,27 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.7.5: Get extras in the manager ***
+
+- `manager/source/extras.hpp`: libcurl (devkitPro's build uses libnx's TLS
+  backend - the ssl service and the console's trust store, no CA bundle),
+  jansson for api.github.com/repos/<repo>/releases/latest, minizip to unpack
+  over sdmc:/. Downloads go to config/switch-frame-tap/downloads; every file
+  is written as .part and renamed; existing files under config/ are kept
+  (but lang/); top-level zip files (a README) skipped.
+- Assets (2026-10): Ultrahand `sdout.zip` (with nx-ovlloader), SaltyNX
+  `SaltyNX.zip`, ReverseNX-RT `*.ovl` (one file into switch/.overlays),
+  sys-clk `sys-clk*.zip`, Horizon OC `dist.zip`. sys-clk and Horizon OC are
+  the same sysmodule id (00FF0000636C6BFF) - only one is offered when the
+  other is there (Horizon OC = atmosphere/kips/hoc.kip or its overlay).
+  Horizon OC also ships atmosphere/exosphere.bin and needs the kip in a Hekate
+  entry: the row warns when hekate_ipl.ini names neither kips/hoc.kip nor
+  the whole kips folder.
+- Tested: detection (all installed here, sys-clk blocked by Horizon OC),
+  ReverseNX-RT and SaltyNX updates, B cancels, offline message.
+- If a project changes how it packages a release, its matcher in
+  extras.hpp is the place.
 
 ## *** v0.7.4: dvr-patches bundled, off ***
 

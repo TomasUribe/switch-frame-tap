@@ -46,7 +46,7 @@ ROMFS		:=
 
 APP_TITLE   := Switch Frame Tap
 APP_AUTHOR  := TomasUribe
-APP_VERSION := 0.7.4
+APP_VERSION := 0.7.5
 ICON        := icon.jpg
 
 #---------------------------------------------------------------------------------
@@ -65,7 +65,7 @@ ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
 LIBS	:=	`$(PREFIX)pkg-config --libs sdl2 SDL2_ttf SDL2_image` \
-			-lnx
+			-lcurl -lminizip -ljansson -lz -lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing

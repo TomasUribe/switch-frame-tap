@@ -26,11 +26,12 @@
 #include <vector>
 #include <functional>
 #include "../../common/sound_patch.hpp"
+#include "extras.hpp"
 #include <unordered_map>
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.7.4";
+    constexpr const char *AppVersion  = "0.7.5";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -296,6 +297,7 @@ namespace {
     };
 
     bool g_open_gallery = false;
+    const extras::Tool *g_pending_install = nullptr;   /* v0.7.5: Get extras - run from the main loop */
 
     struct App {
         Settings set = LoadSettings();
@@ -305,6 +307,7 @@ namespace {
         size_t shot_files = 0, excluded = 0;
         bool confirm_clear = false;
         sftsound::State sound = sftsound::State::Missing;   /* v0.7.4: the bundled dvr-patches */
+        int confirm_extra = -1;                              /* v0.7.5: the Get extras row waiting for its second A */
         bool sound_changed = false;                          /* toggled since this app started: a restart applies it */
         u32 fw = 0;
         u64 ams = 0;
@@ -548,6 +551,54 @@ namespace {
                 "Stream on firmware this version was not tested on. It may work; it may also freeze the console, "
                 "which needs a hard power-off. Applies from the next boot." });
 
+            /* v0.7.5: the optional tools, from their authors' GitHub releases */
+            rows.push_back({ Kind::Header, "Get extras (from GitHub)", nullptr, nullptr, nullptr, "" });
+            auto extra = [this](const extras::Tool *t, bool (*has)(), std::function<std::string()> note, std::function<std::string()> blocked, const char *help) {
+                const int idx = static_cast<int>(rows.size());
+                rows.push_back({ Kind::Setting, t->name, [this, idx, has, note, blocked] {
+                        if (confirm_extra == idx) { return std::string(has() ? "A again: update to the latest" : "A again: download and install"); }
+                        const std::string b = blocked();
+                        if (!b.empty()) { return b; }
+                        if (!has()) { return std::string("Not installed"); }
+                        const std::string n = note();
+                        return n.empty() ? std::string("Installed") : n;
+                    }, [this, idx, has, note, blocked] {
+                        if (confirm_extra == idx) { return ColWarn; }
+                        if (!blocked().empty()) { return ColDim; }
+                        if (!has()) { return ColText; }
+                        return note().empty() ? ColGood : ColWarn;
+                    }, [this, idx, t, blocked](int) {
+                        const std::string b = blocked();
+                        if (!b.empty()) { Toast(b + " - one overclock tool at a time: remove it first"); return; }
+                        if (confirm_extra != idx) { confirm_extra = idx; return; }
+                        confirm_extra = -1;
+                        g_pending_install = t;
+                    }, help });
+            };
+            auto none = [] { return std::string(); };
+            extra(&extras::Ultrahand, extras::HasUltrahand, none, none,
+                  "The overlay menu (L + D-pad Down + right stick): Switch Frame Tap's overlay and the \"Screenshot saved\" "
+                  "notes need it. Includes nx-ovlloader; replaces Tesla Menu if you have it. Your Ultrahand settings are kept "
+                  "on an update. From github.com/ppkantorski/Ultrahand-Overlay.");
+            extra(&extras::SaltyNX, extras::HasSaltyNX, none, none,
+                  "Needed by ReverseNX-RT: it loads plugins into games. It can clash with some game mods (modded Smash with "
+                  "Skyline crashed in testing) - if a game crashes, turn SaltyNX off. From github.com/masagrator/SaltyNX.");
+            extra(&extras::ReverseNX, extras::HasReverseNX, none, none,
+                  "Makes a game render its docked 1080p picture in handheld, for 1080p over USB (overlay menu, then "
+                  "ReverseNX-RT). Needs SaltyNX; not every game supports it. From github.com/masagrator/ReverseNX-RT.");
+            extra(&extras::SysClk, extras::HasSysClk, none,
+                  [] { return extras::HasHorizonOC() ? std::string("Horizon OC is installed") : std::string(); },
+                  "Raises the clocks so 1080p streams at a full 60 fps (CPU 1785 MHz, set it in its overlay). Pick sys-clk or "
+                  "Horizon OC, not both. From github.com/retronx-team/sys-clk.");
+            extra(&extras::HorizonOC, extras::HasHorizonOC,
+                  [] { return extras::HekateMissesHocKip() ? std::string("Installed - Hekate needs its kip") : std::string(); },
+                  [] { return extras::HasSysClk() ? std::string("sys-clk is installed") : std::string(); },
+                  "An overclocking tool with more headroom than sys-clk (CPU, GPU and RAM). Its authors warn that RAM "
+                  "overclocking can corrupt the NAND or the SD card: back both up first. It replaces atmosphere/exosphere.bin; "
+                  "booting with Hekate, the boot entry needs kip1=atmosphere/kips/hoc.kip and secmon=atmosphere/exosphere.bin. "
+                  "An update replaces hoc.kip, which holds its settings: save them again in its overlay afterwards. "
+                  "Pick sys-clk or Horizon OC, not both. From github.com/Horizon-OC/Horizon-OC.");
+
             rows.push_back({ Kind::Header, "Setup check", nullptr, nullptr, nullptr, "" });
             auto check = [this](const char *label, const char *path, bool needed, const char *help) {
                 rows.push_back({ Kind::Info, label, [path] { return Check(FileExists(path)); },
@@ -556,12 +607,6 @@ namespace {
             check("Sysmodule", ModuleNsp, true, "atmosphere/contents/0100000000000C20/exefs.nsp - the part that streams.");
             check("Overlay", "sdmc:/switch/.overlays/switch-frame-tap.ovl", false,
                   "switch/.overlays/switch-frame-tap.ovl - stream on/off and handheld/docked from inside a game (needs the Tesla overlay loader).");
-            check("Overlay loader", "sdmc:/atmosphere/contents/420000000007E51A/exefs.nsp", false,
-                  "nx-ovlloader, which runs Tesla overlays (L + D-pad Down + right stick by default).");
-            check("SaltyNX", "sdmc:/atmosphere/contents/0000000000534C56/exefs.nsp", false,
-                  "Needed by ReverseNX-RT. Only for 1080p over USB: it makes the game render its docked picture in handheld.");
-            check("ReverseNX-RT", "sdmc:/switch/.overlays/ReverseNX-RT-ovl.ovl", false,
-                  "The docked/handheld switch the overlay uses. From github.com/masagrator/ReverseNX-RT.");
             rows.push_back({ Kind::Info, "Install type", [this] { return std::string(test_install ? "Test (applet-mitm.armed)" : "Release"); },
                 [this] { return test_install ? ColWarn : ColText; }, nullptr,
                 "A test install is driven by sdmc:/applet-mitm.armed and ignores config.ini. Delete that file for normal use." });
@@ -580,6 +625,7 @@ namespace {
 
         void Move(int d) {
             confirm_clear = false;
+            confirm_extra = -1;
             int i = sel;
             do { i += d; } while (i >= 0 && i < static_cast<int>(rows.size()) && !Selectable(i));
             if (i >= 0 && i < static_cast<int>(rows.size())) { sel = i; }
@@ -849,6 +895,45 @@ namespace {
 
 }
 
+namespace {
+
+    /* v0.7.5: a Get extras download, with its progress on screen; B cancels */
+    void RunInstall(App &app, PadState &pad) {
+        const extras::Tool &t = *g_pending_install;
+        g_pending_install = nullptr;
+        auto draw = [&t](const char *what, double frac) {
+            SDL_SetRenderDrawColor(g_ren, 0x16, 0x17, 0x1B, 0xFF);
+            SDL_RenderClear(g_ren);
+            Fill(0, 0, ScreenW, 88, { 0x1E, 0x20, 0x26, 0xFF });
+            Fill(0, 88, ScreenW, 2, ColAccent);
+            Text("Get extras", 60, 22, 3, ColText);
+            Text(t.name, ScreenW / 2, 250, 2, ColText, 1);
+            Text(what, ScreenW / 2, 320, 1, ColDim, 1);
+            const int bx = 340, bw = 600, by = 380, bh = 16;
+            Fill(bx, by, bw, bh, { 0x2A, 0x2D, 0x35, 0xFF });
+            if (frac >= 0.0) { Fill(bx, by, static_cast<int>(bw * (frac > 1.0 ? 1.0 : frac)), bh, ColAccent); }
+            Text("From the official GitHub release", ScreenW / 2, 430, 1, ColDim, 1);
+            Fill(0, 656, ScreenW, 64, { 0x1E, 0x20, 0x26, 0xFF });
+            Hints({ { "\uE0E1", "Cancel" } });
+            SDL_RenderPresent(g_ren);
+        };
+        u32 tick = 0;
+        extras::Progress progress = [&](const char *what, double frac) {
+            if (!appletMainLoop()) { return false; }
+            padUpdate(&pad);
+            if (padGetButtonsDown(&pad) & HidNpadButton_B) { return false; }
+            if ((++tick % 4) == 0 || frac < 0.0) { draw(what, frac); }
+            return true;
+        };
+        draw("Connecting...", -1.0);
+        std::string done, err;
+        if (extras::Install(t, progress, &done, &err)) { app.Toast(done); }
+        else { app.Toast(std::string(t.name) + ": " + err); }
+        app.Refresh();
+    }
+
+}
+
 int main(int, char **) {
     plInitialize(PlServiceType_User);
     pmdmntInitialize();
@@ -934,6 +1019,7 @@ int main(int, char **) {
             touch_row = -1;
         }
 
+        if (g_pending_install != nullptr) { RunInstall(app, pad); touching = true; touch_row = -1; continue; }
         if (g_open_gallery) {
             g_open_gallery = false;
             g_gal.Open();
@@ -947,6 +1033,7 @@ int main(int, char **) {
     }
 
     g_gal.Drop();
+    extras::NetDown();
     IMG_Quit();
     for (auto &e : g_cache) { SDL_DestroyTexture(e.second.tex); }
     for (auto *f : g_font) { if (f) { TTF_CloseFont(f); } }

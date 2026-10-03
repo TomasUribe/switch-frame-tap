@@ -121,7 +121,9 @@ manager app:
 | A **Windows or Linux PC** | Windows 10/11: the viewer zip, plus the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie/). Linux: `libusb`, `SDL2`, `libavcodec` - one `apt install` line. Both [below](#install). In [webcam mode](#webcam-mode), no viewer or driver: OBS reads it as a camera. |
 | A **USB-C cable**, or a **network** | USB 2.0 is plenty; over USB the Switch stays in handheld (the dock owns the port). [Network streaming](#network-streaming-play-docked) needs no cable and works docked: Wi-Fi or the dock's LAN port, the PC on the same network. |
 
-**Optional** - one per feature:
+**Optional** - one per feature. Since v0.7.5 the manager app's **Get extras**
+installs each of them from its author's GitHub release (see
+[below](#get-extras)); or download them yourself from the links:
 
 | for | install | notes |
 |---|---|---|
@@ -138,7 +140,7 @@ Nothing else: no other sysmodule, no sigpatches, no capture card.
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.7.4-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.7.5-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -152,7 +154,7 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.7.4-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.7.5-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -171,7 +173,7 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.7.4-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.7.5-linux-viewer.tar.gz` with the same files.
 
 On both, the viewer opens a window that says what it is waiting for (the
 Switch, its USB driver, or a game) and lists its keys; the same screen comes
@@ -246,9 +248,23 @@ captured on the console.*
 frame rate), streaming on/off, start with the console, USB mode (PC viewer or
 webcam), picture quality
 (High/Medium/Low), keyframe interval, maximum resolution (1080p/720p), game
-audio on/off, sound in no-record games, start delay, screenshots, and a setup check (sysmodule, overlay, overlay loader,
-SaltyNX, ReverseNX-RT). Changes apply at once - a running stream restarts with
-them. Settings live in `sdmc:/config/switch-frame-tap/config.ini`.
+audio on/off, sound in no-record games, start delay, screenshots, **Get
+extras** (below) and a setup check. Changes apply at once - a running stream
+restarts with them. Settings live in `sdmc:/config/switch-frame-tap/config.ini`.
+
+### Get extras
+
+The optional tools, installed from the manager app with the Switch online:
+**Ultrahand Overlay** (the overlay menu, with nx-ovlloader), **SaltyNX** and
+**ReverseNX-RT** (1080p over USB), and an overclock tool for 1080p at 60 fps -
+**sys-clk** or **Horizon OC**, one or the other. Each row says whether it is
+installed; A twice downloads the latest release from its author's GitHub page
+(over HTTPS, checked against the console's own certificates) and unpacks it
+onto the SD card, keeping the tool's existing settings files. Tools that run at
+boot need a restart. Horizon OC: its authors warn that RAM overclocking can
+corrupt the NAND or SD card, an update resets its settings, and with Hekate the
+boot entry needs `kip1=atmosphere/kips/hoc.kip` (the manager says when it is
+missing).
 
 ### The overlay
 
@@ -374,7 +390,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.7.4       # -> dist/switch-frame-tap-0.7.4-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.7.5       # -> dist/switch-frame-tap-0.7.5-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -635,6 +651,7 @@ dock works over the network since v0.7.0, with the quality adapting to the link.
 | Frame buffers matched while streaming - no wait, still screens, homebrew whose buffers sit in larger blocks (Moonlight, DuckStation), games with two lookalike memory pools (Sonic Frontiers); the 720p/1080p switch when the old docked picture stays around the new one | **done, on hardware** (v0.7.3, much of it [WillMidia's PR #4](https://github.com/TomasUribe/switch-frame-tap/pull/4)) |
 | Game audio (grc:d PCM alongside the video; paced playback) | **done** (v0.3.0); games that block recording with dvr-patches, switchable from the overlay (v0.7.2) |
 | Stats overlay in the viewer (FPS / graphs / full) | **done** (v0.7.2) |
+| The optional tools installed from the manager (Ultrahand, SaltyNX, ReverseNX-RT, sys-clk or Horizon OC) | **done, on hardware** (v0.7.5) |
 | Windows viewer, and paced display (reader / decoder / vsync threads) on both | **done** (v0.2.0) |
 | Recording from the viewer (MP4: the console's H.264 untouched + AAC) | **done, on hardware** (v0.5.0) |
 | Webcam mode (UVC 1.5 H.264 camera, 1080p/720p60) | **done, on hardware** (v0.4.0). MJPEG (for the Windows Camera app) would have to be software JPEG on the Switch's CPU - its NVJPG engine only decodes - probably 720p30; parked |
