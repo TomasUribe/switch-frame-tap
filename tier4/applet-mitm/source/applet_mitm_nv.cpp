@@ -46,6 +46,7 @@
 #include "applet_mitm_audio.hpp"
 #include "applet_mitm_uvc.hpp"
 #include "applet_mitm_net.hpp"
+#include "applet_mitm_slotmatch.hpp"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -2444,54 +2445,67 @@ namespace ams::mitm::applet {
             return false;
         }
 
-        /* v0.7.1: where the game's swapchain slots are. One buffer object
-         * holding every slot (MK8 and most games): the device-mapped region of
-         * exactly that size. One object PER slot (Minecraft, Smash): false,
-         * with every region of exactly one slot's size in cand_out - which of
-         * them are the slots, and in what order, only CalibrateSlots can tell.
-         * (Guessing by address read render targets: an evenly spaced run of 3
-         * at Minecraft's 1080p was not its slots - a corrupted stream.) */
-        constexpr u32 MaxCand = 16;
-        bool CalibrateSlots(::ams::svc::Handle dbg, GameSurface &geo, const u64 *cand, u32 nc, u64 *base);
-
-        /* v0.7.1: a calibration holds for the game's buffer set: a restart
-         * (docked/handheld, a late NVENC job) reuses it */
-        struct SlotCache { u64 pid; u32 gen; u64 base; u32 off[8]; bool valid; };
-        constinit SlotCache g_slot_cache = {};
-
-        bool LocateSwapchain(::ams::svc::Handle dbg, GameSurface &geo, u64 *base, const char *who, u64 *cand_out = nullptr, u32 *nc_out = nullptr) {
-            bool separate = false;
-            for (u32 k = 1; k < geo.num_slots && k < 8; ++k) { if (geo.slot_nvmap[k] != geo.slot_nvmap[0]) { separate = true; } }
-            if (!separate) {
-                u64 want = FbSwapSize;
-                if (geo.num_slots != 0 && geo.buf_size != 0) {
-                    u32 top = 0;
-                    for (u32 k = 0; k < geo.num_slots && k < 8; ++k) { if (geo.slot_offset[k] > top) { top = geo.slot_offset[k]; } }
-                    want = static_cast<u64>(top) + geo.buf_size;
-                }
-                return FindSwapchainBySize(dbg, want, base);
-            }
-            u64 cand[MaxCand];
-            u32 nc = 0;
+        /* Where each slot's buffer may be, when no region is exactly the
+         * swapchain (FindSwapchainBySize fell back to "the smallest region
+         * that holds it", which in a homebrew app is as likely its texture
+         * memory - Moonlight streamed its box art). Which candidate is which
+         * slot is worked out while streaming (NvfSession::Calibrate).
+         *
+         * One nvmap object per slot (GameSurface::separate - Smash Ultimate,
+         * Moonlight): every device-mapped region that is a whole number of
+         * buffers, each rounded up to a power-of-two alignment (Moonlight
+         * keeps a 3.75 MB 720p buffer in a 4 MB block), gives one candidate
+         * per buffer - adjacent buffers can share one memory block.
+         * One object for every slot (DuckStation: two slots at 0 and
+         * 0x3C0000): every device-mapped region that holds the whole set
+         * gives one candidate per slot, its base plus that slot's offset. */
+        u32 FindSlotCandidates(::ams::svc::Handle dbg, u64 buf, const u32 *slot_off, u32 nslots, bool separate, u64 *out, u32 max) {
+            if (buf == 0 || nslots == 0) { return 0; }
+            static constexpr u64 Aligns[] = { 0x1000, 0x10000, 0x20000, 0x40000, 0x100000, 0x200000, 0x400000 };
+            u64 span = buf;
+            for (u32 k = 0; k < nslots; ++k) { if (slot_off[k] + buf > span) { span = slot_off[k] + buf; } }
             u64 addr = 0;
-            for (u32 steps = 0; steps < 4000 && nc < MaxCand; ++steps) {
+            u32 n = 0;
+            for (u32 steps = 0; steps < 4000 && n < max; ++steps) {
                 ::ams::svc::MemoryInfo mi = {};
                 ::ams::svc::PageInfo   pi = {};
                 if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr)) || mi.size == 0) { break; }
                 const u32  attr = static_cast<u32>(mi.attribute);
                 const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
-                if (dev && mi.size == geo.buf_size) { cand[nc++] = mi.base_address; }
+                if (dev && separate) {
+                    for (const u64 a : Aligns) {
+                        const u64 step = (buf + a - 1) & ~(a - 1);
+                        if (mi.size % step == 0 && mi.size / step <= 8) {
+                            for (u64 o = 0; o < mi.size && n < max; o += step) { out[n++] = mi.base_address + o; }
+                            break;
+                        }
+                    }
+                } else if (dev && mi.size >= span) {
+                    for (u32 k = 0; k < nslots && n < max; ++k) { out[n++] = mi.base_address + slot_off[k]; }
+                }
                 const u64 next = mi.base_address + mi.size;
                 if (next <= addr) { break; }
                 addr = next;
             }
-            if (cand_out != nullptr && nc_out != nullptr) {
-                for (u32 i = 0; i < nc; ++i) { cand_out[i] = cand[i]; }
-                *nc_out = nc;
+            return n;
+        }
+
+        /* the region the swapchain is in: exactly the set's size (MK8, Smash's
+         * first slot), or the smallest that holds it. When that is not the
+         * whole story (one object per slot, homebrew in larger blocks) the
+         * stream's NvfSession::PrepareSlots finds the slot buffers and matches
+         * them while streaming (v0.7.3, from WillMidia's PR #4 - it replaces
+         * v0.7.1's calibration before the stream, which held the picture back
+         * 2-6 s and never started on a still screen). */
+        bool LocateSwapchain(::ams::svc::Handle dbg, GameSurface &geo, u64 *base, const char *who) {
+            AMS_UNUSED(who);
+            u64 want = FbSwapSize;
+            if (geo.num_slots != 0 && geo.buf_size != 0) {
+                u32 top = 0;
+                for (u32 k = 0; k < geo.num_slots && k < 8; ++k) { if (geo.slot_offset[k] > top) { top = geo.slot_offset[k]; } }
+                want = static_cast<u64>(top) + geo.buf_size;
             }
-            LogLine("   %s: %u slot(s), each its own buffer object; %u device-mapped region(s) of exactly %u B", who, geo.num_slots, nc, geo.buf_size);
-            for (u32 i = 0; i < nc; ++i) { LogLine("     region %u at 0x%010llx", i, static_cast<unsigned long long>(cand[i])); }
-            return false;
+            return FindSwapchainBySize(dbg, want, base);
         }
 
         [[noreturn]] void RunLive(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr) {
@@ -2587,9 +2601,7 @@ namespace ams::mitm::applet {
                 }
                 u64 slot_base = 0;
                 const u64 f0 = armTicksToNs(armGetSystemTick());
-                u64 cand[MaxCand];
-                u32 ncand = 0;
-                bool found = LocateSwapchain(dbg, geo, std::addressof(slot_base), "live", cand, std::addressof(ncand));
+                const bool found = LocateSwapchain(dbg, geo, std::addressof(slot_base), "live");
                 u64 want = FbSwapSize;
                 if (geo.num_slots != 0 && geo.buf_size != 0) {
                     u32 top = 0;
@@ -2612,36 +2624,12 @@ namespace ams::mitm::applet {
                     os::SleepThread(TimeSpan::FromSeconds(2));
                     continue;
                 }
-                if (!found && g_slot_cache.valid && g_slot_cache.pid == pid.value && g_slot_cache.gen == geo.generation) {
-                    for (u32 k = 0; k < 8; ++k) { geo.slot_offset[k] = g_slot_cache.off[k]; }
-                    slot_base = g_slot_cache.base;
-                    found = true;
-                    LogLine("   live: this buffer set was calibrated before - reusing it");
-                    DebugPumpStart(dbg);
-                } else if (!found && ncand >= geo.num_slots && geo.num_slots >= 3) {
-                    /* v0.7.1: separate slot buffers the addresses cannot tell
-                     * apart (Minecraft): watch which region changes with which
-                     * present. The game runs meanwhile, so the pump too. */
-                    DebugPumpStart(dbg);
-                    found = CalibrateSlots(dbg, geo, cand, ncand, std::addressof(slot_base));
-                    if (found) {
-                        g_slot_cache.pid = pid.value; g_slot_cache.gen = geo.generation; g_slot_cache.base = slot_base;
-                        for (u32 k = 0; k < 8; ++k) { g_slot_cache.off[k] = geo.slot_offset[k]; }
-                        g_slot_cache.valid = true;
-                    }
-                    if (!found) {
-                        DebugPumpStop();
-                        ::ams::svc::CloseHandle(dbg);
-                        os::SleepThread(TimeSpan::FromSeconds(5));   /* a static screen: try again */
-                        continue;
-                    }
-                } else if (!found) {
+                if (!found) {
                     ::ams::svc::CloseHandle(dbg);
                     skip_pid = pid.value;
                     continue;
-                } else {
-                    DebugPumpStart(dbg);
                 }
+                DebugPumpStart(dbg);
                 g_reconfig_request.store(false, std::memory_order_relaxed);   /* this session starts with the current settings */
                 const StreamEnd end = TryNvencStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true,
                                                      (geo.num_slots != 0 && geo.buf_size != 0) ? std::addressof(geo) : nullptr);
@@ -4906,6 +4894,16 @@ namespace ams::mitm::applet {
          * reverse: the slot copy pinned for the VIC, the arena pinned for the
          * VIC and for a new msenc channel. A channel whose job stalled is left
          * OPEN (M74: tearing down a stuck channel took the compositor with it). */
+        /* the last per-slot buffer match (NvfSession::Calibrate): the next
+         * session's first guess, so a restart (a size change, the viewer
+         * reopened) starts on the right buffers */
+        struct SlotMatch { u64 addr[8]; u32 n; u32 buf; };
+        constinit SlotMatch g_slot_match = {};
+
+        /* Everything one real-frame run needs, opened fresh and torn down in
+         * reverse: the slot copy pinned for the VIC, the arena pinned for the
+         * VIC and for a new msenc channel. A channel whose job stalled is left
+         * OPEN (M74: tearing down a stuck channel took the compositor with it). */
         struct NvfSession {
             u32 vfd = 0, cmd_handle = 0, vsyncpt = 0, cfg_addr = 0;
             u32 sh = 0, slot_vic = 0, arena_vic = 0;
@@ -4932,6 +4930,132 @@ namespace ams::mitm::applet {
             u32 buf_bytes = static_cast<u32>(FbSlotSize);
             bool mk8_layout = true;
 
+            /* One nvmap object per slot (GameSurface::separate, Smash
+             * Ultimate): every slot_off is 0, and slot_base + slot_off read
+             * ONE buffer for every slot - each picture sent three times, 20
+             * fps of picture in a 60 fps stream. And with no region exactly
+             * the swapchain's size, slot_base is only the smallest region
+             * that holds it - in Moonlight its texture memory, in DuckStation
+             * nothing on screen. Then each slot reads its own buffer
+             * instead: cand[] from FindSlotCandidates, slot_cand[k] the
+             * candidate slot k reads. Until Calibrate has matched them, slot
+             * k reads candidate k (one object per slot) or what slot_base +
+             * slot_off[k] read before (one object), or the match the last
+             * session found if its buffers are all still there. */
+            static constexpr u32 MaxSlotCand = slotmatch::MaxCand;
+            static constexpr u32 SigPoints = 32;
+            bool sep_layout = false;       /* the geometry says one object per slot */
+            bool sep = false;              /* reading per-slot buffers */
+            bool sep_locked = false;       /* matched (or given up): no more sampling */
+            bool still_guessed = false;    /* slot_cand from StillGuess (a still picture), not yet matched */
+            u64 cand[MaxSlotCand] = {};
+            u32 ncand = 0;
+            u8 slot_cand[8] = {};
+            slotmatch::Matcher matcher;
+
+            u64 SlotAddr(u64 slot_base, s32 slot) const {
+                const bool valid = slot >= 0 && static_cast<u32>(slot) < nslots;
+                if (sep) { return cand[slot_cand[valid ? slot : 0]]; }
+                return slot_base + (valid ? slot_off[slot] : 0);
+            }
+
+            /* after SetGeometry, while attached: the per-slot buffers -
+             * unless slot_base is a region exactly the swapchain's size and
+             * the slots are offsets in it (MK8) */
+            void PrepareSlots(::ams::svc::Handle dbg, u64 slot_base, const char *who) {
+                sep = sep_locked = still_guessed = false;
+                u64 span = buf_bytes;
+                for (u32 k = 0; k < nslots; ++k) { if (slot_off[k] + static_cast<u64>(buf_bytes) > span) { span = slot_off[k] + static_cast<u64>(buf_bytes); } }
+                ::ams::svc::MemoryInfo mi = {};
+                ::ams::svc::PageInfo   pi = {};
+                const bool exact = R_SUCCEEDED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, slot_base)) &&
+                                   mi.base_address == slot_base && mi.size == span;
+                if (!sep_layout && exact) { return; }
+                ncand = FindSlotCandidates(dbg, buf_bytes, slot_off, nslots, sep_layout, cand, MaxSlotCand);
+                if (ncand < nslots) {
+                    LogLine("   %s: %u slot(s)%s, but %u candidate buffer(s) of %u B in the game's memory - reading from 0x%010llx as before",
+                            who, nslots, sep_layout ? ", each its own buffer" : "", ncand, buf_bytes, static_cast<unsigned long long>(slot_base));
+                    return;
+                }
+                for (u32 k = 0; k < nslots; ++k) {
+                    slot_cand[k] = static_cast<u8>(k);
+                    for (u32 c = 0; c < ncand && !sep_layout; ++c) {
+                        if (cand[c] == slot_base + slot_off[k]) { slot_cand[k] = static_cast<u8>(c); break; }
+                    }
+                }
+                bool reused = false;
+                if (g_slot_match.n == nslots && g_slot_match.buf == buf_bytes) {
+                    u8 m[8] = {};
+                    u32 hits = 0;
+                    for (u32 k = 0; k < nslots; ++k) {
+                        for (u32 c = 0; c < ncand; ++c) {
+                            if (cand[c] == g_slot_match.addr[k]) { m[k] = static_cast<u8>(c); ++hits; break; }
+                        }
+                    }
+                    if (hits == nslots) { std::memcpy(slot_cand, m, sizeof(slot_cand)); reused = true; }
+                }
+                matcher.Reset(nslots, ncand);
+                sep = true;
+                LogLine("   %s: %u slot(s), %s; %u candidate buffer(s) of %u B from 0x%010llx%s - matching them to slots while streaming",
+                        who, nslots, sep_layout ? "each its own nvmap object" : "no region exactly the swapchain's size",
+                        ncand, buf_bytes, static_cast<unsigned long long>(cand[0]),
+                        reused ? " (starting from the last session's match)" : "");
+            }
+
+            /* a hash of SigPoints 64-byte samples spread over the buffer;
+             * *varied false when every sample is one repeated 4-byte value
+             * (a cleared buffer) */
+            u32 SampleSig(::ams::svc::Handle dbg, u64 base, bool *varied) const {
+                const u64 step = (buf_bytes / SigPoints) & ~UINT64_C(63);
+                u32 h = 2166136261u, first = 0;
+                bool var = false;
+                for (u32 j = 0; j < SigPoints; ++j) {
+                    alignas(64) u8 b[64];
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(b), dbg, base + j * step + ((step / 2) & ~UINT64_C(63)), sizeof(b)))) { *varied = false; return 0; }
+                    if (j == 0) { std::memcpy(std::addressof(first), b, sizeof(first)); }
+                    for (u32 i = 0; i < sizeof(b); i += 4) { var |= std::memcmp(b + i, std::addressof(first), 4) != 0; }
+                    for (u32 i = 0; i < sizeof(b); ++i) { h = (h ^ b[i]) * 16777619u; }
+                }
+                *varied = var;
+                return h;
+            }
+
+            /* once the present of `slot` (present number `count`) is
+             * finished, before it is read: a sample for the slot matcher
+             * (applet_mitm_slotmatch.hpp) until it has matched every slot */
+            void Calibrate(::ams::svc::Handle dbg, u32 count, s32 slot) {
+                if (!sep || sep_locked || slot < 0 || static_cast<u32>(slot) >= nslots) { return; }
+                u32 sig[MaxSlotCand];
+                bool varied[MaxSlotCand];
+                for (u32 c = 0; c < ncand; ++c) { sig[c] = this->SampleSig(dbg, cand[c], std::addressof(varied[c])); }
+                matcher.Add(count, static_cast<u32>(slot), sig);
+                u8 m[8] = {};
+                s32 weakest = 0;
+                if (matcher.Match(m, std::addressof(weakest))) {
+                    std::memcpy(slot_cand, m, nslots);
+                    sep_locked = true;
+                    g_slot_match.n = nslots;
+                    g_slot_match.buf = buf_bytes;
+                    char line[200];
+                    int len = std::snprintf(line, sizeof(line), "   swapchain: slots matched to their buffers after %u frame intervals (weakest score %d/1000):",
+                                            matcher.intervals, weakest);
+                    for (u32 s = 0; s < nslots && len > 0 && static_cast<size_t>(len) < sizeof(line); ++s) {
+                        g_slot_match.addr[s] = cand[m[s]];
+                        len += std::snprintf(line + len, sizeof(line) - len, " %u->0x%010llx", s, static_cast<unsigned long long>(cand[m[s]]));
+                    }
+                    LogLine("%s", line);
+                } else if (u8 g[8] = {}; !still_guessed && slotmatch::StillGuess(sig, varied, ncand, nslots, !sep_layout, g)) {
+                    /* the picture stands still: show it while waiting for motion */
+                    std::memcpy(slot_cand, g, nslots);
+                    still_guessed = true;
+                    LogLine("   swapchain: the picture stands still - slot 0 shows 0x%010llx (the same picture in every slot) until motion tells them apart",
+                            static_cast<unsigned long long>(cand[g[0]]));
+                } else if (matcher.GaveUp()) {
+                    sep_locked = true;
+                    LogLine("   swapchain: slots not told apart in %u samples (%u with a change) - keeping the first guess", matcher.samples, matcher.intervals);
+                }
+            }
+
             bool SetGeometry(const GameSurface &g, const char *who) {
                 if (g.num_slots == 0 || g.buf_size == 0 || g.width == 0 || g.height == 0) {
                     LogLine("   %s: no buffer geometry recorded for this game", who); return false;
@@ -4946,6 +5070,9 @@ namespace ams::mitm::applet {
                 }
                 for (u32 k = 0; k < 8; ++k) { slot_off[k] = g.slot_offset[k]; }
                 nslots = g.num_slots;
+                /* one nvmap object per slot (Smash, Minecraft): their ids differ */
+                sep_layout = false;
+                for (u32 k = 1; k < g.num_slots && k < 8; ++k) { if (g.slot_nvmap[k] != g.slot_nvmap[0]) { sep_layout = true; } }
                 buf_bytes = g.buf_size;
                 /* MK8's A8B8G8R8 surface reads correctly as the VIC's
                  * A8R8G8B8 (M36/M83: R,G,B,A in memory); the same is assumed
@@ -5173,7 +5300,8 @@ namespace ams::mitm::applet {
                         present_tick = pick.tick;
                         present_flip = pick.transform & 3;
                         const s32 slot = pick.slot;
-                        if (!this->ReadSlot(dbg, slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0), read_ns, sig)) { return false; }
+                        this->Calibrate(dbg, pick.count, slot);
+                        if (!this->ReadSlot(dbg, this->SlotAddr(slot_base, slot), read_ns, sig)) { return false; }
                         /* v0.7.1: the slot is the game's again once the present
                          * after it is on screen - and that needs its fence. If
                          * it was reached before the read ended (a slow read, a
@@ -5215,7 +5343,8 @@ namespace ams::mitm::applet {
                 if (now != seen) { this->WaitPresentFence(fn, fence); }
                 if (dropped != nullptr && now - seen > 1) { *dropped += now - seen - 1; }
                 seen = now;
-                return this->ReadSlot(dbg, slot_base + ((slot >= 0 && static_cast<u32>(slot) < nslots) ? slot_off[slot] : 0), read_ns, sig);
+                this->Calibrate(dbg, now, slot);
+                return this->ReadSlot(dbg, this->SlotAddr(slot_base, slot), read_ns, sig);
             }
 
             bool ReadSlot(::ams::svc::Handle dbg, u64 base, u64 *read_ns, u32 *sig) {
@@ -5325,110 +5454,6 @@ namespace ams::mitm::applet {
                 return ensured != 0 && ClockRateOf(PcvModule_NVENC, hz) && *hz != 0;
             }
         };
-
-        /* v0.7.1: which device-mapped region is which slot, for a game whose
-         * slots are separate buffer objects and whose addresses do not say
-         * (Minecraft: 3 slots, 4 regions of one slot's size). After each
-         * present's fence, a few KB of every candidate are hashed. A slot's
-         * buffer changes in the window(s) that end with its own present - and
-         * with the one before, while the GPU already draws into it - and then
-         * holds still while the next present is shown. A render target of the
-         * same size changes every frame, and a spare one never. So a candidate
-         * is slot s when it changes in windows ending with s and is still in
-         * the window ending with the present after s. */
-        bool CalibrateSlots(::ams::svc::Handle dbg, GameSurface &geo, const u64 *cand, u32 nc, u64 *base) {
-            const u32 ns = geo.num_slots < 8 ? geo.num_slots : 8;
-            /* 64 pieces of 512 B, spread over the whole buffer: 8 x 1 KB caught
-             * Smash's slots in only 13-40 % of their frames (a still corner) */
-            constexpr u32 Pieces = 64, PieceBytes = 512;
-            static u8 piece[PieceBytes];
-            u32 prev_h[MaxCand] = {}, chg[MaxCand][8] = {}, win[8] = {}, succ[8][8] = {};
-            bool have_prev = false;
-            s32 prev_slot = -1;
-            u32 seen = g_queue_count.load(std::memory_order_acquire);
-            const u64 t0 = armTicksToNs(armGetSystemTick());
-            u32 windows = 0;
-            while (windows < 150 && armTicksToNs(armGetSystemTick()) - t0 < UINT64_C(6000000000)) {
-                u32 waited = 0;
-                while (g_queue_count.load(std::memory_order_acquire) == seen && waited < 200) { os::SleepThread(TimeSpan::FromMilliSeconds(1)); ++waited; }
-                const u32 c = g_queue_count.load(std::memory_order_acquire);
-                if (c == seen) { continue; }
-                NvfSession::PresentSnap p;
-                const bool clean = c - seen == 1;
-                seen = c;
-                if (!NvfSession::ReadPresent(c, std::addressof(p)) || p.slot < 0 || static_cast<u32>(p.slot) >= ns) { have_prev = false; continue; }
-                for (u32 w = 0; w < 100 && NvfSession::FenceState(p.fence_n, p.fence) == 0; ++w) { os::SleepThread(TimeSpan::FromMicroSeconds(500)); }
-                u32 h[MaxCand] = {};
-                bool read_ok = true;
-                for (u32 k = 0; k < nc && read_ok; ++k) {
-                    u32 hk = 2166136261u;
-                    for (u32 i = 0; i < Pieces && read_ok; ++i) {
-                        const u64 off = (static_cast<u64>(geo.buf_size) / Pieces) * i + static_cast<u64>(geo.buf_size) / (2 * Pieces);
-                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(piece), dbg, cand[k] + (off & ~UINT64_C(0x1FF)), PieceBytes))) { read_ok = false; break; }
-                        for (u32 b = 0; b < PieceBytes; b += 4) { hk = (hk ^ (piece[b] | (piece[b + 1] << 8) | (piece[b + 2] << 16) | (static_cast<u32>(piece[b + 3]) << 24))) * 16777619u; }
-                    }
-                    h[k] = hk;
-                }
-                if (!read_ok) { return false; }   /* the game is gone */
-                /* a window counts only when no present was missed */
-                if (have_prev && clean) {
-                    ++windows;
-                    ++win[p.slot];
-                    for (u32 k = 0; k < nc; ++k) { if (h[k] != prev_h[k]) { ++chg[k][p.slot]; } }
-                    if (prev_slot >= 0) { ++succ[prev_slot][p.slot]; }
-                }
-                for (u32 k = 0; k < nc; ++k) { prev_h[k] = h[k]; }
-                have_prev = true;
-                prev_slot = p.slot;
-            }
-            /* the present that usually follows each slot */
-            u32 next[8];
-            for (u32 a = 0; a < ns; ++a) {
-                next[a] = a;
-                u32 best = 0;
-                for (u32 b = 0; b < ns; ++b) { if (succ[a][b] > best) { best = succ[a][b]; next[a] = b; } }
-            }
-            s32 slot_of[MaxCand];
-            u32 owner_count[8] = {};
-            for (u32 k = 0; k < nc; ++k) {
-                slot_of[k] = -1;
-                u32 m = 0;
-                for (u32 sl = 0; sl < ns; ++sl) { if (win[sl] != 0) { const u32 f = chg[k][sl] * 100 / win[sl]; if (f > m) { m = f; } } }
-                if (m < 5) { continue; }   /* (nearly) never changes */
-                u32 hits = 0;
-                for (u32 sl = 0; sl < ns; ++sl) {
-                    if (win[sl] < 5 || win[next[sl]] < 5 || next[sl] == sl) { continue; }
-                    const u32 f  = chg[k][sl] * 100 / win[sl];
-                    const u32 fn = chg[k][next[sl]] * 100 / win[next[sl]];
-                    if (chg[k][sl] >= 4 && f * 10 >= m * 6 && fn * 10 <= m * 3) { slot_of[k] = static_cast<s32>(sl); ++hits; }
-                }
-                if (hits != 1) { slot_of[k] = -1; }
-                else { ++owner_count[slot_of[k]]; }
-            }
-            LogLine("   calibrate: %u windows in %llu ms (per slot %u/%u/%u), successor %u->%u %u->%u %u->%u", windows,
-                    static_cast<unsigned long long>((armTicksToNs(armGetSystemTick()) - t0) / 1000000), win[0], win[1], win[2],
-                    0, next[0], 1, next[1], 2, next[2]);
-            for (u32 k = 0; k < nc; ++k) {
-                LogLine("     region %u at 0x%010llx changed %u%%/%u%%/%u%% of windows ending with slot 0/1/2 -> %s%d", k,
-                        static_cast<unsigned long long>(cand[k]),
-                        win[0] ? chg[k][0] * 100 / win[0] : 0, win[1] ? chg[k][1] * 100 / win[1] : 0, win[2] ? chg[k][2] * 100 / win[2] : 0,
-                        slot_of[k] >= 0 ? "slot " : "not a slot ", slot_of[k]);
-            }
-            u64 addr[8] = {};
-            for (u32 sl = 0; sl < ns; ++sl) {
-                if (owner_count[sl] != 1) { LogLine("   calibrate: slot %u has %u candidate region(s) - not streaming yet", sl, owner_count[sl]); return false; }
-                for (u32 k = 0; k < nc; ++k) { if (slot_of[k] == static_cast<s32>(sl)) { addr[sl] = cand[k]; } }
-            }
-            u64 b0 = addr[0];
-            for (u32 sl = 1; sl < ns; ++sl) { if (addr[sl] < b0) { b0 = addr[sl]; } }
-            for (u32 sl = 0; sl < ns; ++sl) {
-                if (addr[sl] - b0 > UINT32_MAX) { LogLine("   calibrate: slots too far apart"); return false; }
-                geo.slot_offset[sl] = static_cast<u32>(addr[sl] - b0);
-            }
-            *base = b0;
-            LogLine("   calibrate: slots found - streaming");
-            return true;
-        }
 
         /* M84: a read fails for one expected reason - the game was closed */
         const char *SlotReadFailure() {
@@ -5690,14 +5715,7 @@ namespace ams::mitm::applet {
             ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
             if (R_FAILED(::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value))) { ++g_shot_fail; LogLine("shot: could not attach to the game"); return false; }
             u64 slot_base = 0;
-            bool found = LocateSwapchain(dbg, geo, std::addressof(slot_base), "shot");
-            /* v0.7.1: separate slot buffers (Minecraft, Smash) are only known
-             * from a stream's calibration of this buffer set */
-            if (!found && g_slot_cache.valid && g_slot_cache.pid == pid.value && g_slot_cache.gen == geo.generation) {
-                for (u32 k = 0; k < 8; ++k) { geo.slot_offset[k] = g_slot_cache.off[k]; }
-                slot_base = g_slot_cache.base;
-                found = true;
-            }
+            const bool found = LocateSwapchain(dbg, geo, std::addressof(slot_base), "shot");
             ::ams::svc::DebugEventInfo ev;
             for (u32 nev = 0; nev < 256 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg)); ++nev) { }
             static_cast<void>(::ams::svc::ContinueDebugEvent(dbg, ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll, nullptr, 0));
@@ -5707,6 +5725,7 @@ namespace ams::mitm::applet {
             } else {
                 NvfSession s;
                 if (s.SetGeometry(geo, "shot")) {
+                    s.PrepareSlots(dbg, slot_base, "shot");
                     s.seen = g_queue_count.load(std::memory_order_acquire) - 1;   /* the latest present counts as new */
                     u64 rn = 0; u32 sg = 0;
                     if (s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) {
@@ -5793,6 +5812,7 @@ namespace ams::mitm::applet {
             ON_SCOPE_EXIT { ClockWatchStop(); };
             NvfSession s;
             if (geo != nullptr && !s.SetGeometry(*geo, "nvstream")) { VicStage("ns:geometry"); return StreamEnd::Failed; }
+            if (geo != nullptr) { s.PrepareSlots(dbg, slot_base, "nvstream"); }
             /* M93: the first frame decides the size. A 1280x720 picture in the
              * corner of the 1920x1080 surface (handheld) streams at 720p; full
              * 1920x1080 content (docked, or a game told it is docked) streams
@@ -6224,7 +6244,7 @@ namespace ams::mitm::applet {
                  * corner for a few seconds at every menu change. */
                 if (live && s.mk8_layout && (i + 1) % 30 == 0) {
                     const s32 sl = g_queue_slot.load(std::memory_order_relaxed);
-                    const u64 base = slot_base + ((sl >= 0 && static_cast<u32>(sl) < s.nslots) ? s.slot_off[sl] : 0);
+                    const u64 base = s.SlotAddr(slot_base, sl);
                     const s32 now720 = RemoteContentIs720(dbg, base);
                     const bool differs = now720 >= 0 && (now720 != 0) != started_corner;
                     small_streak = (differs && now720 != 0) ? small_streak + 1 : 0;
