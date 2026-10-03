@@ -449,9 +449,10 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   switching modes needs a restart.
 - **PC viewer: Windows and Linux** (x86_64). No macOS viewer yet. On Windows
   the driver needs Zadig once, as with SysDVR.
-- **It debug-attaches to the running game.** A process can have one debugger,
-  so expect Atmosphère's cheat engine (dmnt) and similar tools not to work on
-  a game while it is being streamed.
+- **It reads the game through `dmnt:cht`.** The stream no longer holds its own
+  debug handle: `dmnt` stays the game's single debugger (forced open if
+  needed), so Atmosphère's cheat engine and similar tools keep working while
+  streaming. Direct debug-attach is only a fallback if `dmnt:cht` is missing.
 - **Occasional micro-stutters** during loading and heavy scenes: reads,
   the VIC and NVENC are shared with the whole system (NVENC also with the
   console's own background recording), and a frame can take 50-200 ms then.
