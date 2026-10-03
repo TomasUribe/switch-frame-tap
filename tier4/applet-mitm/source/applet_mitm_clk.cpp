@@ -312,7 +312,7 @@ namespace ams::mitm::applet {
         /* Below main/IPC, like every worker here: all our threads share core 3,
          * and nothing on this thread may delay a binder reply. */
         const s32 prio = os::GetThreadPriority(os::GetCurrentThread()) + 4;
-        R_ABORT_UNLESS(os::CreateThread(std::addressof(g_clk_thread), ClockThread, nullptr,
+        SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_clk_thread), ClockThread, nullptr,
                                         g_clk_stack, sizeof(g_clk_stack), prio));
         os::SetThreadNamePointer(std::addressof(g_clk_thread), "applet-mitm.Clk");
         os::StartThread(std::addressof(g_clk_thread));

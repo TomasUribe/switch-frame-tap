@@ -158,6 +158,10 @@ int main() {
     /* v0.7: one connection at a time */
     ExpectRelease("connection = network\n", "vic exec dbg net live nvqp=20 nvgop=60 wait=20 audio");
     ExpectRelease("connection = webcam\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio uvc");
+    /* v0.7.7: the uncompressed webcam */
+    ExpectRelease("connection = webcam-any\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio uvc uvcraw");
+    ExpectRelease("usb_mode = webcam\nconnection = webcam-any\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio uvc uvcraw");
+    ExpectRelease("connection = webcam-anything\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
     ExpectRelease("connection = usb\nusb_mode = webcam\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
     ExpectRelease("usb_mode = webcam\nconnection = network\n", "vic exec dbg net live nvqp=20 nvgop=60 wait=20 audio");
     /* M99: screenshots */

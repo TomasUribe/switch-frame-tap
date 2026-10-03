@@ -166,10 +166,10 @@ namespace ams {
             } else {
                 mitm::applet::LogLine("grc IPC interceptor: ARMED (this handler has hung the console before)");
             }
-            R_ABORT_UNLESS(g_nv_server_manager.RegisterMitmServer<mitm::applet::NvDrvMitm>(NvPortIndex_Nvdrv, NvdrvMitmServiceName));
+            SFT_ABORT_UNLESS(g_nv_server_manager.RegisterMitmServer<mitm::applet::NvDrvMitm>(NvPortIndex_Nvdrv, NvdrvMitmServiceName));
             const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
             for (size_t i = 0; i < NvThreads; ++i) {
-                R_ABORT_UNLESS(os::CreateThread(std::addressof(g_nv_threads[i]), NvLoopThread, nullptr,
+                SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_nv_threads[i]), NvLoopThread, nullptr,
                                                 g_nv_stacks[i], sizeof(g_nv_stacks[i]), prio));
                 os::SetThreadNamePointer(std::addressof(g_nv_threads[i]), "applet-mitm.NvDrv");
                 os::StartThread(std::addressof(g_nv_threads[i]));
@@ -710,7 +710,10 @@ namespace ams {
              * must never have. Record it and let the debug route skip instead. */
             mitm::applet::g_pmdmnt_rc = ::pmdmntInitialize();
 
-            ams::CheckApiVersion();
+            /* v0.7.7: no ams::CheckApiVersion() - it aborts when the running
+             * Atmosphere is older than the headers this was built with (1.11.2),
+             * before the log is open: masagrator on GBAtemp got a bare fatal on
+             * 1.11.1. Nothing here needs 1.11.2; Main logs both versions. */
         }
 
         void FinalizeSystemModule() { /* ... */ }
@@ -736,8 +739,16 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.6: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm v0.7.7: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
+        {
+            const auto api = exosphere::GetApiInfo();
+            const u32 hv = hosversionGet();
+            mitm::applet::LogLine("Atmosphere %u.%u.%u, firmware %u.%u.%u (built with Atmosphere %u.%u.%u, tested on firmware 22.5.0)",
+                                  api.GetMajorVersion(), api.GetMinorVersion(), api.GetMicroVersion(),
+                                  HOSVER_MAJOR(hv), HOSVER_MINOR(hv), HOSVER_MICRO(hv),
+                                  ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
+        }
         SyncSoundPatches();
 
         mitm::applet::g_vic_armed   = ArmFileContains("vic");
@@ -746,6 +757,7 @@ namespace ams {
         mitm::applet::g_dump_armed  = ArmFileContains("dump");
         g_usb_armed                 = ArmFileContains("usb");
         mitm::applet::g_uvc_mode    = ArmFileContains("uvc");
+        mitm::applet::g_uvc_raw     = mitm::applet::g_uvc_mode && ArmFileContains("uvcraw");   /* v0.7.7: webcam-any */
         mitm::applet::g_net_armed   = ArmFileContains("net");
         mitm::applet::g_bench_armed   = ArmFileContains("bench");
         mitm::applet::g_nvenc_armed   = ArmFileContains("nvenc");
@@ -852,7 +864,7 @@ namespace ams {
                               mitm::applet::g_pmdmnt_rc);
 
         /* start the heartbeat before anything that can block */
-        R_ABORT_UNLESS(os::CreateThread(std::addressof(g_hb_thread), HeartbeatThread, nullptr,
+        SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_hb_thread), HeartbeatThread, nullptr,
                                         g_hb_stack, sizeof(g_hb_stack),
                                         os::GetThreadPriority(os::GetCurrentThread())));
         os::SetThreadNamePointer(std::addressof(g_hb_thread), "applet-mitm.HB");
@@ -888,7 +900,7 @@ namespace ams {
             mitm::applet::LogLine("sessions: warm-up pair rc=0x%x (server 0x%x, client 0x%x) - closed", wrc.GetValue(), ws, wc);
             if (R_SUCCEEDED(wrc)) { os::CloseNativeHandle(wc); os::CloseNativeHandle(ws); }
         }
-        R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
+        SFT_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViRootMitm>(PortIndex_AppletMitm, AppletMitmServiceName));
         mitm::applet::LogLine("registered mitm server for vi:u");
         /* v0.1.1: after vi:u, and wrapping only the running application's own
          * sessions (ShouldMitm asks pm:dmnt) */
@@ -899,14 +911,14 @@ namespace ams {
         if (ArmFileContains("nohb")) {
             mitm::applet::LogLine("vi:m NOT wrapped (homebrew = 0): homebrew apps are not streamed this boot");
         } else {
-            R_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViManagerRootMitm>(PortIndex_ViManagerMitm, ViManagerMitmServiceName));
+            SFT_ABORT_UNLESS(g_server_manager.RegisterMitmServer<mitm::applet::ViManagerRootMitm>(PortIndex_ViManagerMitm, ViManagerMitmServiceName));
             mitm::applet::LogLine("registered mitm server for vi:m (homebrew applications only)");
         }
 
         {
             const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
             for (size_t i = 0; i < ViThreads - 1; ++i) {
-                R_ABORT_UNLESS(os::CreateThread(std::addressof(g_vi_threads[i]), ViLoopThread, nullptr,
+                SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_vi_threads[i]), ViLoopThread, nullptr,
                                                 g_vi_stacks[i], sizeof(g_vi_stacks[i]), prio));
                 os::SetThreadNamePointer(std::addressof(g_vi_threads[i]), "applet-mitm.Vi");
                 os::StartThread(std::addressof(g_vi_threads[i]));

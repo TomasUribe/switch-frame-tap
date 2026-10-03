@@ -33,6 +33,7 @@
 namespace ams::mitm::applet {
 
     extern bool g_uvc_mode;                        /* "uvc" token: this boot is a webcam */
+    extern bool g_uvc_raw;                         /* v0.7.7 "uvcraw": ... sending uncompressed NV12 (webcam-any) */
     extern std::atomic<bool> g_uvc_streaming;      /* a host committed a stream and is attached */
     extern std::atomic<bool> g_uvc_new_consumer;   /* a (new) commit since the stream thread looked */
 
@@ -41,8 +42,14 @@ namespace ams::mitm::applet {
      * threads */
     bool UvcSetupDevice();
 
-    /* the committed frame size: 1920x1080 or 1280x720 */
+    /* the committed frame size: 1920x1080 or 1280x720 (NV12: 1280x720 or 768x432) */
     void UvcFrameSize(u32 *w, u32 *h);
+
+    /* v0.7.7: one NV12 frame (len bytes at src) cut into UVC payloads at dst
+     * - a 2-byte header (FID from frame_no, EOF on the last) every
+     * MaxPayload bytes. Returns the bytes written: len plus 2 per payload.
+     * dst must hold len + len / 8000 + 2 and be page-aligned for UvcQueueFrame. */
+    size_t UvcRawPack(u8 *dst, const u8 *src, size_t len, u32 frame_no);
 
     /* hand one H.264 access unit to the sender thread (buf page-aligned, it
      * must stay untouched until UvcWaitSent returns) */

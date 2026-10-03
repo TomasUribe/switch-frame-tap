@@ -31,7 +31,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.7.6";
+    constexpr const char *AppVersion  = "0.7.7";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -131,8 +131,9 @@ namespace {
     /* ---- settings (config.ini) ------------------------------------------ */
 
     const char *const QualityNames[]  = { "High", "Medium", "Low" };
-    const char *const ConnKeys[]      = { "usb", "webcam", "network" };
-    const char *const ConnNames[]     = { "USB - PC viewer", "USB - webcam", "Network" };
+    const char *const ConnKeys[]      = { "usb", "webcam", "webcam-any", "network" };
+    const char *const ConnNames[]     = { "USB - PC viewer", "USB - webcam (OBS)", "USB - webcam (any app)", "Network" };
+    constexpr int ConnCount = 4, ConnNetwork = 3;
     const char *const QualityKeys[]   = { "high", "medium", "low" };
     const int KeyframeFrames[]        = { 30, 60, 120, 240 };
     const char *const KeyframeNames[] = { "Every 0.5 s", "Every second", "Every 2 s", "Every 4 s" };
@@ -148,7 +149,7 @@ namespace {
         bool shot = false;
         int shot_combo = 0;     /* index into ComboNames */
         bool audio = true;      /* v0.3 */
-        int conn = 0;           /* v0.7: connection - 0 USB (PC viewer), 1 USB webcam, 2 network; from the next boot */
+        int conn = 0;           /* v0.7: connection - 0 USB (PC viewer), 1 USB webcam, 2 (v0.7.7) USB webcam NV12, 3 network; from the next boot */
     };
 
     bool IniGet(const std::string &ini, const char *key, std::string *out) {
@@ -193,8 +194,8 @@ namespace {
         if (IniGet(ini, "audio", &v)) { s.audio = v != "0"; }
         /* the v0.4-v0.7 keys first, then the one that replaced them */
         if (IniGet(ini, "usb_mode", &v) && v == "webcam") { s.conn = 1; }
-        if (IniGet(ini, "network", &v) && v == "1") { s.conn = 2; }
-        if (IniGet(ini, "connection", &v)) { s.conn = v == "network" ? 2 : v == "webcam" ? 1 : 0; }
+        if (IniGet(ini, "network", &v) && v == "1") { s.conn = ConnNetwork; }
+        if (IniGet(ini, "connection", &v)) { s.conn = v == "network" ? ConnNetwork : v == "webcam-any" ? 2 : v == "webcam" ? 1 : 0; }
         if (IniGet(ini, "screenshot_buttons", &v)) { const int k = std::atoi(v.c_str()); if (k >= 0 && k <= 3) { s.shot_combo = k; } }
         return s;
     }
@@ -223,6 +224,7 @@ namespace {
             "# audio: 1 = send the game's sound to the PC viewer\n"
             "audio = %d\n"
             "# connection: usb (the PC viewer over USB) | webcam (a USB camera for OBS; no sound) |\n"
+            "#             webcam-any (an uncompressed USB camera for any camera app; no sound) |\n"
             "#             network (the PC viewer over Wi-Fi or the dock's LAN port - play docked). Read at boot.\n"
             "connection = %s\n",
             QualityKeys[s.quality], KeyframeFrames[s.keyframe], s.cap720 ? "720" : "1080",
@@ -365,10 +367,10 @@ namespace {
 
         /* v0.4: the mode this boot is in (the sysmodule's word), else config.ini */
         /* the connection this boot runs with (the sysmodule's word), else config.ini */
-        int RunningConn() { return have_status ? ((st.reserved3 & 2) ? 2 : (st.reserved3 & 1) ? 1 : 0) : set.conn; }
+        int RunningConn() { return have_status ? ((st.reserved3 & 2) ? ConnNetwork : (st.reserved3 & 1) ? ((st.reserved3 & 8) ? 2 : 1) : 0) : set.conn; }
         bool RunningWebcam() { return RunningConn() == 1; }
         /* v0.7: the network transport this boot, and whether a viewer is on it */
-        bool RunningNetwork() { return RunningConn() == 2; }
+        bool RunningNetwork() { return RunningConn() == ConnNetwork; }
         bool NetworkViewer() { return have_status && (st.reserved3 & 4) != 0; }
         std::string IpString() {
             u32 ip = 0;
@@ -437,18 +439,19 @@ namespace {
             rows.push_back({ Kind::Setting, "Connection", [this] {
                     std::string v = ConnNames[set.conn];
                     if (have_status && RunningConn() != set.conn) { v += " - after a reboot"; }
-                    else if (set.conn == 2) { v += " - " + IpString(); }
+                    else if (set.conn == ConnNetwork) { v += " - " + IpString(); }
                     return v;
                 }, [this] { return (have_status && RunningConn() != set.conn) ? ColWarn : ColText; },
                 [this](int d) {
-                    set.conn = (set.conn + (d > 0 ? 1 : 2)) % 3;
+                    set.conn = (set.conn + (d > 0 ? 1 : ConnCount - 1)) % ConnCount;
                     if (!SaveSettings(set)) { Toast("Could not write config.ini"); return; }
                     Toast(test_install ? "Saved - but a test arm file is installed, so the sysmodule ignores config.ini"
                                        : "Saved - restart the console to switch the connection");
                 },
                 "How the stream reaches the PC - one at a time. USB - PC viewer: the viewer app over the USB-C cable "
-                "(handheld; sound, the lowest latency). USB - webcam: the Switch shows up as a USB camera for OBS - "
-                "picture only. Network: the viewer app over Wi-Fi or the dock's LAN port, so you can play docked; set "
+                "(handheld; sound, the lowest latency). USB - webcam (OBS): the Switch shows up as a USB camera, "
+                "H.264 up to 1080p60, for OBS - picture only. USB - webcam (any app): an uncompressed camera the "
+                "Windows Camera app, browsers, Discord or Zoom can open - 720p at 25 fps or 432p at 60. Network: the viewer app over Wi-Fi or the dock's LAN port, so you can play docked; set "
                 "the viewer to Network too (Tab in the viewer). A LAN adapter or strong 5 GHz Wi-Fi at Medium quality "
                 "works best. Changes need a reboot." });
 

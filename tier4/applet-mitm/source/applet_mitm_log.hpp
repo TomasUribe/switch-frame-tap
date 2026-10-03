@@ -34,6 +34,18 @@ namespace ams::mitm::applet {
     extern u32 g_arm_probe_rc;    /* GetEntryType(applet-mitm.armed) at boot */
     void LogLine(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+    /* v0.7.7: an abort that says why first - the line reaches the SD card
+     * (every LogLine is flushed) before the console shows the fatal screen.
+     * Only once the log is open: sm::Initialize, before it, cannot use it. */
+    #define SFT_ABORT_UNLESS(expr) do {                                                                   \
+        const ::ams::Result sft_abort_rc_ = (expr);                                                       \
+        if (R_FAILED(sft_abort_rc_)) {                                                                    \
+            ::ams::mitm::applet::LogLine("FATAL: %s failed, rc=0x%x (%s:%d) - stopping the console here", \
+                                         #expr, sft_abort_rc_.GetValue(), __FILE__, __LINE__);            \
+            R_ABORT_UNLESS(sft_abort_rc_);                                                                \
+        }                                                                                                 \
+    } while (0)
+
     /* breadcrumb: overwrite sdmc:/applet-mitm.last, then LogLine("-> what") */
     void LogMark(const char *what);
 

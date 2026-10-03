@@ -916,6 +916,8 @@ namespace ams::mitm::applet {
         enum class StreamEnd { Done, GameGone, ViewerGone, EngineStall, Failed, Reconfigure, Disabled };
         /* M99: attach, read one finished frame, write it as a PNG, detach */
         bool ShotStandalone();
+        StreamEnd TryUvcRawStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
+                                  u32 cmd_handle, u32 vsyncpt, u32 cfg_addr, const GameSurface *geo);
         StreamEnd TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                                  u32 cmd_handle, u32 vsyncpt, u32 cfg_addr, bool live = false,
                                  const GameSurface *geo = nullptr);
@@ -2637,8 +2639,9 @@ namespace ams::mitm::applet {
                 }
                 DebugPumpStart(dbg);
                 g_reconfig_request.store(false, std::memory_order_relaxed);   /* this session starts with the current settings */
-                const StreamEnd end = TryNvencStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true,
-                                                     (geo.num_slots != 0 && geo.buf_size != 0) ? std::addressof(geo) : nullptr);
+                const GameSurface *gp = (geo.num_slots != 0 && geo.buf_size != 0) ? std::addressof(geo) : nullptr;
+                const StreamEnd end = g_uvc_raw ? TryUvcRawStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, gp)
+                                                : TryNvencStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true, gp);
                 DebugPumpStop();
                 ::ams::svc::CloseHandle(dbg);
                 g_live_fps_x10.store(0, std::memory_order_relaxed);
@@ -4940,6 +4943,7 @@ namespace ams::mitm::applet {
             u32 arena_size = NvfArenaSize;
             const NvfLayout *lay = nullptr;    /* M90: nullptr = 720p */
             const NvfLayout &Lay() const { return lay != nullptr ? *lay : Layout720(); }
+            bool vic_only = false;             /* v0.7.7: webcam-any - no NVENC channel */
             /* M87: the game's swapchain geometry. The defaults are MK8's, which
              * every run before M87 hard-coded: three 1920x1080 A8B8G8R8 slots
              * in one nvmap object, 128-row blocks. */
@@ -5162,7 +5166,7 @@ namespace ams::mitm::applet {
                 x.a = g_ind_buf + arena_base;
                 x.lay = lay;
                 std::memset(x.a, 0, arena_size);
-                std::memcpy(x.a + Lay().off_setup, Lay().idr_setup, 0x1000);
+                if (Lay().idr_setup != nullptr) { std::memcpy(x.a + Lay().off_setup, Lay().idr_setup, 0x1000); }
                 armDCacheFlush(x.a, arena_size);
                 u32 aid = 0;
                 if (R_FAILED(NvmapOwn(nvmap_fd, x.a, arena_size, 0, std::addressof(x.ah), std::addressof(aid), true))) {
@@ -5170,6 +5174,12 @@ namespace ams::mitm::applet {
                 }
                 MapCmdBuffer(vfd, x.ah, std::addressof(arena_vic), "nvf-arena(vic)", 0);
                 if (arena_vic == 0) { LogLine("   %s: arena pin (VIC) returned 0 - refusing", who); return false; }
+                if (vic_only) {
+                    LogLine("   %s: arena %u KB at +%zu KB; VIC sees it at %#x; picture %#x/%#x (no encoder)",
+                            who, arena_size / 1024, arena_base / 1024, arena_vic, arena_vic + Lay().off_cur, arena_vic + Lay().off_cur_uv);
+                    seen = g_queue_count.load(std::memory_order_relaxed);
+                    return true;
+                }
 
                 u32 nverr = 0;
                 if (R_FAILED(NvOpen("/dev/nvhost-msenc", std::addressof(x.efd), std::addressof(nverr))) || nverr != 0) {
@@ -5780,6 +5790,23 @@ namespace ams::mitm::applet {
             return L;
         }
 
+        /* v0.7.7: webcam-any - two pitch-linear NV12 pictures (the M70 raw
+         * stream's VIC output), nothing for an encoder */
+        const NvfLayout &LayoutRaw(u32 w, u32 h) {
+            static NvfLayout L;
+            L = {};
+            L.w = w; L.h = h;
+            L.out = OutDesc{ w, h, w, vic::PIXFMT_Y8_U8V8_N420 };
+            L.luma = Nv12LumaBytes(L.out);
+            L.chroma = Nv12ChromaBytes(L.out);
+            L.off_cur = 0x1000;
+            L.off_cur_uv = L.off_cur + L.luma;
+            L.off_cur2 = (L.off_cur_uv + L.chroma + 0xFFFu) & ~0xFFFu;
+            L.off_cur2_uv = L.off_cur2 + L.luma;
+            L.arena_size = L.arena_size_p = L.arena_size_pipe = (L.off_cur2_uv + L.chroma + 0xFFFu) & ~0xFFFu;
+            return L;
+        }
+
         /* ---- M99: screenshots ----------------------------------------------- */
 
         /* what the session just read into g_ind_buf: the handheld corner, or
@@ -5863,6 +5890,140 @@ namespace ams::mitm::applet {
          * become a reference. At the end the last frame's VIC planes are saved
          * with its frame number: the PC decodes the recording and compares, a
          * drift test at the end of a long P chain. */
+        /* v0.7.7: webcam-any - the camera's frames as uncompressed NV12. Each
+         * finished present goes through the VIC (BT.709, scaled to the size the
+         * camera app committed, pitch-linear, as the M70 raw stream did), is
+         * cut into UVC payloads in a stage buffer and handed to the sender.
+         * No encoder, so nothing to pipeline: USB 2.0 is the limit (720p ~25
+         * fps, 432p 60), and the loop simply waits for the previous frame to
+         * leave before it reads the newest present. */
+        StreamEnd TryUvcRawStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
+                                  u32 cmd_handle, u32 vsyncpt, u32 cfg_addr, const GameSurface *geo) {
+            VicStage("uvcraw:1");
+            if (g_stream_stage[0] == nullptr || g_stream_stage[1] == nullptr) { LogLine("   uvcraw: no stage buffers"); return StreamEnd::Failed; }
+            NvfSession s;
+            if (geo != nullptr && !s.SetGeometry(*geo, "uvcraw")) { VicStage("uvcraw:geometry"); return StreamEnd::Failed; }
+            if (geo != nullptr) { s.PrepareSlots(dbg, slot_base, "uvcraw"); }
+            {
+                u64 rn = 0; u32 sg = 0;
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) { LogLine("   uvcraw: %s", SlotReadFailure()); return StreamEnd::GameGone; }
+                s.Decide("uvcraw");
+            }
+            u32 w = 0, h = 0;
+            UvcFrameSize(std::addressof(w), std::addressof(h));
+            g_uvc_new_consumer.store(false, std::memory_order_relaxed);
+            s.lay = std::addressof(LayoutRaw(w, h));
+            s.vic_only = true;
+            const NvfLayout &L = s.Lay();
+            s.arena_size = L.arena_size;
+            const size_t frame_bytes = L.luma + L.chroma;     /* the planes are back to back */
+            LogLine("   ---- WEBCAM (any app): NV12 %ux%u, %zu B a frame, no encoder ----", w, h, frame_bytes);
+            if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "uvcraw")) { VicStage("uvcraw:open_FAILED"); return g_engine_wedged ? StreamEnd::EngineStall : StreamEnd::Failed; }
+            g_live_w.store(w, std::memory_order_relaxed);
+            g_live_h.store(h, std::memory_order_relaxed);
+            g_live_state.store(LiveState_Streaming, std::memory_order_relaxed);
+            g_vic_quiet = true;
+            ON_SCOPE_EXIT { g_vic_quiet = false; };
+
+            const char *why = "all frames sent";
+            StreamEnd end = StreamEnd::Done;
+            const bool started_corner = s.corner;
+            u32 parity = 0, sent = 0, frame_no = 0, dropped = 0;
+            bool pending = false;
+            u32 small_streak = 0, big_streak = 0, stale_streak = 0;
+            ContentProbe last_probe = {};
+            u64 s_read = 0, s_vic = 0, s_pack = 0, s_wait = 0, w_n = 0;
+            const u64 loop_t0 = armTicksToNs(armGetSystemTick());
+            u64 o_t0 = loop_t0, w_t0 = loop_t0;
+            u32 o_sent0 = 0, w_sent0 = 0, o_q0 = g_queue_count.load(std::memory_order_relaxed);
+            for (u32 i = 0; ; ++i) {
+                const u64 t0 = armTicksToNs(armGetSystemTick());
+                if (!g_stream_enabled.load(std::memory_order_relaxed)) { why = "turned off from the overlay"; end = StreamEnd::Disabled; break; }
+                if (g_reconfig_request.exchange(false, std::memory_order_relaxed)) { why = "new settings from the manager app"; end = StreamEnd::Reconfigure; break; }
+                if (g_app_excluded.load(std::memory_order_relaxed)) { why = "this app was excluded"; end = StreamEnd::Disabled; break; }
+                if (geo != nullptr && g_game_surface.generation != geo->generation) { why = "the game made new frame buffers"; end = StreamEnd::Reconfigure; break; }
+                if (g_uvc_new_consumer.exchange(false, std::memory_order_relaxed)) {
+                    u32 nw = 0, nh = 0;
+                    UvcFrameSize(std::addressof(nw), std::addressof(nh));
+                    if (nw != w) { why = "the camera app asked for another size"; end = StreamEnd::Reconfigure; break; }
+                }
+                if (UvcHostStalled()) { why = "the camera app stopped reading"; end = StreamEnd::ViewerGone; break; }
+                if (!g_uvc_streaming.load(std::memory_order_relaxed)) { why = "the camera app closed (host detached)"; end = StreamEnd::ViewerGone; break; }
+                if (t0 - o_t0 >= UINT64_C(1000000000)) {
+                    const u32 qn = g_queue_count.load(std::memory_order_relaxed);
+                    g_live_fps_x10.store(static_cast<u32>(static_cast<u64>(sent - o_sent0) * UINT64_C(10000000000) / (t0 - o_t0)), std::memory_order_relaxed);
+                    g_live_game_fps_x10.store(static_cast<u32>(static_cast<u64>(qn - o_q0) * UINT64_C(10000000000) / (t0 - o_t0)), std::memory_order_relaxed);
+                    o_t0 = t0; o_sent0 = sent; o_q0 = qn;
+                }
+                u64 rn = 0; u32 sg = 0;
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped))) { why = SlotReadFailure(); end = StreamEnd::GameGone; break; }
+                const u64 t1 = armTicksToNs(armGetSystemTick());
+                if (!s.Vic("uvcraw:vic", L.off_cur)) { why = "VIC did not complete"; end = StreamEnd::Failed; break; }
+                if (TakeShotRequest()) { static_cast<void>(ShotFromSession(s)); }
+                const u64 t2 = armTicksToNs(armGetSystemTick());
+                /* the engine wrote it: drop any stale cache lines before reading */
+                armDCacheFlush(s.x.a + L.off_cur, frame_bytes);
+                if (pending) { UvcWaitSent(); ++sent; pending = false; }
+                const u64 t3 = armTicksToNs(armGetSystemTick());
+                const size_t total = UvcRawPack(g_stream_stage[parity], s.x.a + L.off_cur, frame_bytes, frame_no++);
+                UvcQueueFrame(g_stream_stage[parity], total);
+                pending = true;
+                parity ^= 1;
+                const u64 t4 = armTicksToNs(armGetSystemTick());
+                s_read += t1 - t0; s_vic += t2 - t1; s_wait += t3 - t2; s_pack += t4 - t3; ++w_n;
+
+                /* the 720p/1080p check, as the H.264 stream's (v0.7.6 rules) */
+                if (s.mk8_layout && (i + 1) % 15 == 0) {
+                    const s32 sl = g_queue_slot.load(std::memory_order_relaxed);
+                    const ContentProbe pr = ProbeContent(dbg, s.SlotAddr(slot_base, sl));
+                    s32 vote = -1;
+                    if (pr.ok) {
+                        const u32 crop = g_queue_crop_wh.load(std::memory_order_relaxed);
+                        const bool crop_full = (crop >> 16) >= 1920 && (crop & 0xFFFF) >= 1080;
+                        const bool moved_in  = last_probe.ok && pr.inside_hash != last_probe.inside_hash;
+                        const bool moved_out = last_probe.ok && pr.outside_hash != last_probe.outside_hash;
+                        if (crop_full)                                { vote = 0; }
+                        else if (pr.outside_black && pr.inside_black) { vote = -1; }
+                        else if (pr.outside_black)                    { vote = 1; }
+                        else if (moved_out)                           { vote = 0; }
+                        else if (moved_in)                            { vote = 2; }
+                    }
+                    last_probe = pr;
+                    small_streak = (vote == 1 || vote == 2) ? small_streak + 1 : 0;
+                    stale_streak = vote == 2 ? stale_streak + 1 : 0;
+                    big_streak   = vote == 0 ? big_streak + 1 : 0;
+                    const bool to720  = !started_corner && small_streak >= 8;
+                    const bool to1080 = started_corner && big_streak >= 2;
+                    if (to720 || to1080) {
+                        g_size_hint = { g_app_pid.load(std::memory_order_relaxed), g_game_surface.generation, to720 ? 1 : 0 };
+                        why = to1080 ? "the game switched to a 1080p picture" : "the game switched to a 720p picture";
+                        end = StreamEnd::Reconfigure;
+                        break;
+                    }
+                }
+                if ((i + 1) % 1200 == 0) {
+                    const u64 wn = armTicksToNs(armGetSystemTick());
+                    const u64 n = w_n ? w_n : 1;
+                    const u64 fps = wn > w_t0 ? static_cast<u64>(sent - w_sent0) * UINT64_C(10000000000) / (wn - w_t0) : 0;
+                    LogLine("   uvcraw window: %llu.%llu fps sent; per frame avg us: read %llu  VIC %llu  waiting for USB %llu  pack %llu",
+                            static_cast<unsigned long long>(fps / 10), static_cast<unsigned long long>(fps % 10),
+                            static_cast<unsigned long long>(s_read / n / 1000), static_cast<unsigned long long>(s_vic / n / 1000),
+                            static_cast<unsigned long long>(s_wait / n / 1000), static_cast<unsigned long long>(s_pack / n / 1000));
+                    s_read = s_vic = s_wait = s_pack = 0; w_n = 0; w_t0 = wn; w_sent0 = sent;
+                    DebugPumpLogStats("uvcraw");
+                }
+                /* hand the core back (M60b) */
+                os::SleepThread(TimeSpan::FromMicroSeconds(500));
+            }
+            if (pending) { UvcWaitSent(); ++sent; }
+            const u64 ms = (armTicksToNs(armGetSystemTick()) - loop_t0) / 1000000;
+            LogLine("   uvcraw: stopped: %s", why);
+            LogLine("   uvcraw: %u frames sent in %llu ms (%llu.%llu fps), %u presents skipped", sent, static_cast<unsigned long long>(ms),
+                    static_cast<unsigned long long>(ms ? sent * 1000ull / ms : 0), static_cast<unsigned long long>(ms ? (sent * 10000ull / ms) % 10 : 0), dropped);
+            UvcLogStats("uvcraw");
+            return end;
+        }
+
         StreamEnd TryNvencStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                                  u32 cmd_handle, u32 vsyncpt, u32 cfg_addr, bool live,
                                  const GameSurface *geo) {
@@ -7360,7 +7521,7 @@ namespace ams::mitm::applet {
          * IPC preempts us the moment a request arrives and the worker simply
          * uses what is left. */
         const s32 worker_prio = os::GetThreadPriority(os::GetCurrentThread()) + 4;
-        R_ABORT_UNLESS(os::CreateThread(std::addressof(g_vic_thread), VicWorkerThread, nullptr,
+        SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_vic_thread), VicWorkerThread, nullptr,
                                         g_vic_stack, sizeof(g_vic_stack), worker_prio));
         os::SetThreadNamePointer(std::addressof(g_vic_thread), "applet-mitm.VIC");
         os::StartThread(std::addressof(g_vic_thread));

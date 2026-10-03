@@ -108,7 +108,7 @@ namespace ams::mitm::applet {
     }
 
     void StartAudio() {
-        R_ABORT_UNLESS(os::CreateThread(std::addressof(g_audio_thread), AudioThread, nullptr,
+        SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_audio_thread), AudioThread, nullptr,
                                         g_audio_stack, sizeof(g_audio_stack),
                                         os::GetThreadPriority(os::GetCurrentThread())));
         os::SetThreadNamePointer(std::addressof(g_audio_thread), "applet-mitm.Audio");

@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.6** (no zoom on fake-docked menu changes). Released: v0.7.5 (Get extras), v0.7.4 (dvr-patches bundled, off), v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.7** (webcam for any app; no fatal on older Atmosphère). Released: v0.7.6 (no menu zoom), v0.7.5 (Get extras), v0.7.4 (dvr-patches bundled, off), v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,65 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.7.7: webcam for any app, no fatal on older Atmosphère ***
+
+Released without the Windows installer: it went out as a draft preview
+(0.7.7-preview, the windows-installer branch) until it is tested on Windows.
+
+- **The fatal (masagrator, GBAtemp, Atmosphère 1.11.1 + 22.0.0):**
+  InitializeSystemModule called ams::CheckApiVersion(), which aborts when the
+  running Atmosphère is older than the headers (1.11.2) - before LogInit, so
+  no log. Gone; Main logs the Atmosphère and firmware versions. Every
+  R_ABORT_UNLESS after LogInit is SFT_ABORT_UNLESS (applet_mitm_log.hpp): a
+  flushed "FATAL: <expr> failed, rc=..." line first. Only sm::Initialize,
+  before the log, still aborts bare.
+- **Windows driver (preview)** (`tools/windows-driver/`): "Install USB driver.exe" =
+  sft-driver.c + libwdi 1.5.1 (LGPL-3.0, ref/libwdi-src), cross-built with
+  zig. libwdi's WinUSB path embeds the WDK 8 co-installers (Windows 7 only);
+  build.sh patches a copy: no co-installers embedded, no co-installer/KMDF
+  sections in winusb.inf.in (as libwdi's own arm64 section - Windows 10/11's
+  inbox WinUSB), a fixed DriverVer 6.1.7600.16385. VID/PID 1209:5F1E only
+  (never the camera's 5F1F), DeviceInterfaceGUID
+  {0426C647-F0C8-4F3E-A91B-E30A89E484C0}; plugged in -> UpdateDriverFor-
+  PlugAndPlayDevices, not -> SetupCopyOEMInf (used at the next plug-in).
+  Manifest: requireAdministrator. `/quiet` for the installer. Under Wine the
+  INF is right and the .cat empty (no catalog APIs): needs a real Windows run.
+- **Installer (preview)** (`installer.nsi`, NSIS 3.08 from apt): Program Files, Start
+  menu (viewer, Install USB driver, Uninstall), desktop shortcut (component),
+  the driver (component, on), uninstall entry; the uninstaller deletes only
+  its own files. build-windows.sh makes dist/...-windows-setup.exe beside the
+  zip. The viewer: D on the "no USB driver" screen starts the driver tool.
+- **webcam-any** (`connection = webcam-any` -> tokens `uvc uvcraw`): the UVC
+  camera with one uncompressed NV12 format (GUID NV12, 12 bpp), frames
+  1280x720 @ 25 and 768x432 @ 60 (768: a 256-byte VIC pitch; the M70 60 fps
+  size). VS interface 123 B with the SS companion, under the 128-byte cap; no
+  colour-matching descriptor. Serial 0002 and bcdDevice 2.00 so hosts do not
+  reuse the H.264 camera's formats. TryUvcRawStream: Capture -> VIC
+  (BT.709, pitch-linear NV12, the session's arena, vic_only: no msenc
+  channel) -> cache flush -> UvcRawPack (2-byte header every 16 KB, FID by
+  frame parity, EOF last) into a stream stage buffer -> the sender posts 16
+  payloads (256 KB) per transfer (a bulk payload ends at dwMaxPayloadTransferSize,
+  so full payloads split on the host as separate transfers) + a ZLP when the
+  last payload is a short multiple of 512. The size check (v0.7.6 rules)
+  restarts at a 720p/1080p change. reserved3 bit 3 = webcam-any.
+- **Run AS** (Linux uvcvideo, uvc-check NV12, MK8D): 1280x720 **26.0 fps**,
+  232/232 complete, worst gap 221 ms, first frame 1.1 s; 768x432 **60.0
+  fps**, 579/579, worst gap 30 ms, first frame 0.4 s. Colours right (BT.709
+  limited, decoded by uvc-check --shot).
+
+## *** Research (2026-10-02): no driver-free Windows binding (MS OS 2.0) ***
+
+- Idea: a BOS with the Microsoft OS 2.0 platform capability (type 0x05,
+  {D8DD60DF-...}) makes Windows load WinUSB by itself - no Zadig.
+- Run AQ: usbDsSetBinaryObjectStore refused USB 2.0 ext + SuperSpeed + the
+  28-byte platform capability with 0xcc8c (InvalidParameter), and a refused BOS
+  left the viewer without USB (the setup returned). Run AR tried, in one boot:
+  all three, USB 2.0 ext + platform, platform alone - all refused; the M71 BOS
+  (22 B) then passed and the viewer worked. usb:ds rejects the platform
+  capability type itself. MS OS 1.0 needs string index 0xEE, which
+  usbDsAddUsbStringDescriptor cannot place. Dead end: the Windows viewer
+  ships a driver installer instead (libwdi, as Zadig).
 
 ## *** v0.7.6: no zoom on fake-docked menu changes ***
 

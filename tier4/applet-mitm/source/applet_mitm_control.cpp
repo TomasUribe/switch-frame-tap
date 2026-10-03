@@ -40,7 +40,7 @@ namespace ams::mitm::applet {
                 Result GetStatus(sf::Out<StreamStatus> out) {
                     StreamStatus st = {};
                     st.version      = 4;
-                    st.reserved3    = (g_uvc_mode ? 1u : 0u) | (g_net_armed ? 2u : 0u) | (NetClientPresent() ? 4u : 0u);   /* v0.4 webcam, v0.7 network on / viewer on the network */
+                    st.reserved3    = (g_uvc_mode ? 1u : 0u) | (g_net_armed ? 2u : 0u) | (NetClientPresent() ? 4u : 0u) | (g_uvc_raw ? 8u : 0u);   /* v0.4 webcam, v0.7 network on / viewer on the network, v0.7.7 webcam-any */
                     st.reserved     = (g_audio_enabled.load(std::memory_order_relaxed) ? 0x100u : 0u) | g_audio_state.load(std::memory_order_relaxed);   /* v4: audio */
                     st.state        = g_live_state.load(std::memory_order_relaxed);
                     st.enabled      = g_stream_enabled.load(std::memory_order_relaxed) ? 1 : 0;
@@ -170,7 +170,7 @@ namespace ams::mitm::applet {
         const Result r = g_control_manager.RegisterObjectForServer(g_control_object.GetShared(), ControlServiceName, ControlMaxSessions);
         LogLine("sftap: control service rc=0x%x", r.GetValue());
         if (R_FAILED(r)) { return; }
-        R_ABORT_UNLESS(os::CreateThread(std::addressof(g_control_thread), ControlThread, nullptr,
+        SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_control_thread), ControlThread, nullptr,
                                         g_control_stack, sizeof(g_control_stack),
                                         os::GetThreadPriority(os::GetCurrentThread())));
         os::SetThreadNamePointer(std::addressof(g_control_thread), "applet-mitm.Control");
