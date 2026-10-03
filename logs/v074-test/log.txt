@@ -1,0 +1,277 @@
+[    10.578] grc IPC interceptor: off
+[    10.587] applet-mitm v0.7.4: up (grc IPC interceptor off)
+[    10.712] sound in no-record games: on (dvr-patches, 18 current, 0 refreshed from the bundle)
+[    10.720] install type from GetEntryType(sdmc:/applet-mitm.armed) rc=0x202
+[    10.726] release install, sdmc:/config/switch-frame-tap/config.ini ->: vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio
+[    10.730] sftap: stream on at boot (stream-off: rc=0x202)
+[    10.744] sftap: 0 app(s) excluded (never attached)
+[    10.750] ARMED FLAGS: vic=1 exec=1 dbg=1 dump=0 usb=1 bench=0 nvenc=0 jpg=0 sweep=0 mtx=0 stream=0 grc=0 grcscan=0 clk=0 jpgdec=0 nvgrc=0 csc=0 nvframe=0(120) nvstream=1(3600, qp 20, gop 60) nvp=0(30) live=1 nv1080=0(120) wait=20
+[    10.758] arm file (sdmc:/applet-mitm.armed): vic=ARMED exec=PhaseB-full-blit
+[    10.768] ---- physical memory pools (svcGetSystemInfo) ----
+[    10.775]    pool 0 Application  total= 3363840 KB  used=       0 KB  free=  3363840 KB   rc=0/0
+[    10.781]    pool 1 Applet       total=  512000 KB  used=    4552 KB  free=   507448 KB   rc=0/0
+[    10.786]    pool 2 System       total=  237728 KB  used=  220752 KB  free=    16976 KB   rc=0/0
+[    10.790]    pool 3 SystemUnsafe total=   45184 KB  used=   43180 KB  free=     2004 KB   rc=0/0
+[    10.794]    THIS PROCESS (pool_partition 1 = Applet, at boot): total=511936 KB used=4488 KB free=507448 KB
+[    10.797]    for scale: one 1080p frame = 7913 KB, one block-row strip = 960 KB
+[    10.804] ---- USB device enumeration (usb:ds) ----
+[    10.812]    usbDsInitialize rc=0x0 
+[    10.816]    string descriptors rc=0x0
+[    10.820]    device descriptors (Full+High+Super) rc=0x0
+[    10.833]    usbDsSetBinaryObjectStore rc=0x0
+[    10.842]    usbDsRegisterInterface rc=0x0
+[    10.860]    configuration descriptors (Full+High+Super) rc=0x0
+[    10.867]    endpoints IN=0x81 OUT=0x01 rc=0x0
+[    10.886]    EnableInterface rc=0x0
+[    11.011]    usbDsEnable rc=0x0
+[    11.540]    usb state high-water = 5 (Configured)
+[    11.568]    *** NEGOTIATED SPEED = 3 (High(480Mbps)) *** rc=0x0
+[    11.584]    not SuperSpeed - check the CABLE is USB 3.0, and that the PC port is blue/SS
+[    11.595]    *** HOST CONFIGURED US - we own the bus, expect 1209:5f1e in lsusb ***
+[    11.603] probe fires at t=20 s; frame dump to SD: off
+[    11.612] debug-capture route: ARMED   pmdmntInitialize rc=0x0
+[    11.647] -> main:heartbeat_started
+[    11.659] sftap: control service rc=0x0
+[    11.669] VIC worker started (execute=PhaseB-full-blit)
+[    11.679] app watch: application pid 0, program 0000000000000000
+[    14.655] -> hb:1 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    17.742] -> hb:2 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    21.360] -> hb:3 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    22.222] audio: grc:d open
+[    22.260] sessions: wrapped objects get their sessions through sm (sftap:s), not from the Applet group's 6
+[    22.285] shot: input up (read-only) - hid rc=0x0, time ok
+[    22.306] audio: grc:d Begin rc=0x0
+[    22.329] sessions: warm-up pair rc=0x0 (server 0xd81e5, client 0xd01e6) - closed
+[    22.365] registered mitm server for vi:u
+[    22.400] registered mitm server for vi:m (homebrew applications only)
+[    22.422] vi server: 4 threads, 16 sessions
+[    22.469] -> main:LoopProcess
+[    24.447] -> hb:4 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    27.532] -> hb:5 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    30.576] -> hb:6 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    33.619] -> hb:7 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    37.776] -> hb:8 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    41.141] -> hb:9 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    44.181] -> hb:10 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    47.223] -> hb:11 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    50.301] -> hb:12 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    53.412] -> hb:13 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    56.491] -> hb:14 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    59.561] -> hb:15 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    60.432] app watch: application pid 141, program 01006a800016e000
+[    62.729] -> hb:16 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    65.014] audio: game audio flowing (4096 B chunks)
+[    65.785] -> hb:17 sess=0 getdisp=0 relay=0 txn=0 vic=waiting
+[    67.643] OnNeedsToAccept port=0 program=01006a800016e000
+[    67.656]   AcceptMitmImpl rc=0x0
+[    67.698] -> GetDisplayService:enter
+[    67.711]    program=01006a800016e000 cmd 0 mode=0
+[    67.765] -> GetDisplayService:done
+[    67.810] -> GetRelayService:enter
+[    67.851] -> GetRelayService:wrapped
+[    67.898] -> OpenDisplay:enter
+[    67.909]    OpenDisplay "Default" -> display_id=17
+[    68.834] -> hb:18 sess=1 getdisp=1 relay=1 txn=0 vic=waiting
+[    71.876] -> hb:19 sess=1 getdisp=1 relay=1 txn=0 vic=waiting
+[    74.125] *** binder txn #1  program=01006a800016e000  session=20  code=10(connect) x1  flags=0x0  in=108 out=4096
+[    74.171] -> binder:first_txn
+[    74.183] *** binder txn #2  program=01006a800016e000  session=20  code=9(query) x1  flags=0x0  in=100 out=4096
+[    74.197] *** binder txn #3  program=01006a800016e000  session=20  code=14(setPreallocatedBuffer) x1  flags=0x0  in=476 out=4096
+[    74.242] -> binder:parse_preallocated
+[    74.256] === setPreallocatedBuffer#1 slot 0 NvGraphicBuffer ===
+[    74.269]     nvmap_id=1396  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    74.281]     plane[0] 1920x1080  pitch=7680 B  offset=0x0  size=8847360 B
+[    74.294]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    74.308]    captured slot 0: nvmap=1396 1920x1080 stride_px=1920 blk_h_log2=4 off=0x0 pixfmt=33 (slots=1)
+[    74.321] *** binder txn #4  program=01006a800016e000  session=20  code=14(setPreallocatedBuffer) x2  flags=0x0  in=476 out=4096
+[    74.369] -> binder:parse_preallocated
+[    74.382] === setPreallocatedBuffer#2 slot 1 NvGraphicBuffer ===
+[    74.394]     nvmap_id=1400  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    74.408]     plane[0] 1920x1080  pitch=7680 B  offset=0x0  size=8847360 B
+[    74.420]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    74.434]    captured slot 1: nvmap=1400 1920x1080 stride_px=1920 blk_h_log2=4 off=0x0 pixfmt=33 (slots=2)
+[    74.446] *** binder txn #5  program=01006a800016e000  session=20  code=14(setPreallocatedBuffer) x3  flags=0x0  in=476 out=4096
+[    74.583] -> binder:parse_preallocated
+[    74.658] === setPreallocatedBuffer#3 slot 2 NvGraphicBuffer ===
+[    74.734]     nvmap_id=1408  stride=1920 px  total_size=8847360 B  num_planes=1  usage=0xb00  format=0x1
+[    74.809]     plane[0] 1920x1080  pitch=7680 B  offset=0x0  size=8847360 B
+[    74.884]              fmt=0x100532120(A8B8G8R8)  layout=3(BlockLinear)  kind=0xfe(Generic_16BX2)  block_h_log2=4  scan=0(Progressive)
+[    75.237]    captured slot 2: nvmap=1408 1920x1080 stride_px=1920 blk_h_log2=4 off=0x0 pixfmt=33 (slots=3)
+[    75.341] -> hb:20 sess=1 getdisp=1 relay=1 txn=5 vic=waiting
+[    75.419] *** binder txn #6  program=01006a800016e000  session=20  code=3(dequeueBuffer) x1  flags=0x0  in=116 out=4096
+[    75.571] *** binder txn #7  program=01006a800016e000  session=20  code=1(requestBuffer) x1  flags=0x0  in=100 out=4096
+[    77.273] *** binder txn #8  program=01006a800016e000  session=20  code=7(queueBuffer) x1  flags=0x0  in=192 out=4096
+[    77.361]    present transform 0x0, crop (0,0)-(0,0)
+[    77.680] -> binder:vic_blit_requested
+[    77.780]    queueBuffer txn#8 parcel=192 slot=0 -> handed to VIC worker
+[    77.859] *** binder txn #9  program=01006a800016e000  session=20  code=3(dequeueBuffer) x2  flags=0x0  in=116 out=4096
+[    77.931] *** binder txn #10  program=01006a800016e000  session=20  code=1(requestBuffer) x2  flags=0x0  in=100 out=4096
+[    78.265] *** binder txn #11  program=01006a800016e000  session=20  code=7(queueBuffer) x2  flags=0x0  in=192 out=4096
+[    78.359] -> vb:0_heap
+[    78.444] *** binder txn #12  program=01006a800016e000  session=20  code=3(dequeueBuffer) x3  flags=0x0  in=116 out=4096
+[    78.721] *** binder txn #13  program=01006a800016e000  session=20  code=1(requestBuffer) x3  flags=0x0  in=100 out=4096
+[    78.796] -> hb:21 sess=1 getdisp=1 relay=1 txn=12 vic=vb:0_heap
+[    78.879]    [probe, BEFORE heap grab] process total=412972 KB used=4488 KB free=408484 KB
+[    78.965]    [before heap grab] pool 0 Application  used= 1649072 KB  free=  1714768 KB
+[    79.040]    [before heap grab] pool 1 Applet       used=  103504 KB  free=   408496 KB
+[    79.114]    [before heap grab] pool 2 System       used=  229348 KB  free=     8380 KB
+[    79.202]    [before heap grab] pool 3 SystemUnsafe used=   43180 KB  free=     2004 KB
+[    79.275] *** binder txn #14  program=01006a800016e000  session=20  code=7(queueBuffer) x3  flags=0x0  in=192 out=4096
+[    79.348]    SetMemoryHeapSize(40 MB) rc=0x0
+[    79.420]    present transform 0x0, crop (0,0)-(1280,720)
+[    79.492]    [after heap grab] pool 0 Application  used= 1652272 KB  free=  1711568 KB
+[    79.591]    [after heap grab] pool 1 Applet       used=  144464 KB  free=   367536 KB
+[    79.610]    [after heap grab] pool 2 System       used=  229360 KB  free=     8368 KB
+[    79.641]    [after heap grab] pool 3 SystemUnsafe used=   43180 KB  free=     2004 KB
+[    79.671]    [probe, AFTER heap grab] total=412984 KB used=45448 KB free=367536 KB | sysresource 0/0 KB
+[    79.691]    one 1080p frame is 7913 KB; heap granted 40960 KB; NVENC must fit in what is left
+[    79.715]    VIC heap 40 MB at 0x869800000 (capture buffer 37504 KB on heap): cfg=0x869800000 cmd=0x869804000 dst=0x869810000 src=0x869b50000
+[    79.719]    capture region 37504 KB vs one 1080p frame 8100 KB -> FITS
+[    79.727]    stage buf at +8640 KB; full-frame capture clear of staging
+[    79.746] -> vb:1_smGetService
+[    79.753]    using nvdrv:t rc=0x0
+[    79.784] -> vb:2_tmem
+[    79.810] -> vb:3_Initialize
+[    79.815]    Initialize rc=0x0
+[    79.831]    live mode: our own nvdrv identity (no game aruid, no FROM_ID)
+[    79.962] -> vb:4_open_nvmap
+[    79.968]    /dev/nvmap rc=0x0 fd=23134208 nverr=0
+[    79.988]    perm probe: /dev/nvhost-gpu rc=0x0 nverr=0 -> OPEN (bit0 set: full mask)
+[    80.049] -> vb:4b_node_survey
+[    80.063]    node /dev/nvhost-display    OPEN (rc=0x0 nverr=0)
+[    80.091]    node /dev/nvdisp-ctrl       OPEN (rc=0x0 nverr=0)
+[    80.101]    node /dev/nvdisp-disp0      OPEN (rc=0x0 nverr=0)
+[    80.107]    node /dev/nvdisp-disp1      OPEN (rc=0x0 nverr=0)
+[    80.112]    node /dev/nvdcutil-disp0    OPEN (rc=0x0 nverr=0)
+[    80.116]    node /dev/nvcec-ctrl        OPEN (rc=0x0 nverr=0)
+[    80.120]    node /dev/nvhost-as-gpu     OPEN (rc=0x0 nverr=0)
+[    80.126]    node /dev/nvhost-ctrl-gpu   OPEN (rc=0x0 nverr=0)
+[    80.130]    node /dev/nvhost-msenc      OPEN (rc=0x0 nverr=0)
+[    80.135]    node /dev/nvhost-nvdec      OPEN (rc=0x0 nverr=0)
+[    80.143]    node /dev/nvhost-tsec       denied (rc=0x0 nverr=196611)
+[    80.149]    node /dev/nvhost-nvjpg      OPEN (rc=0x0 nverr=0)
+[    80.179] -> vb:5_FROM_ID
+[    80.202] -> vb:6_alloc_bufs
+[    80.209]    SetMemoryAttribute(0x869800000, 0x4000, uncached) rc=0x0
+[    80.216]    nvmapOwn ok handle=3972 id=3972 kind=0 size=0x4000
+[    80.226]    SetMemoryAttribute(0x869804000, 0x1000, uncached) rc=0x0
+[    80.231]    nvmapOwn ok handle=3976 id=3976 kind=0 size=0x1000
+[    80.235]    SetMemoryAttribute(0x869810000, 0x340000, uncached) rc=0x0
+[    80.240]    nvmapOwn ok handle=3980 id=3980 kind=0 size=0x340000
+[    80.245]    SetMemoryAttribute(0x869b50000, 0x10000, uncached) rc=0x0
+[    80.250]    nvmapOwn ok handle=3984 id=3984 kind=0 size=0x10000
+[    80.276] -> vb:7_open_vic
+[    80.282]    /dev/nvhost-vic rc=0x0 fd=23134209 nverr=0
+[    80.293]    GET_SYNCPOINT rc=0x0 nverr=0 -> syncpt=12
+[    80.317] -> vb:8_set_nvmap_fd
+[    80.326]    SET_NVMAP_FD(23134208) rc=0x0 nverr=0
+[    80.332]    SET_SUBMIT_TIMEOUT rc=0x0 nverr=0
+[    80.353] -> vb:8_guard
+[    80.361]    SetMemoryAttribute(0x869808000, 0x1000, uncached) rc=0x0
+[    80.392]    nvmapOwn ok handle=4004 id=4004 kind=0 size=0x1000
+[    80.397]    MAP_CMD_BUFFER(guard (holds device address 0) handle=4004 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x1980000
+[    81.405] -> vb:8a_map_cfg
+[    81.416]    MAP_CMD_BUFFER(cfg handle=3972 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x19a0000
+[    81.445] -> vb:8b_map_dst
+[    81.451]    MAP_CMD_BUFFER(dst handle=3980 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x19c0000
+[    81.478] -> vb:8c_map_src
+[    81.508] -> vb:8d_map_self
+[    81.514]    MAP_CMD_BUFFER(src(ours) handle=3984 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x1d00000
+[    81.518]    pinned: cfg=0x19a0000 dst=0x19c0000 self=0x1d00000 game_src=0x0 (+slot off 0x0)
+[    81.526]    self-src pattern: row0[0..8]=ff 00 00 11 ff 04 00 11
+[    81.549] -> vb:job_fill
+[    81.559]    [vb:job_fill] setcl=1 words=18 cmd[0..3]=00001740 10100002 00000080 00000001
+[    81.565]    [vb:job_fill] req=0xc0340001 sz=52 nr=0 rc=0x0 nverr=0 -> fence=1006
+[    81.569]    [vb:job_fill] resolved addrs: cfg=0x00019a00 dst=0x00019c00 src=0x00000000 (<<8: 0x19a0000 0x19c0000 0x0)
+[    81.574]    [vb:job_fill] WAIT nverr=0  syncpt=1008 (want >= 1006)  OP_DONE fired
+[    81.579]    [vb:job_fill] dst sum32=11022336 changed=16384/65536  *** ENGINE WROTE OUR MEMORY ***
+[    81.584]    [vb:job_fill] dst[0..32]: ff c0 80 40 ff c0 80 40 ff c0 80 40 ff c0 80 40 ff c0 80 40 ff c0 80 40 ff c0 80 40 ff c0 80 40 
+[    81.588]    [vb:job_fill] row 32: ff c0 80 40 ff c0 80 40
+[    81.667] -> vb:job_blit_self
+[    81.678]    [vb:job_blit_self] setcl=1 words=21 cmd[0..3]=00001740 10100002 00000080 00000001
+[    81.683]    [vb:job_blit_self] req=0xc0340001 sz=52 nr=0 rc=0x0 nverr=0 -> fence=1015
+[    81.687]    [vb:job_blit_self] resolved addrs: cfg=0x00019a00 dst=0x00019c00 src=0x0001d000 (<<8: 0x19a0000 0x19c0000 0x1d00000)
+[    81.693]    [vb:job_blit_self] WAIT nverr=0  syncpt=1015 (want >= 1015)  OP_DONE fired
+[    81.698]    [vb:job_blit_self] dst sum32=10551296 changed=16384/65536  *** ENGINE WROTE OUR MEMORY ***
+[    81.702]    [vb:job_blit_self] dst[0..32]: ff 00 00 11 ff 04 00 11 ff 08 00 11 ff 0c 00 11 ff 10 00 11 ff 14 00 11 ff 18 00 11 ff 1c 00 11 
+[    81.707]    [vb:job_blit_self] row 32: ff 00 80 11 ff 04 80 11
+[    81.717]    game blit still not possible: handle pins to phys=0
+[    81.788] -> vb:game_blit_SKIPPED
+[    82.038] -> vb:ALL_JOBS_DONE
+[    82.059] -> hb:22 sess=1 getdisp=1 relay=1 txn=305 vic=vb:ALL_JOBS_DONE
+[    82.064]    ==== LIVE MODE (M86): streaming whenever a viewer is reading and a game is running ====
+[    82.276]    live[1]: attached to pid 141; 1920x1080, 3 slot(s); swapchain (8847360 B) at 0x58f9ce0000; game held 6525 us; 26 attach events, continue rc=0x0
+[    82.293]    debug pump: running on core 3; helpers on cores 0/1/2: yes/yes/yes
+[    82.365] -> ns:1
+[    82.403]    ---- LIVE H.264 STREAM (M86): until the viewer or the game goes, an IDR every 60, QP 20 ----
+[    82.410]    nvstream: game swapchain 1920x1080 stride 1920 px, block height 2^4, 3 slot(s) of 8847360 B, format 0x100532120
+[    82.415]    nvstream: 3 slot(s), each its own nvmap object; 16 candidate buffer(s) of 8847360 B from 0x58ceb24000 - matching them to slots while streaming
+[    82.878]    swapchain: slots matched to their buffers after 24 frame intervals (weakest score 875/1000): 0->0x58f9ce0000 1->0x58fa6f0000 2->0x58fb100000
+[    82.904]    swapchain: the first frame waited 485 ms for the slot match (matched)
+[    82.954]    nvstream: content 1280x720 (handheld) (140 samples outside the top-left 1280x720 all zero) -> the VIC converts the corner 1:1; later frames read only its 3.9 MB
+[    82.978]    nvstream: encoding 1280x720 (the handheld picture, 1:1)
+[    83.000]    nvmapOwn(0x869b60000, 0x870000) kept CACHEABLE - caller must flush before submit
+[    83.021]    nvmapOwn ok handle=4116 id=4116 kind=0 size=0x870000
+[    83.044]    MAP_CMD_BUFFER(nvf-slot handle=4116 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x1d40000
+[    83.064]    nvmapOwn(0x86aa30000, 0x6c5000) kept CACHEABLE - caller must flush before submit
+[    83.087]    nvmapOwn ok handle=4120 id=4120 kind=0 size=0x6c5000
+[    83.170]    MAP_CMD_BUFFER(nvf-arena(vic) handle=4120 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x25c0000
+[    83.238]    MAP_CMD_BUFFER(nvf-arena(enc) handle=4120 compr=0 req=0xc0140009) rc=0x0 nverr=0 -> phys=0x25c0000
+[    83.301]    nvstream: arena 6932 KB at +15168 KB; VIC sees it at 0x25c0000, NVENC at 0x25c0000 (syncpt 14); picture 0x27f0000/0x28d1000, bits 0x25d0000
+[    83.348]    clk(nvstream): smGetService(mm:u) rc=0x0
+[    83.398]    clk: mm id 5 (libnx: NVENC, nvtegra: NVDEC) req=1  get=0 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=979200000 Hz (rc=0x0)
+[    83.453]    clk: mm id 6 (libnx: NVDEC) req=2  get=979200000 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=979200000 Hz (rc=0x0)
+[    83.518]    clk: mm id 7 (NVJPG) req=3  get=0 Hz (rc=0x0)  SetAndWait(max) rc=0x0  -> get=652800000 Hz (rc=0x0)
+[    83.602]    clk-ensure(nvstream) #1 re-set max     : 2 request(s), SetAndWait rc=0x0 -> clkrst NVENC=979200000 Hz
+[    84.727] *** binder txn #600  program=01006a800016e000  session=20  code=7(queueBuffer) x296  flags=0x0  in=192 out=4096
+[    85.116] -> hb:23 sess=1 getdisp=1 relay=1 txn=633 vic=ns:vic
+[    88.248] -> hb:24 sess=1 getdisp=1 relay=1 txn=997 vic=ns:vic
+[    89.894] *** binder txn #1200  program=01006a800016e000  session=20  code=7(queueBuffer) x596  flags=0x0  in=192 out=4096
+[    91.301] -> hb:25 sess=1 getdisp=1 relay=1 txn=1213 vic=ns:vic
+[    94.337] -> hb:26 sess=1 getdisp=1 relay=1 txn=1575 vic=ns:vic
+[    96.175] *** binder txn #1800  program=01006a800016e000  session=20  code=7(queueBuffer) x896  flags=0x0  in=192 out=4096
+[    97.365] -> hb:27 sess=1 getdisp=1 relay=1 txn=1941 vic=ns:vic
+[   100.418] -> hb:28 sess=1 getdisp=1 relay=1 txn=2267 vic=ns:vic
+[   100.466] shot: combo 0 pressed
+[   101.731] *** binder txn #2400  program=01006a800016e000  session=20  code=7(queueBuffer) x1196  flags=0x0  in=192 out=4096
+[   102.269] shot: 1280x720 -> sdmc:/switch/switch-frame-tap/screenshots/2026-10-02_20-53-56.png (2712 KB, 1801 ms)
+[   103.519] -> hb:29 sess=1 getdisp=1 relay=1 txn=2579 vic=ns:vic
+[   106.588] -> hb:30 sess=1 getdisp=1 relay=1 txn=2837 vic=ns:vic
+[   107.793] app watch: application pid 0, program 0000000000000000
+[   107.950]    nvstream: stopped: slot read failed: the game exited
+[   108.146]    nvstream: game audio 3912 KB in 664 packets (20864 ms of sound)
+[   108.153]    nvstream: 864 frames sent in 24264 ms -> 35.6 fps (game presented 47.7 fps, 351 presents skipped), 0 encodes with errors
+[   108.169]    nvstream: per frame avg us: read+flush 6682  VIC 3516  NVENC 2080  copy 6  usb 2322; worst work 1985822 us
+[   108.181]    nvstream: avg 9424 B/frame (max 137354) -> 2 Mbps at the achieved rate; 15 IDR avg 61811 B, 849 P avg 8498 B; clock re-ensured 0 time(s)
+[   108.188]    nvstream: console latency, the game's present -> header sent: avg 53439 us, max 1992101 us
+[   108.206]    nvstream: present fences: 829 waited, avg 2 us, max 521 us, 0 timed out (250 ms), 0 presents without a readable fence; 11 read(s) redone (the slot may have been reused while it was read)
+[   108.219]    nvstream: presents taken (M96): 822 already drawn, 7 waited for (the oldest not yet drawn), 48 by the old latest-present rule
+[   108.234]    nvstream: per-stage max us: read 81780  VIC 1928255  NVENC 47300  USB wait 34122  copy 310; 32 frame(s) over 50 ms of work; 0 USB wait(s) over 500 ms (IDR forced after each)
+[   108.244]    nvstream: STALL at frame 5 (+134 ms): read 11080 us, VIC 801 us, NVENC 3618 us, waiting for the previous USB transfer 34122 us, copy 1 us
+[   108.253]    nvstream: STALL at frame 50 (+1417 ms): read 12000 us, VIC 515 us, NVENC 15842 us, waiting for the previous USB transfer 30156 us, copy 1 us
+[   108.268]    nvstream: STALL at frame 54 (+1536 ms): read 23392 us, VIC 524 us, NVENC 44 us, waiting for the previous USB transfer 1269 us, copy 0 us
+[   108.278]    nvstream: STALL at frame 68 (+1848 ms): read 33065 us, VIC 529 us, NVENC 1046 us, waiting for the previous USB transfer 7379 us, copy 1 us
+[   108.285]    nvstream: STALL at frame 85 (+2413 ms): read 35543 us, VIC 1900 us, NVENC 72 us, waiting for the previous USB transfer 16723 us, copy 1 us
+[   108.295]    nvstream: STALL at frame 87 (+2514 ms): read 4781 us, VIC 14418 us, NVENC 24943 us, waiting for the previous USB transfer 10335 us, copy 1 us
+[   108.304]    nvstream: STALL at frame 92 (+2747 ms): read 14990 us, VIC 3504 us, NVENC 35823 us, waiting for the previous USB transfer 1299 us, copy 1 us
+[   108.317]    nvstream: STALL at frame 101 (+2994 ms): read 27494 us, VIC 3217 us, NVENC 6601 us, waiting for the previous USB transfer 17222 us, copy 1 us
+[   108.333]    nvstream: debug events 44 (+22 threads, -21 threads, 1 other, 0 faults left to the game) in 44 wakes; continued 44 (cores 0-3: 9/12/1/22), busy 0, failed 0 (last rc 0x0); longest hold 2085 us; GAME GONE
+[   108.382] -> ns:stopped
+[   108.416]    live[1]: session ended - the game went away; detached
+[   109.427]    live: viewer present; waiting for a game (no application)
+[   109.451] -> live:no_game
+[   109.619] -> hb:31 sess=1 getdisp=1 relay=1 txn=2837 vic=live:no_game
+[   112.650] -> hb:32 sess=1 getdisp=1 relay=1 txn=2837 vic=live:no_game
+[   115.683] -> hb:33 sess=1 getdisp=1 relay=1 txn=2837 vic=live:no_game
+[   118.714] -> hb:34 sess=1 getdisp=1 relay=1 txn=2837 vic=live:no_game
+[   121.744] -> hb:35 sess=1 getdisp=1 relay=1 txn=2837 vic=live:no_game
+[   124.777] -> hb:36 sess=1 getdisp=1 relay=1 txn=2837 vic=live:no_game
+[   124.815] shot: combo 0 pressed
+[   125.470] shot: no game is running
+[   126.453] shot: combo 0 pressed
+[   127.081] shot: no game is running
+[   127.804] -> hb:37 sess=1 getdisp=1 relay=1 txn=2837 vic=live:no_game
+[   130.852] -> hb:38 sess=1 getdisp=1 relay=1 txn=2837 vic=live:no_game
+[   133.489]    live: waiting for a viewer (raw-view) to read the stream
+[   133.509] -> live:no_viewer
+[   133.883] -> hb:39 sess=1 getdisp=1 relay=1 txn=2837 vic=live:no_viewer

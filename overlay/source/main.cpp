@@ -12,15 +12,15 @@
  *    applies them to the running game.
  *  - v0.7.2: sound in games that block recording, through dvr-patches
  *    (github.com/exelix11/dvr-patches, BSD-3): patches to `am` that let the
- *    console's recorder run for every game, so grc:d has their sound. The
- *    toggle moves their folder in and out of atmosphere/exefs_patches; am
- *    reads it at boot, so a change applies after a restart.
+ *    console's recorder run for every game, so grc:d has their sound.
+ *    v0.7.4: bundled, off; the toggle is common/sound_patch.hpp (shared with
+ *    the manager). am reads its patches at boot: a change needs a restart.
  */
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
 #include <cstdio>
 #include <cstring>
-#include <sys/stat.h>
+#include "../../common/sound_patch.hpp"
 
 namespace {
 
@@ -190,33 +190,19 @@ namespace {
 
     /* ---- dvr-patches: sound in games that block recording --------------- */
 
-    constexpr const char *PatchOn  = "sdmc:/atmosphere/exefs_patches/am";       /* where dvr-patches installs */
-    constexpr const char *PatchOff = "sdmc:/config/switch-frame-tap/dvr-patches"; /* parked: Atmosphere does not look here */
+    /* the shared logic (common/sound_patch.hpp); libtesla keeps no sdmc:
+     * mounted, so each call gets it for its duration */
+    using PatchState = sftsound::State;
 
-    enum class PatchState { Missing, On, Off };
-
-    bool IsDir(const char *path) {
-        struct stat st;
-        return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-    }
-
-    /* libtesla keeps no sdmc: mounted - only for the duration of a call */
     PatchState GetPatchState() {
         PatchState st = PatchState::Missing;
-        tsl::hlp::doWithSDCardHandle([&] {
-            if (IsDir(PatchOn))       { st = PatchState::On; }
-            else if (IsDir(PatchOff)) { st = PatchState::Off; }
-        });
+        tsl::hlp::doWithSDCardHandle([&] { st = sftsound::Get(); });
         return st;
     }
 
     bool SetPatch(bool on) {
         bool ok = false;
-        tsl::hlp::doWithSDCardHandle([&] {
-            mkdir("sdmc:/config", 0777);
-            mkdir("sdmc:/config/switch-frame-tap", 0777);
-            ok = on ? rename(PatchOff, PatchOn) == 0 : rename(PatchOn, PatchOff) == 0;
-        });
+        tsl::hlp::doWithSDCardHandle([&] { ok = sftsound::Set(on); });
         return ok;
     }
 
@@ -244,7 +230,7 @@ namespace {
     class MainGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("Switch Frame Tap", "v0.7.3");
+                auto *frame = new tsl::elm::OverlayFrame("Switch Frame Tap", "v0.7.4");
                 auto *list = new tsl::elm::List();
 
                 list->addItem(new tsl::elm::CategoryHeader("Stream to PC"));
@@ -281,7 +267,7 @@ namespace {
                 });
                 list->addItem(m_patch);
                 list->addItem(new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
-                    const char *l1 = m_patch_state == PatchState::Missing ? "dvr-patches not installed - see the README"
+                    const char *l1 = m_patch_state == PatchState::Missing ? "Not installed - see the README"
                                    : m_patch_changed ? "Restart the console to apply"
                                    : "For games like Smash. Turn off if a game crashes.";
                     r->drawString(l1, false, x + 15, y + 22, 16, r->a(m_patch_changed ? tsl::style::color::ColorHighlight : tsl::style::color::ColorDescription));

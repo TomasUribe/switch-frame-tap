@@ -36,10 +36,16 @@ cat > "$STAGE/atmosphere/contents/0100000000000C20/toolbox.json" <<JSON
 JSON
 cp "$REPO/overlay/switch-frame-tap.ovl" "$STAGE/switch/.overlays/"
 cp "$REPO/manager/switch-frame-tap.nro" "$STAGE/switch/switch-frame-tap/"
+# v0.7.4: dvr-patches (exelix11, BSD-3), bundled OFF: here Atmosphere does not
+# read them; "Sound in no-record games" in the manager or overlay copies them
+# to atmosphere/exefs_patches/switch-frame-tap-sound
+mkdir -p "$STAGE/config/switch-frame-tap/dvr-patches"
+cp "$REPO"/third_party/dvr-patches/*.ips "$REPO/third_party/dvr-patches/LICENSE" "$STAGE/config/switch-frame-tap/dvr-patches/"
+cp "$REPO/third_party/dvr-patches/README.md" "$STAGE/config/switch-frame-tap/dvr-patches/README.txt"
 
 ZIP="$OUT/switch-frame-tap-$VER-switch.zip"
 rm -f "$ZIP"
-(cd "$STAGE" && zip -qr "$ZIP" atmosphere switch)
+(cd "$STAGE" && zip -qr "$ZIP" atmosphere switch config)
 rm -rf "$STAGE"
 echo "== $ZIP"
 unzip -l "$ZIP"

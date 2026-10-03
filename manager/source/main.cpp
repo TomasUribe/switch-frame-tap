@@ -25,11 +25,12 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include "../../common/sound_patch.hpp"
 #include <unordered_map>
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.7.3";
+    constexpr const char *AppVersion  = "0.7.4";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -303,6 +304,8 @@ namespace {
         bool stream_file_on = true;
         size_t shot_files = 0, excluded = 0;
         bool confirm_clear = false;
+        sftsound::State sound = sftsound::State::Missing;   /* v0.7.4: the bundled dvr-patches */
+        bool sound_changed = false;                          /* toggled since this app started: a restart applies it */
         u32 fw = 0;
         u64 ams = 0;
         std::string toast;
@@ -317,6 +320,7 @@ namespace {
             stream_file_on = !FileExists(StreamOff);
             shot_files = ListShots().size();
             excluded = CountExcluded();
+            sound = sftsound::Get();
             running = ModuleRunning();
             have_status = running && SftapStatus(&st);
         }
@@ -474,8 +478,24 @@ namespace {
                 }, [this] { return !set.audio ? ColDim : (have_status && st.version >= 4 && (st.reserved & 0xFF) >= 2) ? ColWarn : ColGood; },
                 [this](int) { set.audio = !set.audio; Saved(); },
                 "Sends the game's sound to the PC viewer (M in the viewer mutes it). It comes from the console's own video "
-                "recorder, as with SysDVR - games that turn video capture off have no sound in the stream. "
+                "recorder, as with SysDVR - games that turn video capture off have no sound in the stream unless "
+                "\"Sound in no-record games\" below is on. "
                 "Webcam mode has no sound: a USB camera cannot carry it from the Switch." });
+
+            rows.push_back({ Kind::Setting, "Sound in no-record games", [this] {
+                    const char *v = sound == sftsound::State::On ? "On" : sound == sftsound::State::Off ? "Off" : "Not installed";
+                    return std::string(v) + (sound_changed ? " - restart to apply" : "");
+                }, [this] { return sound_changed ? ColWarn : sound == sftsound::State::On ? ColGood : ColDim; },
+                [this](int) {
+                    if (sound == sftsound::State::Missing) { Toast("The patches are not on the SD card - reinstall the Switch Frame Tap zip"); return; }
+                    const bool on = sound != sftsound::State::On;
+                    if (sftsound::Set(on)) { sound_changed = !sound_changed; Toast(on ? "On - restart the console to apply" : "Off - restart the console to apply"); }
+                    else { Toast("Could not change it - check the SD card"); }
+                },
+                "Some games turn the console's video recorder off (Super Smash Bros. Ultimate, for one), and with it the "
+                "sound the stream gets. This turns on dvr-patches (by exelix11, bundled): they let the recorder run for "
+                "every game, so their sound comes through. Off by default; a restart applies it. Turn it off again if a "
+                "game crashes with it on (a crash report for 0100000000000023)." });
 
             rows.push_back({ Kind::Header, "Picture", nullptr, nullptr, nullptr, "" });
             rows.push_back({ Kind::Setting, "Quality", [this] { return std::string(QualityNames[set.quality]); }, nullptr,
