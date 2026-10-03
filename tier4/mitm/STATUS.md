@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.5** (Get extras in the manager). Released: v0.7.4 (dvr-patches bundled, off), v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.6** (no zoom on fake-docked menu changes). Released: v0.7.5 (Get extras), v0.7.4 (dvr-patches bundled, off), v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,19 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.7.6: no zoom on fake-docked menu changes ***
+
+- The 720p/1080p size check (ProbeContent every 15 frames) flipped to 720p
+  for a split second when a fake-docked game's menu changed or a loading
+  screen went black (MK8: 720p at 555.6 s, back at 559.7 s,
+  logs/v075-menuzoom). Now: a full-size present crop is checked first and
+  always votes 1080p; a frame that is black both inside and outside the
+  corner gives no vote; 720p needs 8 checks in a row (was fewer), 1080p
+  still 2. The stop line says why ("black outside the corner" or "an
+  unchanging old picture outside the corner").
+- Tested: MK8 fake-docked menus, docked <-> handheld, Sonic, Smash - no
+  zoom; the docked -> handheld switch still restarts at 720p.
 
 ## *** v0.7.5: Get extras in the manager ***
 
