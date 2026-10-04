@@ -2519,12 +2519,13 @@ namespace ams::mitm::applet {
         [[noreturn]] void RunLive(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr) {
             LogLine("   ==== LIVE MODE (M86): streaming whenever a viewer is reading and a game is running ====");
             /* M98: a release install captures only on the firmware it was
-             * tested on (22.x); the debug reads and engine jobs assume it */
+             * tested on (22.x; v0.7.8: 21.x too, a user's 21.0.1); the debug
+             * reads and engine jobs assume it */
             {
                 const u32 v = hosversionGet();
-                if (g_release_mode && !g_anyfw_armed && HOSVER_MAJOR(v) != 22) {
+                if (g_release_mode && !g_anyfw_armed && HOSVER_MAJOR(v) != 22 && HOSVER_MAJOR(v) != 21) {
                     g_live_state.store(LiveState_Unsupported, std::memory_order_relaxed);
-                    LogLine("   live: firmware %u.%u.%u is untested (this build: 22.x) - not streaming. allow_untested_firmware = 1 in config.ini overrides.",
+                    LogLine("   live: firmware %u.%u.%u is untested (this build: 21.x-22.x) - not streaming. allow_untested_firmware = 1 in config.ini overrides.",
                             HOSVER_MAJOR(v), HOSVER_MINOR(v), HOSVER_MICRO(v));
                     VicStage("live:untested_fw");
                     for (;;) { os::SleepThread(TimeSpan::FromSeconds(3600)); }
@@ -4848,14 +4849,29 @@ namespace ams::mitm::applet {
             return NvfWaitDone(x, pic_index, fence, t0, st, enc_ns);
         }
 
+        /* v0.7.8: a 4-byte pixel's offset in any block-linear RGBA surface -
+         * GOBs of 64 bytes x 8 rows (512 B), 2^bh_log2 GOBs to a block. MK8's
+         * 1920-px stride with 16-GOB blocks was the only layout the size check
+         * knew (Xenoblade Chronicles X back in handheld kept streaming 1080p). */
+        constexpr u64 BlOffset(u32 x, u32 y, u32 stride_px, u32 bh_log2) {
+            const u32 xb = x * 4;
+            const u32 block_rows = 8u << bh_log2, block_bytes = 512u << bh_log2;
+            const u64 gobs_x = (static_cast<u64>(stride_px) * 4 + 63) / 64;
+            return static_cast<u64>(y / block_rows) * gobs_x * block_bytes + static_cast<u64>(xb / 64) * block_bytes
+                 + ((y % block_rows) / 8) * 512 + ((xb % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((xb % 32) / 16) * 32 + (y % 2) * 16 + (xb % 16);
+        }
+        /* the MK8 formula it replaces, at the probe's corners */
+        constexpr u64 Mk8Offset(u32 x, u32 y) {
+            const u32 xb = x * 4;
+            return (y / 128) * 120 * 8192 + (xb / 64) * 8192 + ((y % 128) / 8) * 512
+                 + ((xb % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((xb % 32) / 16) * 32 + (y % 2) * 16 + (xb % 16);
+        }
+        static_assert(BlOffset(1300, 10, 1920, 4) == Mk8Offset(1300, 10) && BlOffset(1900, 1070, 1920, 4) == Mk8Offset(1900, 1070) &&
+                      BlOffset(10, 740, 1920, 4) == Mk8Offset(10, 740) && BlOffset(1279, 719, 1920, 4) == Mk8Offset(1279, 719));
+
         /* All zero outside the top-left 1280x720 means handheld content. */
-        bool SlotContentIs720(const u8 *slot, u32 *out_samples) {
-            auto px = [&](u32 x, u32 y) -> const u8 * {
-                const u32 xb = x * 4;
-                const u32 addr = (y / 128) * 120 * 8192 + (xb / 64) * 8192 + ((y % 128) / 8) * 512
-                               + ((xb % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((xb % 32) / 16) * 32 + (y % 2) * 16 + (xb % 16);
-                return slot + addr;
-            };
+        bool SlotContentIs720(const u8 *slot, u32 *out_samples, u32 stride_px, u32 bh_log2) {
+            auto px = [&](u32 x, u32 y) -> const u8 * { return slot + BlOffset(x, y, stride_px, bh_log2); };
             u32 n = 0;
             bool zero = true;
             for (u32 y = 10; y < 1080; y += 100) {
@@ -4883,12 +4899,8 @@ namespace ams::mitm::applet {
         struct SizeHint { u64 pid; u32 gen; s32 corner; };
         constinit SizeHint g_size_hint = { 0, 0, -1 };
 
-        ContentProbe ProbeContent(::ams::svc::Handle dbg, u64 base) {
-            auto off = [](u32 x, u32 y) -> u64 {
-                const u32 xb = x * 4;
-                return static_cast<u64>((y / 128) * 120 * 8192 + (xb / 64) * 8192 + ((y % 128) / 8) * 512
-                     + ((xb % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((xb % 32) / 16) * 32 + (y % 2) * 16 + (xb % 16));
-            };
+        ContentProbe ProbeContent(::ams::svc::Handle dbg, u64 base, u32 stride_px, u32 bh_log2) {
+            auto off = [&](u32 x, u32 y) -> u64 { return BlOffset(x, y, stride_px, bh_log2); };
             ContentProbe r = { true, true, true, 2166136261u, 2166136261u };
             alignas(8) u8 px[8];
             auto sample = [&](u32 x, u32 y, u32 *h, bool outside) {
@@ -4902,6 +4914,73 @@ namespace ams::mitm::applet {
             for (u32 y = 30; y < 720; y += 90) { for (u32 x = 40; x < 1280; x += 160) { sample(x, y, std::addressof(r.inside_hash), false); } }
             return r;
         }
+
+        /* The 720p/1080p check both live streams run (v0.7.1-v0.7.6 rules, see
+         * the H.264 stream). v0.7.8: on a clock - every 250 ms, not every 15
+         * frames: Xenoblade Chronicles X runs at 30 fps, so 8 checks took 4 s
+         * and the player left before the stream switched - and the game's own
+         * crop going from 1920x1080 to 1280x720 or less switches to 720p at the
+         * next check (it reported 1280x720 the moment it was back in handheld).
+         * Smash keeps 1280x720 even fake-docked, so only the change counts.
+         * And each check compares a slot with that slot's last probe: after
+         * docked mode every slot holds a different old docked frame around the
+         * corner, so slot-to-slot it looked like moving content and the 720p
+         * stream went straight back to 1080p (Run v078-1, MK8). Every 15
+         * frames had only worked because 15 is a multiple of 3 slots. */
+        struct SizeCheck {
+            bool started_corner = false;
+            bool last_crop_full = false;
+            u32 small_streak = 0, big_streak = 0, stale_streak = 0;
+            ContentProbe last[8] = {};      /* per slot */
+            u64 next_ns = 0;
+
+            static bool CropFull(u32 crop) { return (crop >> 16) >= 1920 && (crop & 0xFFFF) >= 1080; }
+            static bool CropSmall(u32 crop) { return crop != 0 && (crop >> 16) <= 1280 && (crop & 0xFFFF) <= 720; }
+
+            explicit SizeCheck(bool corner) : started_corner(corner),
+                last_crop_full(CropFull(g_queue_crop_wh.load(std::memory_order_relaxed))),
+                next_ns(armTicksToNs(armGetSystemTick()) + UINT64_C(250000000)) {}
+
+            /* nullptr, or why the stream restarts at the other size (g_size_hint set) */
+            const char *Step(::ams::svc::Handle dbg, u64 addr, s32 slot, u32 stride_px, u32 bh_log2) {
+                const u64 now = armTicksToNs(armGetSystemTick());
+                if (now < next_ns) { return nullptr; }
+                next_ns = now + UINT64_C(250000000);
+                const u32 crop = g_queue_crop_wh.load(std::memory_order_relaxed);
+                const bool crop_full = CropFull(crop);
+                const bool shrank = last_crop_full && CropSmall(crop);
+                last_crop_full = crop_full;
+                if (!started_corner && shrank) { return Switch(true, "the game switched to a 720p picture (its picture size went to 1280x720)"); }
+                const ContentProbe pr = ProbeContent(dbg, addr, stride_px, bh_log2);
+                ContentProbe &prev = last[static_cast<u32>(slot) & 7];
+                s32 vote = -1;    /* 1: 720p (black outside), 2: 720p (old picture outside), 0: 1080p, -1: no evidence */
+                if (pr.ok) {
+                    const bool moved_in  = prev.ok && pr.inside_hash != prev.inside_hash;
+                    const bool moved_out = prev.ok && pr.outside_hash != prev.outside_hash;
+                    if (crop_full)                                { vote = 0; }
+                    else if (pr.outside_black && pr.inside_black) { vote = -1; }
+                    else if (pr.outside_black)                    { vote = 1; }
+                    else if (moved_out)                           { vote = 0; }
+                    else if (moved_in)                            { vote = 2; }
+                }
+                prev = pr;
+                /* 720p after 8 checks in a row (2 s), 1080p after 2 (0.5 s) */
+                small_streak = (vote == 1 || vote == 2) ? small_streak + 1 : 0;
+                stale_streak = vote == 2 ? stale_streak + 1 : 0;
+                big_streak   = vote == 0 ? big_streak + 1 : 0;
+                if (!started_corner && small_streak >= 8) {
+                    return Switch(true, stale_streak != 0 ? "the game switched to a 720p picture (an unchanging old picture outside the corner)"
+                                                          : "the game switched to a 720p picture (black outside the corner)");
+                }
+                if (started_corner && big_streak >= 2) { return Switch(false, "the game switched to a 1080p picture"); }
+                return nullptr;
+            }
+
+            const char *Switch(bool to720, const char *why) {
+                g_size_hint = { g_app_pid.load(std::memory_order_relaxed), g_game_surface.generation, to720 ? 1 : 0 };
+                return why;
+            }
+        };
 
         /* the encode's bitstream length, as M81 sized it */
         u32 NvfBitsLen(const nvenc_pic_stat_s &st) {
@@ -4950,7 +5029,9 @@ namespace ams::mitm::applet {
             u32 slot_off[8] = { 0, 0x870000, 0x10E0000 };
             u32 nslots = 3;
             u32 buf_bytes = static_cast<u32>(FbSlotSize);
-            bool mk8_layout = true;
+            bool mk8_layout = true;        /* MK8's layout: the corner can be read alone (CornerBlockRows) */
+            bool size_check_ok = true;     /* v0.7.8: any 1920x1080 surface - the 720p/1080p check runs */
+            bool CornerFast() const { return corner && mk8_layout; }
 
             /* One nvmap object per slot (GameSurface::separate, Smash
              * Ultimate): every slot_off is 0, and slot_base + slot_off read
@@ -5128,6 +5209,7 @@ namespace ams::mitm::applet {
                 src = SrcDesc{ g.width, g.height, g.stride_px, vic::BLK_KIND_GENERIC_16Bx2, g.block_h_log2,
                                bgra ? vic::PIXFMT_A8B8G8R8 : vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
                 mk8_layout = g.width == 1920 && g.height == 1080 && g.stride_px == 1920 && g.block_h_log2 == 4;
+                size_check_ok = g.width == 1920 && g.height == 1080 && g.stride_px >= 1920 && g.block_h_log2 <= 5;
                 LogLine("   %s: game swapchain %ux%u stride %u px, block height 2^%u, %u slot(s) of %u B, format %#llx%s",
                         who, g.width, g.height, g.stride_px, g.block_h_log2, nslots, buf_bytes,
                         static_cast<unsigned long long>(g.color_format), known_fmt ? "" : " (not MK8's - colours unverified)");
@@ -5432,7 +5514,7 @@ namespace ams::mitm::applet {
 
             bool ChangedSinceRead(::ams::svc::Handle dbg) const {
                 for (u32 k = 0; k < 8; ++k) {
-                    const u64 off = corner ? static_cast<u64>(k % CornerBlockRows) * FbBlockRow + ((static_cast<u64>(k) * 0x2340u % CornerBlockRowBytes) & ~UINT64_C(63))
+                    const u64 off = CornerFast() ? static_cast<u64>(k % CornerBlockRows) * FbBlockRow + ((static_cast<u64>(k) * 0x2340u % CornerBlockRowBytes) & ~UINT64_C(63))
                                            : ((static_cast<u64>(buf_bytes) / 8 * k + 1024) & ~UINT64_C(63));
                     alignas(64) u8 b[64];
                     if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(b), dbg, last_read + off, sizeof(b)))) { return false; }
@@ -5444,7 +5526,7 @@ namespace ams::mitm::applet {
             bool ReadSlot(::ams::svc::Handle dbg, u64 base, u64 *read_ns, u32 *sig) {
                 const u64 t0 = armTicksToNs(armGetSystemTick());
                 last_read = base;
-                if (corner) {
+                if (CornerFast()) {
                     for (u32 br = 0; br < CornerBlockRows; ++br) {
                         u8 *dst = g_ind_buf + br * FbBlockRow;
                         if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(dst), dbg, base + br * FbBlockRow, CornerBlockRowBytes))) {
@@ -5472,13 +5554,13 @@ namespace ams::mitm::applet {
 
             /* after the first full capture: handheld content -> corner mode */
             void Decide(const char *who) {
-                if (!mk8_layout) {
+                if (!size_check_ok) {
                     corner = false;
                     LogLine("   %s: the VIC converts the whole %ux%u picture to 1280x720", who, src.w, src.h);
                     return;
                 }
                 u32 samples = 0;
-                corner = SlotContentIs720(g_ind_buf, std::addressof(samples));
+                corner = SlotContentIs720(g_ind_buf, std::addressof(samples), src.stride_px, src.blk_h_log2);
                 /* v0.7.3: a size check just restarted the stream - its finding
                  * stands (the first frame alone cannot see old docked content) */
                 if (g_size_hint.corner >= 0 && g_size_hint.pid == g_app_pid.load(std::memory_order_relaxed) && g_size_hint.gen == g_game_surface.generation) {
@@ -5490,7 +5572,8 @@ namespace ams::mitm::applet {
                 if (corner) { src.rect_w = NvfW; src.rect_h = NvfH; }
                 LogLine("   %s: content %s (%u samples outside the top-left 1280x720 %s) -> %s",
                         who, corner ? "1280x720 (handheld)" : "1920x1080 (docked)", samples, corner ? "all zero" : "not all zero",
-                        corner ? "the VIC converts the corner 1:1; later frames read only its 3.9 MB" : "the VIC scales it to 1280x720");
+                        corner ? (mk8_layout ? "the VIC converts the corner 1:1; later frames read only its 3.9 MB" : "the VIC converts the corner 1:1")
+                               : "the VIC scales it to 1280x720");
             }
 
             /* RGB -> BT.709 NV12, 16-row block-linear, into the arena */
@@ -5601,7 +5684,7 @@ namespace ams::mitm::applet {
             u64 read_ns = 0; u32 sig = 0;
             if (!s.Capture(dbg, slot_base, std::addressof(read_ns), std::addressof(sig))) { LogLine("   nvframe: %s", SlotReadFailure()); VicStage("nf:read_FAILED"); return; }
             s.Decide("nvframe");
-            if (s.corner) {
+            if (s.CornerFast()) {
                 /* the game's own pixels for the picture's top 128 rows, as read:
                  * the PC converts them in float and checks the VIC's colour */
                 WriteSdVerified("sdmc:/nvframe-0-src.bin", g_ind_buf, CornerBlockRowBytes, g_stage_buf, nullptr);
@@ -5813,7 +5896,7 @@ namespace ams::mitm::applet {
          * the whole surface */
         bool ShotFromSession(const NvfSession &s) {
             const u32 w = s.corner ? NvfW : s.src.w, h = s.corner ? NvfH : s.src.h;
-            const size_t n = s.corner ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
+            const size_t n = s.CornerFast() ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
             return WriteShot(g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.pixfmt == vic::PIXFMT_A8B8G8R8, s.present_flip);
         }
 
@@ -5927,11 +6010,9 @@ namespace ams::mitm::applet {
 
             const char *why = "all frames sent";
             StreamEnd end = StreamEnd::Done;
-            const bool started_corner = s.corner;
             u32 parity = 0, sent = 0, frame_no = 0, dropped = 0;
             bool pending = false;
-            u32 small_streak = 0, big_streak = 0, stale_streak = 0;
-            ContentProbe last_probe = {};
+            SizeCheck size_check(s.corner);
             u64 s_read = 0, s_vic = 0, s_pack = 0, s_wait = 0, w_n = 0;
             const u64 loop_t0 = armTicksToNs(armGetSystemTick());
             u64 o_t0 = loop_t0, w_t0 = loop_t0;
@@ -5972,33 +6053,11 @@ namespace ams::mitm::applet {
                 const u64 t4 = armTicksToNs(armGetSystemTick());
                 s_read += t1 - t0; s_vic += t2 - t1; s_wait += t3 - t2; s_pack += t4 - t3; ++w_n;
 
-                /* the 720p/1080p check, as the H.264 stream's (v0.7.6 rules) */
-                if (s.mk8_layout && (i + 1) % 15 == 0) {
+                /* the 720p/1080p check (SizeCheck) */
+                if (s.size_check_ok) {
                     const s32 sl = g_queue_slot.load(std::memory_order_relaxed);
-                    const ContentProbe pr = ProbeContent(dbg, s.SlotAddr(slot_base, sl));
-                    s32 vote = -1;
-                    if (pr.ok) {
-                        const u32 crop = g_queue_crop_wh.load(std::memory_order_relaxed);
-                        const bool crop_full = (crop >> 16) >= 1920 && (crop & 0xFFFF) >= 1080;
-                        const bool moved_in  = last_probe.ok && pr.inside_hash != last_probe.inside_hash;
-                        const bool moved_out = last_probe.ok && pr.outside_hash != last_probe.outside_hash;
-                        if (crop_full)                                { vote = 0; }
-                        else if (pr.outside_black && pr.inside_black) { vote = -1; }
-                        else if (pr.outside_black)                    { vote = 1; }
-                        else if (moved_out)                           { vote = 0; }
-                        else if (moved_in)                            { vote = 2; }
-                    }
-                    last_probe = pr;
-                    small_streak = (vote == 1 || vote == 2) ? small_streak + 1 : 0;
-                    stale_streak = vote == 2 ? stale_streak + 1 : 0;
-                    big_streak   = vote == 0 ? big_streak + 1 : 0;
-                    const bool to720  = !started_corner && small_streak >= 8;
-                    const bool to1080 = started_corner && big_streak >= 2;
-                    if (to720 || to1080) {
-                        g_size_hint = { g_app_pid.load(std::memory_order_relaxed), g_game_surface.generation, to720 ? 1 : 0 };
-                        why = to1080 ? "the game switched to a 1080p picture" : "the game switched to a 720p picture";
-                        end = StreamEnd::Reconfigure;
-                        break;
+                    if (const char *r = size_check.Step(dbg, s.SlotAddr(slot_base, sl), sl, s.src.stride_px, s.src.blk_h_log2)) {
+                        why = r; end = StreamEnd::Reconfigure; break;
                     }
                 }
                 if ((i + 1) % 1200 == 0) {
@@ -6160,7 +6219,6 @@ namespace ams::mitm::applet {
 
             const u32 refs[2] = { L.off_ref_out, L.off_ref_b };
             const u32 mes[2]  = { L.off_me_a, L.off_me_b };
-            const bool started_corner = s.corner;
             u32 size_changes = 0;
             g_vic_quiet = true;
             u32 parity = 0, urb = 0, sent = 0, errs = 0, dropped = 0, done = 0, clock_fixes = 0;
@@ -6171,10 +6229,7 @@ namespace ams::mitm::applet {
             ON_SCOPE_EXIT { g_audio_active.store(false, std::memory_order_relaxed); };
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
             bool pending = false, stalled = false, need_idr = true;
-            u32 small_streak = 0;     /* v0.7.1: checks in a row that saw a 720p picture */
-            u32 big_streak = 0;       /* v0.7.3: ... and a 1080p one */
-            u32 stale_streak = 0;     /* v0.7.3: ... and a 720p one framed by an unchanging old picture */
-            ContentProbe last_probe = {};
+            SizeCheck size_check(s.corner);   /* v0.7.8: the 720p/1080p check, shared with the webcam */
             /* v0.6: the experiment's window (one variant) */
             u64 ab_bytes_p = 0, ab_bytes_i = 0, ab_intra = 0, ab_inter = 0, ab_qp = 0, ab_t0 = armTicksToNs(armGetSystemTick());
             u32 ab_np = 0, ab_ni = 0, ab_frames = 0, ab_window = 0;
@@ -6490,58 +6545,15 @@ namespace ams::mitm::applet {
                 }
                 if (!pipe && collect(fl)) { break; }
 
-                /* M93: every 120 frames in live mode, has the game switched between
-                 * a 720p and a 1080p picture (docked/undocked, ReverseNX)? A
-                 * handful of 4-byte reads outside the 720p corner, not a frame. */
-                /* every 15 frames: is the game drawing 720p (the corner) or
-                 * 1080p? v0.7.1: black outside the corner is not certain - a
-                 * docked game's black menu transition looks just like a 720p
-                 * picture. v0.7.3: nor is it the only sign - Smash going from
-                 * docked to handheld leaves the docked picture there,
-                 * unchanging. A check votes 720p when outside is black, or the
-                 * corner changed and the outside did not; 1080p when the
-                 * game's crop is the whole 1920x1080, or the outside changed
-                 * too; nothing when nothing moved (a still menu). */
-                if (live && s.mk8_layout && (i + 1) % 15 == 0) {
+                /* M93/v0.7.1-v0.7.8: has the game switched between a 720p and a
+                 * 1080p picture (docked/undocked, ReverseNX)? SizeCheck: a few
+                 * 4-byte reads around the 720p corner and the game's crop, every
+                 * 250 ms. */
+                if (live && s.size_check_ok) {
                     const s32 sl = g_queue_slot.load(std::memory_order_relaxed);
-                    const ContentProbe pr = ProbeContent(dbg, s.SlotAddr(slot_base, sl));
-                    s32 vote = -1;    /* 1: 720p (black outside), 2: 720p (old picture outside), 0: 1080p, -1: no evidence */
-                    if (pr.ok) {
-                        const u32 crop = g_queue_crop_wh.load(std::memory_order_relaxed);
-                        const bool crop_full = (crop >> 16) >= 1920 && (crop & 0xFFFF) >= 1080;
-                        const bool moved_in  = last_probe.ok && pr.inside_hash != last_probe.inside_hash;
-                        const bool moved_out = last_probe.ok && pr.outside_hash != last_probe.outside_hash;
-                        /* v0.7.6: the game's own word first - MK8 docked crops
-                         * 1920x1080, and its long black loading screens were
-                         * taken for a 720p picture (a zoom and a restart). And a
-                         * picture black inside too is a transition, not 720p. */
-                        if (crop_full)                                   { vote = 0; }
-                        else if (pr.outside_black && pr.inside_black)    { vote = -1; }
-                        else if (pr.outside_black)                       { vote = 1; }
-                        else if (moved_out)            { vote = 0; }
-                        else if (moved_in)             { vote = 2; }
-                    }
-                    last_probe = pr;
-                    /* checked every 15 frames (~0.25 s): 720p after 8 checks in a
-                     * row (~2 s) that saw black or an unchanging picture outside
-                     * the corner, 1080p after 2 (~0.5 s). v0.7.6: the old
-                     * picture case took 3 (~0.75 s) - but a fake-docked Smash
-                     * menu that only moves in its top-left area looks just the
-                     * same for a moment, and the stream zoomed in for a split
-                     * second at menu changes. A real switch to handheld leaves
-                     * the old picture there for good, so 2 s still finds it. */
-                    small_streak = (vote == 1 || vote == 2) ? small_streak + 1 : 0;
-                    stale_streak = vote == 2 ? stale_streak + 1 : 0;
-                    big_streak   = vote == 0 ? big_streak + 1 : 0;
-                    const bool to720  = !started_corner && small_streak >= 8;
-                    const bool to1080 = started_corner && big_streak >= 2;
-                    if (to720 || to1080) {
-                        const s32 now720 = to720 ? 1 : 0;
-                        g_size_hint = { g_app_pid.load(std::memory_order_relaxed), g_game_surface.generation, now720 };
+                    if (const char *r = size_check.Step(dbg, s.SlotAddr(slot_base, sl), sl, s.src.stride_px, s.src.blk_h_log2)) {
                         ++size_changes;
-                        why = !now720 ? "the game switched to a 1080p picture"
-                            : stale_streak != 0 ? "the game switched to a 720p picture (an unchanging old picture outside the corner)"
-                                                : "the game switched to a 720p picture (black outside the corner)";
+                        why = r;
                         end = StreamEnd::Reconfigure;
                         break;
                     }

@@ -739,7 +739,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.7: up (grc IPC interceptor %s)",
+        mitm::applet::LogLine("applet-mitm v0.7.8: up (grc IPC interceptor %s)",
                               mitm::applet::g_grc_armed ? "ARMED" : "off");
         {
             const auto api = exosphere::GetApiInfo();

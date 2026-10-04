@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.7** (webcam for any app; no fatal on older Atmosphère). Released: v0.7.6 (no menu zoom), v0.7.5 (Get extras), v0.7.4 (dvr-patches bundled, off), v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.8** (the 720p switch on a clock and the game's crop; firmware 21.x). Released: v0.7.7 (webcam for any app, no fatal on older Atmosphère), v0.7.6 (no menu zoom), v0.7.5 (Get extras), v0.7.4 (dvr-patches bundled, off), v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,35 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.7.8: back to 720p at once; 30 fps games; firmware 21.x ***
+
+- **masagrator (GBAtemp), Xenoblade Chronicles X, ReverseNX docked -> handheld:**
+  the stream stayed 1080p with the handheld picture in the corner of a
+  frozen docked frame. His log: MK8's layout after all (stride 1920, 2^4),
+  crop went 1920x1080 -> 1280x720 at 98.0 s, the player left at 102.3 s.
+  The check ran every 15 frames and wanted 8 in a row - 2 s at 60 fps, 4 s
+  at XCX's 30.
+- **SizeCheck** (one struct, both live loops): every 250 ms instead of every
+  15 frames; the game's crop going from 1920x1080 to 1280x720 or less switches
+  to 720p at the next check (every logged crop change so far was a real mode
+  change; Smash keeps 1280x720 even fake-docked, so only the change counts).
+- **Run v078-1** (MK8): the crop switch worked (152.7 s), then 2 s later back
+  to 1080p - each of the 3 slots holds a different old docked frame around
+  the corner, and on a clock the checks land on different slots, so the old
+  picture looked like moving content. Every 15 frames had only worked because
+  15 is a multiple of 3. Now each slot is compared with its own last probe.
+- **Run v078-2** (user): MK8 and BOTW (30 fps) - back to 720p at once and it
+  stays; no menu zoom.
+- The probe and the corner check take the surface's stride and block height
+  (BlOffset, static_assert against the MK8 formula) - not XCX's cause, but
+  any 1920x1080 swapchain now gets the check; the fast corner-only read stays
+  MK8's layout (CornerFast).
+- Firmware 21.x streams without "Allow untested firmware" (StevensND: 21.0.1
+  works); masagrator: 22.0.0 + Atmosphère 1.11.1 works with v0.7.7.
+- PR #6 (Laliukz/FORk245: reads through dmnt:cht so cheats keep working) not
+  merged: everyone through dmnt - 1080p60 ~22 fps without cheats, 2-3x the
+  latency. Asked for direct first, dmnt only when the attach fails.
 
 ## *** v0.7.7: webcam for any app, no fatal on older Atmosphère ***
 
