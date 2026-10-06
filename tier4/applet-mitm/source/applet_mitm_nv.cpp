@@ -30,6 +30,7 @@
  */
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_log.hpp"
+#include "applet_mitm_dmdbg.hpp"
 #include "vic40_config.hpp"
 #include "nvenc_drv_h264.h"
 #include "applet_mitm_nvjpg.hpp"
@@ -2121,7 +2122,7 @@ namespace ams::mitm::applet {
             bool ok = true;
             for (u64 done = 0; done < FbSlotSize; done += 0x10000) {
                 const u64 n = (FbSlotSize - done < 0x10000) ? (FbSlotSize - done) : 0x10000;
-                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, src + done, n))) { ok = false; break; }
+                if (!DbgRead(dbg, g_ind_buf, src + done, n)) { ok = false; break; }
                 const auto opt = (done + n >= FbSlotSize) ? fs::WriteOption::Flush : fs::WriteOption::None;
                 if (R_FAILED(fs::WriteFile(f, static_cast<s64>(done), g_ind_buf, n, opt))) { ok = false; break; }
                 ++chunks;
@@ -2310,8 +2311,7 @@ namespace ams::mitm::applet {
                 const u64 off  = (slot >= 0 && slot < 3) ? FbSlotOff[slot] : 0;
 
                 const u64 f0 = armTicksToNs(armGetSystemTick());
-                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf),
-                                                                dbg, slot_base + off, FbSlotSize))) {
+                if (!DbgRead(dbg, g_ind_buf, slot_base + off, FbSlotSize)) {
                     LogLine("   stream: slot read failed at frame %u", i); break;
                 }
                 /* M60b: NO cache flush. It existed so the VIC could see our
@@ -2426,7 +2426,7 @@ namespace ams::mitm::applet {
             for (u32 steps = 0; steps < 4000; ++steps) {
                 ::ams::svc::MemoryInfo mi = {};
                 ::ams::svc::PageInfo   pi = {};
-                if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr)) || mi.size == 0) { return false; }
+                if (!DbgQuery(dbg, std::addressof(mi), std::addressof(pi), addr) || mi.size == 0) { return false; }
                 const u32  attr = static_cast<u32>(mi.attribute);
                 const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
                 if (dev && mi.size == want) { *out = mi.base_address; return true; }
@@ -2472,7 +2472,7 @@ namespace ams::mitm::applet {
             for (u32 steps = 0; steps < 4000 && n < max; ++steps) {
                 ::ams::svc::MemoryInfo mi = {};
                 ::ams::svc::PageInfo   pi = {};
-                if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr)) || mi.size == 0) { break; }
+                if (!DbgQuery(dbg, std::addressof(mi), std::addressof(pi), addr) || mi.size == 0) { break; }
                 const u32  attr = static_cast<u32>(mi.attribute);
                 const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
                 if (dev && separate) {
@@ -2592,10 +2592,9 @@ namespace ams::mitm::applet {
                 ++sessions;
                 g_live_sessions.store(sessions, std::memory_order_relaxed);
                 ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
-                const Result ra = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value);
-                if (R_FAILED(ra)) {
-                    LogLine("   live[%u]: DebugActiveProcess(pid=%llu) rc=0x%x - retrying in 5 s", sessions,
-                            static_cast<unsigned long long>(pid.value), ra.GetValue());
+                if (!DmAttach(pid.value, std::addressof(dbg))) {
+                    LogLine("   live[%u]: no attach to pid %llu (direct failed, dmnt not holding it) - retrying in 5 s", sessions,
+                            static_cast<unsigned long long>(pid.value));
                     os::SleepThread(TimeSpan::FromSeconds(5));
                     continue;
                 }
@@ -2617,34 +2616,33 @@ namespace ams::mitm::applet {
                     for (u32 k = 0; k < geo.num_slots && k < 8; ++k) { if (geo.slot_offset[k] > top) { top = geo.slot_offset[k]; } }
                     want = static_cast<u64>(top) + geo.buf_size;
                 }
-                /* the attach stopped the game: drain the attach burst, continue */
-                ::ams::svc::DebugEventInfo ev;
+                /* A direct attach stopped the game: drain the attach burst and
+                 * continue. Through dmnt:cht the game never stopped (dmnt pumps
+                 * its own handle), so DbgResume is a no-op there. */
                 u32 nev = 0;
-                while (nev < 256 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg))) { ++nev; }
-                const Result rc = ::ams::svc::ContinueDebugEvent(dbg,
-                                      ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll, nullptr, 0);
+                const Result rc = DbgResume(dbg, std::addressof(nev));
                 const u64 frozen_us = (armTicksToNs(armGetSystemTick()) - f0) / 1000;
                 LogLine("   live[%u]: attached to pid %llu; %ux%u, %u slot(s); swapchain (%llu B) %s%010llx; game held %llu us; %u attach events, continue rc=0x%x",
                         sessions, static_cast<unsigned long long>(pid.value), geo.width, geo.height, geo.num_slots,
                         static_cast<unsigned long long>(want), found ? "at 0x" : "NOT FOUND ",
                         static_cast<unsigned long long>(slot_base), static_cast<unsigned long long>(frozen_us), nev, rc.GetValue());
                 if (R_FAILED(rc)) {
-                    ::ams::svc::CloseHandle(dbg);
+                    DbgDetach(dbg);
                     os::SleepThread(TimeSpan::FromSeconds(2));
                     continue;
                 }
                 if (!found) {
-                    ::ams::svc::CloseHandle(dbg);
+                    DbgDetach(dbg);
                     skip_pid = pid.value;
                     continue;
                 }
-                DebugPumpStart(dbg);
+                if (!DbgIsDmnt(dbg)) { DebugPumpStart(dbg); }
                 g_reconfig_request.store(false, std::memory_order_relaxed);   /* this session starts with the current settings */
                 const GameSurface *gp = (geo.num_slots != 0 && geo.buf_size != 0) ? std::addressof(geo) : nullptr;
                 const StreamEnd end = g_uvc_raw ? TryUvcRawStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, gp)
                                                 : TryNvencStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true, gp);
-                DebugPumpStop();
-                ::ams::svc::CloseHandle(dbg);
+                if (!DbgIsDmnt(dbg)) { DebugPumpStop(); }
+                DbgDetach(dbg);
                 g_live_fps_x10.store(0, std::memory_order_relaxed);
                 g_live_game_fps_x10.store(0, std::memory_order_relaxed);
                 static const char *const names[] = { "done", "the game went away", "the viewer went away", "NVENC stalled", "failed",
@@ -2700,15 +2698,15 @@ namespace ams::mitm::applet {
             bool live_ok = false, live_changed = false;
 
             ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
-            r_attach = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value);
-            if (R_SUCCEEDED(r_attach)) {
-                attached = true;
+            attached = DmAttach(pid.value, std::addressof(dbg));
+            if (attached) { r_attach = ResultSuccess(); } else { r_attach = ::ams::svc::ResultInvalidHandle(); }
+            if (attached) {
 
                 u64 addr = 0;
                 for (; steps < 4000; ++steps) {
                     ::ams::svc::MemoryInfo mi = {};
                     ::ams::svc::PageInfo   pi = {};
-                    if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr))) { walk_complete = true; break; }
+                    if (!DbgQuery(dbg, std::addressof(mi), std::addressof(pi), addr)) { walk_complete = true; break; }
                     if (mi.size == 0) { walk_complete = true; break; }
 
                     const u32  attr = static_cast<u32>(mi.attribute);
@@ -2745,7 +2743,7 @@ namespace ams::mitm::applet {
                     by_size          = true;
                     for (u32 k = 0; k < 3; ++k) {
                         ++reads;
-                        if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(s[k]), dbg, cand.addr + FbSlotOff[k], 64))) {
+                        if (DbgRead(dbg, s[k], cand.addr + FbSlotOff[k], 64)) {
                             std::memcpy(cand.head[k], s[k], 16);
                         }
                     }
@@ -2754,7 +2752,7 @@ namespace ams::mitm::applet {
                     const u64 last = big[r].size - FbSwapSize;
                     for (u64 off = 0; off <= last && !found && budget > 0; off += 0x1000) {
                         --budget; ++reads;
-                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(s[0]), dbg, big[r].base + off, 64))) { continue; }
+                        if (!DbgRead(dbg, s[0], big[r].base + off, 64)) { continue; }
                         u32 varied = 0;
                         const s32 lane = FbPixelLane(s[0], std::addressof(varied));
                         if (lane < 0) { continue; }
@@ -2762,7 +2760,7 @@ namespace ams::mitm::applet {
                         bool all_slots = true;
                         for (u32 k = 1; k < 3; ++k) {
                             --budget; ++reads;
-                            if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(s[k]), dbg, big[r].base + off + FbSlotOff[k], 64))
+                            if (!DbgRead(dbg, s[k], big[r].base + off + FbSlotOff[k], 64)
                                 || FbPixelLane(s[k], nullptr) != lane) { all_slots = false; break; }
                         }
                         if (!all_slots) { continue; }
@@ -2781,17 +2779,14 @@ namespace ams::mitm::applet {
                 const u64 t_frozen0 = armTicksToNs(armGetSystemTick());
                 auto resume_game = [&]() {
                     if (resumed) { return; }
-                    ::ams::svc::DebugEventInfo ev;
-                    while (nev < 64 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg))) { ++nev; }
-                    r_cont  = ::ams::svc::ContinueDebugEvent(dbg,
-                                 ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll,
-                                 nullptr, 0);
+                    r_cont = DbgResume(dbg, std::addressof(nev));
                     resumed = R_SUCCEEDED(r_cont);
                     frozen_ns = armTicksToNs(armGetSystemTick()) - t_frozen0;
                     /* M84: from here on, every later thread start/exit in the
                      * game raises an event that stops it until continued. Run I
-                     * froze at a loading screen for want of this. */
-                    if (resumed) { DebugPumpStart(dbg); }
+                     * froze at a loading screen for want of this. No pump on a
+                     * dmnt session: dmnt already pumps its own handle. */
+                    if (resumed && !DbgIsDmnt(dbg)) { DebugPumpStart(dbg); }
                 };
 
                 /* ---- THE VIC, ON REAL GAME PIXELS -------------------------
@@ -2816,8 +2811,7 @@ namespace ams::mitm::applet {
                         MapCmdBuffer(vfd, cap_handle, std::addressof(cap_addr), "capture", 0);
                         if (cap_addr != 0) {
                             VicStage("vs:3_read_block_row");
-                            strip_read_ok = R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(
-                                    reinterpret_cast<uintptr_t>(g_ind_buf), dbg, cand.addr, FbBlockRow));
+                            strip_read_ok = DbgRead(dbg, g_ind_buf, cand.addr, FbBlockRow);
                             if (strip_read_ok) {
                                 /* the engine reads this through the SMMU; our
                                  * cached writes must reach memory first */
@@ -2915,8 +2909,7 @@ namespace ams::mitm::applet {
                             LogLine("   bench: pin returned 0 - refusing to submit");
                         } else {
                             VicStage("bn:2_read");
-                            if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf),
-                                                                           dbg, cand.addr, FbSlotSize))) {
+                            if (!DbgRead(dbg, g_ind_buf, cand.addr, FbSlotSize)) {
                                 LogLine("   bench: slot read failed");
                             } else {
                                 armDCacheFlush(g_ind_buf, FbSlotSize);
@@ -3107,9 +3100,9 @@ namespace ams::mitm::applet {
 
 
                 if (found) {
-                    if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(live_a), dbg, cand.addr, 16))) {
+                    if (DbgRead(dbg, live_a, cand.addr, 16)) {
                         os::SleepThread(TimeSpan::FromMilliSeconds(120));
-                        if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(live_b), dbg, cand.addr, 16))) {
+                        if (DbgRead(dbg, live_b, cand.addr, 16)) {
                             live_ok = true;
                             live_changed = std::memcmp(live_a, live_b, 16) != 0;
                         }
@@ -3119,7 +3112,7 @@ namespace ams::mitm::applet {
                         const u64 t0 = armTicksToNs(armGetSystemTick());
                         for (u64 done = 0; done < FbBlockRow; done += 0x10000) {
                             const u64 n = (FbBlockRow - done < 0x10000) ? (FbBlockRow - done) : 0x10000;
-                            if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf + done), dbg, cand.addr + done, n))) { break; }
+                            if (!DbgRead(dbg, g_ind_buf + done, cand.addr + done, n)) { break; }
                             ++strip_chunks_ok;
                         }
                         strip_ns = armTicksToNs(armGetSystemTick()) - t0;
@@ -3146,7 +3139,7 @@ namespace ams::mitm::applet {
                             const u64 t1 = armTicksToNs(armGetSystemTick());
                             for (u64 done = 0; done < FbSlotSize; done += FbBlockRow) {
                                 const u64 n = (FbSlotSize - done < FbBlockRow) ? (FbSlotSize - done) : FbBlockRow;
-                                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, cand.addr + done, n))) { break; }
+                                if (!DbgRead(dbg, g_ind_buf, cand.addr + done, n)) { break; }
                                 ++full_strips;
                             }
                             full_ns = armTicksToNs(armGetSystemTick()) - t1;
@@ -3182,7 +3175,7 @@ namespace ams::mitm::applet {
                                 bool read_ok = true;
                                 for (u64 done = 0; done < FbSlotSize; done += 0x10000) {
                                     const u64 n = (FbSlotSize - done < 0x10000) ? (FbSlotSize - done) : 0x10000;
-                                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf + done), dbg, cand.addr + done, n))) { read_ok = false; break; }
+                                    if (!DbgRead(dbg, g_ind_buf + done, cand.addr + done, n)) { read_ok = false; break; }
                                 }
                                 const u64 read_ns = armTicksToNs(armGetSystemTick()) - u0;
                                 LogLine("   usb: resident slot read %s in %llu ms (%llu B)",
@@ -3272,7 +3265,7 @@ namespace ams::mitm::applet {
                                 u32  sig = 0;
                                 for (u64 done = 0; done < FbSlotSize; done += FbBlockRow) {
                                     const u64 n = (FbSlotSize - done < FbBlockRow) ? (FbSlotSize - done) : FbBlockRow;
-                                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf), dbg, cand.addr + off + done, n))) { ok = false; break; }
+                                    if (!DbgRead(dbg, g_ind_buf, cand.addr + off + done, n)) { ok = false; break; }
                                     if (done == 0) {
                                         /* Hash block-row 0 - the TOP of the picture.
                                          * M39 hashed the buffer AFTER the loop, which
@@ -3306,14 +3299,15 @@ namespace ams::mitm::applet {
                 }
 
                 /* the pump must be off the handle before it is closed */
-                DebugPumpStop();
-                ::ams::svc::CloseHandle(dbg);
+                if (!DbgIsDmnt(dbg)) { DebugPumpStop(); }
+                DbgDetach(dbg);
             }
             /* ---- detached; log everything --------------------------------- */
 
             VicStage("dbg:2_attached");
-            LogLine("   DebugActiveProcess(pid=%llu) rc=0x%x %s",
+            LogLine("   attach(pid=%llu) rc=0x%x via %s: %s",
                     static_cast<unsigned long long>(pid.value), r_attach.GetValue(),
+                    attached ? (DbgIsDmnt(dbg) ? "dmnt:cht" : "direct") : "-",
                     attached ? "ATTACHED" : "failed");
             if (!attached) { VicStage("dbg:2_FAILED"); return; }
 
@@ -4905,7 +4899,7 @@ namespace ams::mitm::applet {
             alignas(8) u8 px[8];
             auto sample = [&](u32 x, u32 y, u32 *h, bool outside) {
                 if (!r.ok) { return; }
-                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(px), dbg, base + off(x, y), 4))) { r.ok = false; return; }
+                if (!DbgRead(dbg, px, base + off(x, y), 4)) { r.ok = false; return; }
                 if ((px[0] | px[1] | px[2]) != 0) { (outside ? r.outside_black : r.inside_black) = false; }
                 for (u32 i = 0; i < 3; ++i) { *h = (*h ^ px[i]) * 16777619u; }
             };
@@ -5085,7 +5079,7 @@ namespace ams::mitm::applet {
                 for (u32 k = 0; k < nslots; ++k) { if (slot_off[k] + static_cast<u64>(buf_bytes) > span) { span = slot_off[k] + static_cast<u64>(buf_bytes); } }
                 ::ams::svc::MemoryInfo mi = {};
                 ::ams::svc::PageInfo   pi = {};
-                const bool exact = R_SUCCEEDED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, slot_base)) &&
+                const bool exact = DbgQuery(dbg, std::addressof(mi), std::addressof(pi), slot_base) &&
                                    mi.base_address == slot_base && mi.size == span;
                 if (!sep_layout && exact) { return; }
                 u32 devc[MaxSlotCand] = {};
@@ -5150,7 +5144,7 @@ namespace ams::mitm::applet {
                 bool var = false;
                 for (u32 j = 0; j < SigPoints; ++j) {
                     alignas(64) u8 b[64];
-                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(b), dbg, base + j * step + ((step / 2) & ~UINT64_C(63)), sizeof(b)))) { *varied = false; return 0; }
+                    if (!DbgRead(dbg, b, base + j * step + ((step / 2) & ~UINT64_C(63)), sizeof(b))) { *varied = false; return 0; }
                     if (j == 0) { std::memcpy(std::addressof(first), b, sizeof(first)); }
                     for (u32 i = 0; i < sizeof(b); i += 4) { var |= std::memcmp(b + i, std::addressof(first), 4) != 0; }
                     for (u32 i = 0; i < sizeof(b); ++i) { h = (h ^ b[i]) * 16777619u; }
@@ -5542,7 +5536,7 @@ namespace ams::mitm::applet {
                     const u64 off = CornerFast() ? static_cast<u64>(k % CornerBlockRows) * FbBlockRow + ((static_cast<u64>(k) * 0x2340u % CornerBlockRowBytes) & ~UINT64_C(63))
                                            : ((static_cast<u64>(buf_bytes) / 8 * k + 1024) & ~UINT64_C(63));
                     alignas(64) u8 b[64];
-                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(b), dbg, last_read + off, sizeof(b)))) { return false; }
+                    if (!DbgRead(dbg, b, last_read + off, sizeof(b))) { return false; }
                     if (std::memcmp(b, g_ind_buf + off, sizeof(b)) != 0) { return true; }
                 }
                 return false;
@@ -5554,7 +5548,7 @@ namespace ams::mitm::applet {
                 if (CornerFast()) {
                     for (u32 br = 0; br < CornerBlockRows; ++br) {
                         u8 *dst = g_ind_buf + br * FbBlockRow;
-                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(dst), dbg, base + br * FbBlockRow, CornerBlockRowBytes))) {
+                        if (!DbgRead(dbg, dst, base + br * FbBlockRow, CornerBlockRowBytes)) {
                             return false;
                         }
                         armDCacheFlush(dst, CornerBlockRowBytes);
@@ -5562,7 +5556,7 @@ namespace ams::mitm::applet {
                 } else {
                     for (u32 off = 0; off < buf_bytes; off += ReadPiece) {
                         const u32 n = buf_bytes - off < ReadPiece ? buf_bytes - off : ReadPiece;
-                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf + off), dbg, base + off, n))) {
+                        if (!DbgRead(dbg, g_ind_buf + off, base + off, n)) {
                             return false;
                         }
                     }
@@ -5951,12 +5945,11 @@ namespace ams::mitm::applet {
             }
             if (geo.num_slots == 0 || geo.buf_size == 0) { ++g_shot_fail; LogLine("shot: this game's swapchain has not been seen"); return false; }
             ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
-            if (R_FAILED(::ams::svc::DebugActiveProcess(std::addressof(dbg), pid.value))) { ++g_shot_fail; LogLine("shot: could not attach to the game"); return false; }
+            if (!DmAttach(pid.value, std::addressof(dbg))) { ++g_shot_fail; LogLine("shot: could not attach to the game"); return false; }
             u64 slot_base = 0;
             const bool found = LocateSwapchain(dbg, geo, std::addressof(slot_base), "shot");
-            ::ams::svc::DebugEventInfo ev;
-            for (u32 nev = 0; nev < 256 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg)); ++nev) { }
-            static_cast<void>(::ams::svc::ContinueDebugEvent(dbg, ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll, nullptr, 0));
+            u32 shot_nev = 0;
+            static_cast<void>(DbgResume(dbg, std::addressof(shot_nev)));
             bool ok = false;
             if (!found) {
                 ++g_shot_fail; LogLine("shot: the swapchain was not found in the game's memory");
@@ -5968,8 +5961,9 @@ namespace ams::mitm::applet {
                     u64 rn = 0; u32 sg = 0;
                     if (s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg))) {
                         /* M99b: the frame is in g_ind_buf - let go of the game
-                         * BEFORE the seconds of SD writing (Run AB held it) */
-                        ::ams::svc::CloseHandle(dbg);
+                         * BEFORE the seconds of SD writing (Run AB held it).
+                         * DbgDetach is a no-op for dmnt (it owns the handle). */
+                        DbgDetach(dbg);
                         dbg = ::ams::svc::InvalidHandle;
                         s.Decide("shot");
                         ok = ShotFromSession(s);
@@ -5980,7 +5974,7 @@ namespace ams::mitm::applet {
                     ++g_shot_fail;
                 }
             }
-            if (dbg != ::ams::svc::InvalidHandle) { ::ams::svc::CloseHandle(dbg); }
+            if (dbg != ::ams::svc::InvalidHandle) { DbgDetach(dbg); }
             return ok;
         }
 
@@ -7205,9 +7199,9 @@ namespace ams::mitm::applet {
             auto dump = [&](u16 kind, u32 rq, u64 va, u32 len) -> u8 * {
                 u8 *body = rec_put(kind, rq, static_cast<u32>(va >> 32), static_cast<u32>(va), nullptr, len);
                 if (body == nullptr) { return nullptr; }
-                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(body), dbg, va, len))) {
+                if (!DbgRead(dbg, body, va, len)) {
                     std::memset(body, 0, len);
-                    rec_note(std::snprintf(note, sizeof(note), "dump @ %#llx: ReadDebugProcessMemory failed - payload zeroed",
+                    rec_note(std::snprintf(note, sizeof(note), "dump @ %#llx: DbgRead failed - payload zeroed",
                                            static_cast<unsigned long long>(va)));
                     return nullptr;
                 }
@@ -7243,7 +7237,7 @@ namespace ams::mitm::applet {
             for (u32 steps = 0; steps < 8000; ++steps) {
                 ::ams::svc::MemoryInfo mi = {};
                 ::ams::svc::PageInfo   pi = {};
-                if (R_FAILED(::ams::svc::QueryDebugProcessMemory(std::addressof(mi), std::addressof(pi), dbg, addr))) { break; }
+                if (!DbgQuery(dbg, std::addressof(mi), std::addressof(pi), addr)) { break; }
                 if (mi.size == 0) { break; }
 
                 const u32 perm  = static_cast<u32>(mi.permission);
@@ -7267,8 +7261,7 @@ namespace ams::mitm::applet {
                     const u64 region_end = mi.base_address + mi.size;
                     for (u64 off = 0; off < mi.size && scanned < ScanCap; off += ChunkSize) {
                         const u64 n = (mi.size - off < ChunkSize) ? (mi.size - off) : ChunkSize;
-                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_ind_buf),
-                                                                        dbg, mi.base_address + off, n))) { break; }
+                        if (!DbgRead(dbg, g_ind_buf, mi.base_address + off, n)) { break; }
                         scanned += n;
                         const u32 *w = reinterpret_cast<const u32 *>(g_ind_buf);
                         const u64 nw = n / 4;
@@ -7404,7 +7397,7 @@ namespace ams::mitm::applet {
                         }
                     }
                     for (u32 k = 0; k < nsetups; ++k) {
-                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(hdr_buf), dbg, setup_va[k], sizeof(hdr_buf)))) { continue; }
+                        if (!DbgRead(dbg, hdr_buf, setup_va[k], sizeof(hdr_buf))) { continue; }
                         nvenc_h264_drv_pic_setup_s st;
                         std::memcpy(std::addressof(st), hdr_buf, sizeof(st));
                         const u32 fn = st.pic_control.frame_num, pt = st.pic_control.pic_type;
