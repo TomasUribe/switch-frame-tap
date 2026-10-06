@@ -140,7 +140,7 @@ Nothing else: no other sysmodule, no sigpatches, no capture card.
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.7.8-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.7.9-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
@@ -154,7 +154,7 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 Reboot. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.7.8-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.7.9-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -173,7 +173,7 @@ bash tools/raw-recv/install-launcher.sh
 
 That puts a double-clickable **Switch Frame Tap** on the desktop and in the
 applications menu. The release also has
-`switch-frame-tap-0.7.8-linux-viewer.tar.gz` with the same files.
+`switch-frame-tap-0.7.9-linux-viewer.tar.gz` with the same files.
 
 On both, the viewer opens a window that says what it is waiting for (the
 Switch, its USB driver, or a game) and lists its keys; the same screen comes
@@ -406,7 +406,7 @@ Please attach both to a bug report.
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.7.8       # -> dist/switch-frame-tap-0.7.8-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
+bash tools/make_release.sh 0.7.9       # -> dist/switch-frame-tap-0.7.9-{switch.zip,linux-viewer.tar.gz,windows-viewer.zip}
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -449,12 +449,12 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   switching modes needs a restart.
 - **PC viewer: Windows and Linux** (x86_64). No macOS viewer yet. On Windows
   the driver needs Zadig once, as with SysDVR.
-- **It reads the game through `dmnt:cht` when the cheat engine holds it.**
-  The stream attaches directly by default; only if another debugger already
-  holds the game (Atmosphere's cheat engine, with cheats on for the title)
-  does it read through `dmnt:cht` instead - slower, but the stream works,
-  where it used to fail to attach at all. It never attaches `dmnt` itself,
-  so games without cheats run debugger-free as before.
+- **Cheats:** the stream reads the game directly, like a debugger. When
+  Atmosphère's cheat engine already holds the game (cheats loaded for it),
+  it reads through the cheat engine instead (since v0.7.9, by Laliukz):
+  cheats and streaming work together, but reads are about 5x slower, so a
+  1080p60 game can drop to 20-25 fps while cheats are loaded. Games without
+  cheats are not affected.
 - **Occasional micro-stutters** during loading and heavy scenes: reads,
   the VIC and NVENC are shared with the whole system (NVENC also with the
   console's own background recording), and a frame can take 50-200 ms then.
@@ -718,6 +718,8 @@ Forks are welcome and no permission is needed.
 - **[exelix11](https://github.com/exelix11)**: SysDVR, whose socket setup the
   network mode follows, and dvr-patches, which bring sound to games that block
   recording.
+- **[Laliukz](https://github.com/Laliukz)** (PR #8): streaming while
+  Atmosphère's cheat engine holds the game, through `dmnt:cht`.
 
 ## License
 

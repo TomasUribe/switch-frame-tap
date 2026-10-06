@@ -1,7 +1,7 @@
 # applet-mitm — status & resume point
 
 Console: Mariko, FW **22.5.0**, Atmosphère **1.11.2**. Module TID
-`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.8** (the 720p switch on a clock and the game's crop; firmware 21.x). Released: v0.7.7 (webcam for any app, no fatal on older Atmosphère), v0.7.6 (no menu zoom), v0.7.5 (Get extras), v0.7.4 (dvr-patches bundled, off), v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
+`0100000000000C20`. 112 hardware test cycles (through Run AP). Current build: **v0.7.9** (crop-trusting size check, display-mapped regions, slot match across skipped presents, cheats via dmnt:cht). Released: v0.7.8 (back to 720p at once; firmware 21.x), v0.7.7 (webcam for any app, no fatal on older Atmosphère), v0.7.6 (no menu zoom), v0.7.5 (Get extras), v0.7.4 (dvr-patches bundled, off), v0.7.3 (WillMidia's PR #4 ported, Sonic Frontiers, the 720p/1080p switch), v0.7.2 (stats overlay, dvr-patches), v0.7.1 (the keyboard, finished frames, Minecraft and Smash), v0.7.0 (network streaming, docked play), v0.6.1 (2 MB Windows viewer), v0.6.0 (smaller P frames), v0.5.0 (recording, main screen), v0.4.1 (upside-down games), v0.4.0 (webcam mode), v0.3.0 (game audio), v0.2.0 (2026-09-29: the Windows viewer; v0.1.0 and v0.1.1 the same day). Milestone: M96 Run W - **native 1080p at 59.5-59.9 fps** per window (58.4 over the session, the game 59.2), 0 errors; user: "smooth as butter".
 
 **Picking this up cold?** Read [`PROJECT-HANDOFF.md`](PROJECT-HANDOFF.md) first: what works, what is
 proven vs inferred, the roadmap, and the traps. `bash tools/run_pc_tests.sh` runs every check that needs
@@ -127,6 +127,36 @@ process's framebuffer.
 - **Debug SVCs need an NPDM `debug_flags` capability, not just the syscall bits.**
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
+
+## *** v0.7.9: the game's crop decides; display-mapped regions; cheats via dmnt:cht ***
+
+- **XCX (masagrator, v0.7.8):** back to 720p, then 1080p again 4 s later - its
+  log: crop 1280x720 from 72.1 s, and the content vote (moved_out) said
+  1080p at 76.2 s: XCX keeps drawing outside the corner in handheld. Now a
+  game whose crop has ever been 1920x1080 (g_crop_full_pid, set in the binder
+  path) is judged by its crop alone - small = 720p, full = 1080p, no pixel
+  vote - in SizeCheck and in Decide (the first frame of a session). Games that
+  never show a whole 1920x1080 crop (Smash) keep the pixel check.
+- **Fire Emblem: Three Houses (kaani):** black menus / garbage. One object for
+  2 slots, no exact region; regions mapped for 1/2/3/2 devices, the v0.7.3
+  filter kept only the 3 (an unrelated pool) and the match never came. Now
+  every region mapped for 2 or more is kept (Sonic's 1-mapping pool still
+  goes); the matcher picks.
+- **PR #8 merged (Laliukz):** DmAttach - direct DebugActiveProcess first; only
+  when it fails and dmnt:cht HasCheatProcess says dmnt holds the game, reads go
+  through dmnt:cht (2 MB static bounce: g_ind_buf is nvmap-pinned and cannot be
+  an IPC buffer). Never ForceOpen. ~190 MB/s vs ~1 GB/s direct.
+- **Run v079-1 (user):** MK8, Smash (fake docked), BOTW - every switch at the
+  crop change, all sessions on the direct path. Minecraft VV handheld streamed
+  7 min (matched after 25 intervals). Minecraft VV docked: VIC ~120 ms/frame
+  at 1080p (7 fps), the new 1080p set never matched in 7 s, back in handheld 38
+  candidates and 4.7 presents/s - not matched in 22 s: the first guess
+  (corruption) stayed. VV is locked in retail (the user's experimental mod);
+  regular Minecraft is fine. Ideas: hold the last good frame while unmatched;
+  find slot addresses from the game's nvmap ids instead of matching.
+- MK8 handheld 53-55 fps in this run vs 49-60 in older ones (scene-dependent;
+  no per-frame code added for MK8: Calibrate returns early, SizeCheck takes
+  the crop path, DbgRead is a pass-through).
 
 ## *** v0.7.9-test: slot match with skipped presents (Minecraft Vibrant Visuals) ***
 
