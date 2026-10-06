@@ -188,6 +188,9 @@ namespace ams::mitm::applet {
             {
                 const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
                 g_queue_crop_wh.store((cw > 0 && chh > 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
+                /* v0.7.9: this game's crop follows its mode (it has shown a
+                 * whole 1920x1080 picture) - the size check trusts it */
+                if (cw >= 1920 && chh >= 1080) { g_crop_full_pid.store(g_app_pid.load(std::memory_order_relaxed), std::memory_order_relaxed); }
             }
             /* M89: seqlock - odd while slot, fence, tick and count change
              * together, so the capture never pairs one present's slot with
@@ -333,6 +336,7 @@ namespace ams::mitm::applet {
     /* ---- vi:u root ---------------------------------------------------- */
 
     constinit std::atomic<u64> g_app_pid{0};
+    constinit std::atomic<u64> g_crop_full_pid{0};
 
     namespace {
         alignas(os::ThreadStackAlignment) constinit u8 g_app_watch_stack[8_KB];

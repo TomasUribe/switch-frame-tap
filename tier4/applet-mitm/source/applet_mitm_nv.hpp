@@ -119,6 +119,7 @@ namespace ams::mitm::applet {
      * render upside down and have the compositor flip the picture */
     extern std::atomic<u32> g_queue_transform;
     extern std::atomic<u64> g_app_pid;         /* applet_mitm_service.cpp: the running application */
+    extern std::atomic<u64> g_crop_full_pid;   /* v0.7.9: the application whose crop was ever 1920x1080 */
     extern std::atomic<u32> g_queue_crop_wh;   /* v0.7.3: the last present's crop, w << 16 | h (0: none) */
     extern std::atomic<u64> g_queue_fence[4];
     /* M89: a seqlock over slot + fence: odd while the binder thread writes */

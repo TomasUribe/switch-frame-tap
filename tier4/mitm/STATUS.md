@@ -128,6 +128,31 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** v0.7.9-test: slot match with skipped presents (Minecraft Vibrant Visuals) ***
+
+- **User (2026-10-04), Minecraft 1.26.44 with Vibrant Visuals unlocked (a
+  BedrockLink exefs patch), handheld, max overclock:** the viewer showed a
+  corrupted picture. Log: the swapchain went 1920x1080 -> 1280x720 and there
+  were **43 candidate buffers of 3932160 B** (the deferred renderer's passes are
+  the slot size); "the first frame waited 2540 ms for the slot match (not yet -
+  streaming the first guess)" and no match in 21 s. The stream sent 8.8 fps of
+  the game's 21.1 (VIC avg 71 ms/frame under VV's GPU load), so two samples at
+  consecutive presents were rare - the matcher only counted those, starved, and
+  the first guess (an internal render target) stayed on screen.
+- **Fix (applet_mitm_slotmatch.hpp):** intervals may span several presents.
+  `AddSpan(count, drawn, sigs)`: `drawn` = the slots of every present since the
+  last sample, read from the present ring in `Calibrate` (up to 6 back, else
+  unknown and not counted). Per slot, a candidate scores its change rate in
+  intervals that drew the slot minus its rate in intervals that did not;
+  intervals that drew every slot say nothing and are skipped. `Add(count,
+  slot)` stays as the one-present case.
+- **Host test:** new VV cases (3 slots among 43, 28 per-frame render targets,
+  4 ping-pong pairs): 60% of presents missed -> matched within 172 frames, 80%
+  -> 611; 200 seeds each, no wrong match; every older case still passes.
+- **Run pending:** Minecraft VV handheld, stream until "slots matched" appears.
+  Installed as `exefs.nsp` (v0.7.8 kept as `exefs.nsp.v078`); log line says
+  `applet-mitm v0.7.9-test`. Manager/overlay unchanged (still 0.7.8).
+
 ## *** v0.7.8: back to 720p at once; 30 fps games; firmware 21.x ***
 
 - **masagrator (GBAtemp), Xenoblade Chronicles X, ReverseNX docked -> handheld:**

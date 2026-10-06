@@ -4922,6 +4922,11 @@ namespace ams::mitm::applet {
          * crop going from 1920x1080 to 1280x720 or less switches to 720p at the
          * next check (it reported 1280x720 the moment it was back in handheld).
          * Smash keeps 1280x720 even fake-docked, so only the change counts.
+         * v0.7.9: a game whose crop has ever been 1920x1080 is believed
+         * outright - XCX back in handheld (crop 1280x720) still draws outside
+         * the corner, and the content vote took it back to 1080p after 4 s
+         * (masagrator). Only games that never showed a whole 1920x1080 crop
+         * (Smash) are judged by their pixels.
          * And each check compares a slot with that slot's last probe: after
          * docked mode every slot holds a different old docked frame around the
          * corner, so slot-to-slot it looked like moving content and the 720p
@@ -4951,6 +4956,12 @@ namespace ams::mitm::applet {
                 const bool shrank = last_crop_full && CropSmall(crop);
                 last_crop_full = crop_full;
                 if (!started_corner && shrank) { return Switch(true, "the game switched to a 720p picture (its picture size went to 1280x720)"); }
+                const u64 pid = g_app_pid.load(std::memory_order_relaxed);
+                if (pid != 0 && g_crop_full_pid.load(std::memory_order_relaxed) == pid) {
+                    if (!started_corner && CropSmall(crop)) { return Switch(true, "the game switched to a 720p picture (its picture size is 1280x720)"); }
+                    if (started_corner && crop_full)      { return Switch(false, "the game switched to a 1080p picture (its picture size is 1920x1080)"); }
+                    return nullptr;
+                }
                 const ContentProbe pr = ProbeContent(dbg, addr, stride_px, bh_log2);
                 ContentProbe &prev = last[static_cast<u32>(slot) & 7];
                 s32 vote = -1;    /* 1: 720p (black outside), 2: 720p (old picture outside), 0: 1080p, -1: no evidence */
@@ -5081,18 +5092,21 @@ namespace ams::mitm::applet {
                 ncand = FindSlotCandidates(dbg, buf_bytes, slot_off, nslots, sep_layout, cand, MaxSlotCand, devc);
                 /* v0.7.3: one object holding the slots, in more than one region
                  * that could hold it (Sonic: two pools laid out alike) - the
-                 * swapchain's region is also mapped for the display, so keep
-                 * the regions with the most device mappings, if they differ */
+                 * swapchain's region is also mapped for the display, so drop
+                 * the regions mapped for one device only. v0.7.9: keep every
+                 * region mapped for 2 or more, not only the most - Fire
+                 * Emblem: Three Houses has an unrelated region mapped for 3
+                 * and its swapchain's for 2; keeping only the 3 left nothing
+                 * to match (black menus, garbage). The matcher picks among
+                 * the rest. */
                 if (!sep_layout && ncand > nslots) {
-                    u32 top = 0, low = ~0u;
-                    for (u32 c = 0; c < ncand; ++c) { if (devc[c] > top) { top = devc[c]; } if (devc[c] < low) { low = devc[c]; } }
-                    if (top != low) {
-                        u32 kept = 0;
-                        for (u32 c = 0; c < ncand; ++c) { if (devc[c] == top) { cand[kept] = cand[c]; devc[kept] = devc[c]; ++kept; } }
-                        if (kept >= nslots) {
-                            LogLine("   %s: %u of %u candidates kept - the regions mapped for %u devices (the others %u)", who, kept, ncand, top, low);
-                            ncand = kept;
-                        }
+                    u32 kept = 0;
+                    for (u32 c = 0; c < ncand; ++c) { if (devc[c] >= 2) { ++kept; } }
+                    if (kept >= nslots && kept < ncand) {
+                        u32 k2 = 0;
+                        for (u32 c = 0; c < ncand; ++c) { if (devc[c] >= 2) { cand[k2] = cand[c]; devc[k2] = devc[c]; ++k2; } }
+                        LogLine("   %s: %u of %u candidates kept - the regions mapped for 2 or more devices (the display's too)", who, kept, ncand);
+                        ncand = kept;
                     }
                 }
                 if (ncand == MaxSlotCand) { LogLine("   %s: the candidate list is full (%u) - the slots may be past it", who, ncand); }
@@ -5153,7 +5167,18 @@ namespace ams::mitm::applet {
                 u32 sig[MaxSlotCand];
                 bool varied[MaxSlotCand];
                 for (u32 c = 0; c < ncand; ++c) { sig[c] = this->SampleSig(dbg, cand[c], std::addressof(varied[c])); }
-                matcher.Add(count, static_cast<u32>(slot), sig);
+                /* v0.7.9: the slots drawn since the last sample, from the present
+                 * ring - a stream slower than the game skips presents */
+                u32 drawn = 0;
+                if (matcher.have && count > matcher.last && count - matcher.last <= PresentRingSize - 2) {
+                    for (u32 c = matcher.last + 1; c <= count; ++c) {
+                        PresentSnap p;
+                        if (c == count) { drawn |= 1u << slot; continue; }
+                        if (!ReadPresent(c, std::addressof(p)) || p.slot < 0 || static_cast<u32>(p.slot) >= nslots) { drawn = 0; break; }
+                        drawn |= 1u << p.slot;
+                    }
+                }
+                matcher.AddSpan(count, drawn, sig);
                 u8 m[8] = {};
                 s32 weakest = 0;
                 if (matcher.Match(m, std::addressof(weakest))) {
@@ -5568,6 +5593,16 @@ namespace ams::mitm::applet {
                         LogLine("   %s: the last check found a %s picture - starting at that size", who, g_size_hint.corner ? "720p" : "1080p");
                     }
                     corner = g_size_hint.corner != 0;
+                }
+                /* v0.7.9: a game whose crop follows its mode - its crop decides */
+                {
+                    const u64 pid = g_app_pid.load(std::memory_order_relaxed);
+                    const u32 crop = g_queue_crop_wh.load(std::memory_order_relaxed);
+                    if (pid != 0 && g_crop_full_pid.load(std::memory_order_relaxed) == pid && crop != 0) {
+                        const bool small = (crop >> 16) <= 1280 && (crop & 0xFFFF) <= 720;
+                        if (small != corner) { LogLine("   %s: the game's picture size is %ux%u - starting at that size", who, crop >> 16, crop & 0xFFFF); }
+                        corner = small;
+                    }
                 }
                 if (corner) { src.rect_w = NvfW; src.rect_h = NvfH; }
                 LogLine("   %s: content %s (%u samples outside the top-left 1280x720 %s) -> %s",

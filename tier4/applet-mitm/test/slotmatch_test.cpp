@@ -22,6 +22,8 @@ struct Game {
     uint32_t nslots, ncand;
     uint32_t perm[sm::MaxSlots];         /* slot -> candidate */
     int rt = -1, still_buf = -1;         /* a render target drawn every frame, a buffer never drawn */
+    int rts[sm::MaxCand] = {}; uint32_t nrts = 0;   /* more render targets drawn every frame */
+    int pp[sm::MaxCand][2] = {}; uint32_t npp = 0;  /* ping-pong pairs: one of the two each frame (TAA history) */
     int tex[sm::MaxCand] = {}; uint32_t ntex = 0;   /* texture memory: changes now and then */
     uint32_t content[sm::MaxCand] = {};
     uint32_t picture = 0;                /* what the game draws; equal frames = a still picture */
@@ -39,6 +41,8 @@ struct Opts {
     uint32_t frames;
     uint32_t ntex = 0; /* texture buffers among the candidates */
     double tex_rate = 0.0;  /* chance per frame that one of them changes */
+    uint32_t nrts = 0; /* extra render targets drawn every frame (a deferred renderer's passes) */
+    uint32_t npp = 0;  /* ping-pong pairs */
 };
 
 /* frames until a match (0 = none); *wrong set if the match is not the truth */
@@ -55,15 +59,20 @@ static uint32_t Run(const Opts &o, uint32_t seed, bool *wrong) {
     if (o.rt) { g.rt = static_cast<int>(order[k++]); }
     if (o.still_buf) { g.still_buf = static_cast<int>(order[k++]); }
     for (uint32_t t = 0; t < o.ntex && k < o.ncand; ++t) { g.tex[g.ntex++] = static_cast<int>(order[k++]); }
+    for (uint32_t t = 0; t < o.nrts && k < o.ncand; ++t) { g.rts[g.nrts++] = static_cast<int>(order[k++]); }
+    for (uint32_t t = 0; t < o.npp && k + 1 < o.ncand; ++t) { g.pp[g.npp][0] = static_cast<int>(order[k++]); g.pp[g.npp++][1] = static_cast<int>(order[k++]); }
 
     sm::Matcher m;
     m.Reset(o.nslots, o.ncand);
     *wrong = false;
+    uint32_t fed = 0;   /* the last present sampled */
     for (uint32_t n = 1; n <= o.frames; ++n) {
         const uint32_t slot = n % o.nslots;
         const bool still = u(rng) < o.still;
         g.content[g.perm[slot]] = g.Draw(still);                     /* the GPU finished present n */
         if (g.rt >= 0) { g.content[g.rt] = 0x80000000u | n; }       /* drawn every frame regardless */
+        for (uint32_t t = 0; t < g.nrts; ++t) { g.content[g.rts[t]] = 0x10000000u | (n * 7 + t); }
+        for (uint32_t t = 0; t < g.npp; ++t) { g.content[g.pp[t][n & 1]] = 0x08000000u | (n * 5 + t); }
         if (g.ntex && u(rng) < o.tex_rate) { g.content[g.tex[rng() % g.ntex]] ^= 0x20000000u | n; }
         if (u(rng) < o.early) {                                      /* the next frame already started */
             g.content[g.perm[(slot + 1) % o.nslots]] ^= 0x40000000u | n;
@@ -71,7 +80,12 @@ static uint32_t Run(const Opts &o, uint32_t seed, bool *wrong) {
         if (u(rng) < o.skip) { continue; }                           /* the capture never looked at present n */
         uint32_t sig[sm::MaxCand];
         for (uint32_t c = 0; c < o.ncand; ++c) { sig[c] = g.content[c] * 2654435761u + c; }
-        m.Add(n, slot, sig);
+        /* the slots drawn since the last sample, as the console reads them
+         * from its present ring (8 entries: up to 6 presents back) */
+        uint32_t drawn = 0;
+        if (fed != 0 && n - fed <= 6) { for (uint32_t c = fed + 1; c <= n; ++c) { drawn |= 1u << (c % o.nslots); } }
+        m.AddSpan(n, drawn, sig);
+        fed = n;
         uint8_t out[sm::MaxSlots];
         int32_t weakest = 0;
         if (m.Match(out, &weakest)) {
@@ -121,6 +135,11 @@ int main() {
     /* DuckStation: two slots of one object; every big region gives two
      * candidates, the emulated VRAM uploaded every frame */
     Expect("homebrew: 2 slots among 16, textures",  { 2, 16, true,  true,  0.10, 0.10, 0.20, 2000, 12, 0.30 }, 400);
+    /* Minecraft with Vibrant Visuals (v0.7.9): 43 buffers of the slot size, a
+     * deferred renderer's passes drawn every frame, TAA-style ping-pong
+     * pairs, and the stream taking only ~2 in 5 presents */
+    Expect("VV: 3 slots among 43, 60% missed",      { 3, 43, true,  true,  0.10, 0.60, 0.05, 3000, 0, 0.0, 28, 4 }, 900);
+    Expect("VV: + 80% missed",                      { 3, 43, true,  true,  0.10, 0.80, 0.05, 6000, 0, 0.0, 28, 4 }, 3000);
     /* a picture that never moves says nothing about which buffer is which */
     ExpectNoMatch("still picture",                  { 3, 6,  true,  true,  0.0,  0.0,  1.0,  2000 });
     /* and it stops sampling after MaxSamples even when nothing ever changes */
