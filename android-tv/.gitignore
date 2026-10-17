@@ -1,0 +1,5 @@
+.gradle/
+.gradle-user-home/
+local.properties
+**/build/
+test-output/

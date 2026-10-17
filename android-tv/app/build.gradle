@@ -1,0 +1,59 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'io.github.switchframetap.tv'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'io.github.switchframetap.tv'
+        minSdk 23
+        targetSdk 34
+        versionCode 3
+        versionName '0.1.2-preview'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    buildTypes {
+        release { minifyEnabled false }
+    }
+    lint { abortOnError true }
+}
+
+// Pure JVM tests: no Android device or third-party test dependency needed.
+tasks.register('protocolTest', JavaExec) {
+    dependsOn 'compileProtocolTest'
+    classpath = files(layout.buildDirectory.dir('protocol-test'))
+    mainClass = 'io.github.switchframetap.tv.ProtocolTest'
+    args rootProject.projectDir.parentFile.absolutePath
+}
+tasks.register('compileProtocolTest', JavaCompile) {
+    source = files('src/main/java/io/github/switchframetap/tv/SftProtocol.java',
+                   'src/main/java/io/github/switchframetap/tv/VideoQueue.java',
+                   'src/test/java/io/github/switchframetap/tv/ProtocolTest.java')
+    classpath = files()
+    destinationDirectory = layout.buildDirectory.dir('protocol-test')
+    sourceCompatibility = '1.8'
+    targetCompatibility = '1.8'
+}
+
+// Exercise the real playback loops against delayed/stalled driver doubles.
+// These are host regressions, not a claim of testing an Android device.
+tasks.register('compilePlaybackTest', JavaCompile) {
+    source = fileTree('src/hostTest/java') { include '**/*.java' }
+    source files('src/main/java/io/github/switchframetap/tv/SftProtocol.java',
+                 'src/main/java/io/github/switchframetap/tv/VideoQueue.java',
+                 'src/main/java/io/github/switchframetap/tv/VideoDecoder.java',
+                 'src/main/java/io/github/switchframetap/tv/AudioPump.java',
+                 'src/main/java/io/github/switchframetap/tv/StreamStats.java')
+    classpath = files()
+    destinationDirectory = layout.buildDirectory.dir('playback-test')
+    sourceCompatibility = '1.8'
+    targetCompatibility = '1.8'
+}
+tasks.register('playbackTest', JavaExec) {
+    dependsOn 'compilePlaybackTest'
+    classpath = files(layout.buildDirectory.dir('playback-test'))
+    mainClass = 'io.github.switchframetap.tv.PlaybackTest'
+    args rootProject.projectDir.parentFile.absolutePath
+}
