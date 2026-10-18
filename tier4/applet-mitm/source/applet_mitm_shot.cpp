@@ -4,6 +4,7 @@
 #include "applet_mitm_log.hpp"
 #include <cstdio>
 #include "shot_buttons.hpp"
+#include <switch/services/hidsys.h>
 
 namespace ams::mitm::applet {
 
@@ -17,6 +18,8 @@ namespace ams::mitm::applet {
     namespace {
 
         constinit std::atomic<u64> g_shot_request_tick{0};
+        /* arm tick of the last HOME-button rising edge (0 = none this boot) */
+        constinit std::atomic<u64> g_home_button_tick{0};
 
         constexpr const char ShotDir[] = "sdmc:/switch/switch-frame-tap/screenshots";
 
@@ -58,50 +61,110 @@ namespace ams::mitm::applet {
             }
         };
 
+        /* HOME is also not an Npad bit - same shm layout as Capture. Libnx says
+         * ActivateHomeButton first; we try once via hidsys then read-only. */
+        struct HomeButtonReader {
+            u64 last_buttons = 0;
+            bool tried_activate = false;
+            bool said_live = false, said_dead = false;
+            u64 t0 = 0;
+
+            void TryActivateOnce() {
+                if (tried_activate) { return; }
+                tried_activate = true;
+                SmUse sm;
+                if (!sm.ok()) {
+                    LogLine("homebtn: sm unavailable - HOME shm may stay idle");
+                    return;
+                }
+                const ::Result ri = hidsysInitialize();
+                if (R_FAILED(ri)) {
+                    LogLine("homebtn: hidsysInitialize rc=0x%x - trying shm anyway", ri);
+                    return;
+                }
+                const ::Result ra = hidsysActivateHomeButton();
+                LogLine("homebtn: ActivateHomeButton rc=0x%x", ra);
+                hidsysExit();
+            }
+
+            bool PressedEdge() {
+                TryActivateOnce();
+                const auto *shm = static_cast<const HidSharedMemory *>(hidGetSharedmemAddr());
+                if (shm == nullptr) { return false; }
+                const HidHomeButtonLifo &lifo = shm->home_button.lifo;
+                const u64 tail = lifo.header.tail;
+                if (tail >= 17) { return false; }
+                const HidHomeButtonState st = lifo.storage[tail].state;
+                if (t0 == 0) { t0 = armTicksToNs(armGetSystemTick()); }
+                if (st.sampling_number != 0 && st.buttons != last_buttons && !said_live) {
+                    said_live = true;
+                    LogLine("homebtn: HOME button shm is live");
+                }
+                if (!said_live && !said_dead && armTicksToNs(armGetSystemTick()) - t0 > UINT64_C(60000000000)) {
+                    said_dead = true;
+                    LogLine("homebtn: HOME shm never changed in 60 s - detach will use Album/fallback only");
+                }
+                const bool held = st.buttons != 0;
+                const bool edge = held && last_buttons == 0;
+                last_buttons = st.buttons;
+                return edge;
+            }
+        };
+
                alignas(os::ThreadStackAlignment) constinit u8 g_input_stack[8_KB];   /* v0.7.13: 16, 3 used */
         constinit os::ThreadType g_input_thread;
 
         void InputThread(void *) {
-            bool ready = false, prev = false, time_ok = false;
+            bool ready = false, prev = false, time_ok = false, time_tried = false;
+            bool hid_failed = false;
             PadState pad;
             CaptureReader capture;
+            HomeButtonReader home;
             for (;;) {
-                if (!g_shot_enabled.load(std::memory_order_relaxed)) {
-                    prev = false;
-                    os::SleepThread(TimeSpan::FromMilliSeconds(300));
-                    continue;
-                }
-                if (!ready) {
-                    /* M99b: READ-ONLY. M99 also called padConfigureInput and
-                     * hid:sys EnableAppletToGetInput(aruid 0), as libtesla
-                     * does; in Run AB the HOME menu then crashed opening the
-                     * controller settings (2144-0001). Nothing here changes
-                     * any controller configuration now: hidInitialize maps
-                     * aruid 0's shared memory, padUpdate only reads it. */
+                if (!ready && !hid_failed) {
+                    /* READ-ONLY pad/shm. No EnableAppletToGetInput (crashed HOME
+                     * controller settings in M99b). ActivateHomeButton only.
+                     * Do NOT open time here: holding time from this sysmodule
+                     * blanks the HOME clock and breaks timezone / network sync.
+                     * timeInitialize stays gated to screenshots (same as upstream). */
                     SmUse sm_hid;
                     const ::Result rh = hidInitialize();
-                    time_ok = R_SUCCEEDED(timeInitialize());
-                    LogLine("shot: input up (read-only) - hid rc=0x%x, time %s",
-                            rh, time_ok ? "ok" : "unavailable (file names use the uptime)");
+                    LogLine("input: hid up (read-only) rc=0x%x - HOME watch always on", rh);
                     if (R_FAILED(rh)) {
-                        g_shot_enabled.store(false, std::memory_order_relaxed);
-                        LogLine("shot: no controller access - screenshots stay off this boot");
-                        continue;
+                        hid_failed = true;
+                        LogLine("input: no hid - HOME-button detach confirm unavailable this boot");
+                    } else {
+                        padInitializeAny(&pad);
+                        ready = true;
                     }
-                    padInitializeAny(&pad);
-                    ready = true;
                 }
-                padUpdate(&pad);
-                const u32 combo = g_shot_combo.load(std::memory_order_relaxed);
-                const u64 mask = ComboMask(combo);
-                const bool want_capture = combo == 4 && g_shot_capture.load(std::memory_order_relaxed);
-                const bool cap_held = (want_capture || combo == 4) ? capture.Held() : false;
-                const bool now = (mask != 0 || want_capture) && (padGetButtons(&pad) & mask) == mask && (!want_capture || cap_held);
-                if (now && !prev) {
-                    g_shot_request_tick.store(armGetSystemTick(), std::memory_order_relaxed);
-                    LogLine("shot: combo %u pressed", combo);
+                if (ready) {
+                    if (home.PressedEdge()) {
+                        g_home_button_tick.store(armGetSystemTick(), std::memory_order_relaxed);
+                        LogLine("homebtn: HOME pressed");
+                    }
+                    if (g_shot_enabled.load(std::memory_order_relaxed)) {
+                        /* Filename timestamps only - not needed for HOME confirm. */
+                        if (!time_tried) {
+                            time_tried = true;
+                            time_ok = R_SUCCEEDED(timeInitialize());
+                            LogLine("input: time %s (screenshot filenames)", time_ok ? "ok" : "unavailable");
+                        }
+                        padUpdate(&pad);
+                        const u32 combo = g_shot_combo.load(std::memory_order_relaxed);
+                        const u64 mask = ComboMask(combo);
+                        const bool want_capture = combo == 4 && g_shot_capture.load(std::memory_order_relaxed);
+                        const bool cap_held = (want_capture || combo == 4) ? capture.Held() : false;
+                        const bool now = (mask != 0 || want_capture) && (padGetButtons(&pad) & mask) == mask && (!want_capture || cap_held);
+                        if (now && !prev) {
+                            g_shot_request_tick.store(armGetSystemTick(), std::memory_order_relaxed);
+                            LogLine("shot: combo %u pressed", combo);
+                        }
+                        prev = now;
+                    } else {
+                        prev = false;
+                    }
                 }
-                prev = now;
                 os::SleepThread(TimeSpan::FromMilliSeconds(25));
             }
         }
@@ -213,6 +276,13 @@ namespace ams::mitm::applet {
         os::SetThreadNamePointer(std::addressof(g_input_thread), "applet-mitm.ShotInput");
         os::StartThread(std::addressof(g_input_thread));
         NoteThread(std::addressof(g_input_thread));
+    }
+
+    bool HomeButtonRecent(u32 within_ms) {
+        const u64 t = g_home_button_tick.load(std::memory_order_relaxed);
+        if (t == 0 || within_ms == 0) { return false; }
+        const u64 age_ms = armTicksToNs(armGetSystemTick() - t) / UINT64_C(1000000);
+        return age_ms <= within_ms;
     }
 
     bool ShotRequestPending() { return g_shot_request_tick.load(std::memory_order_relaxed) != 0; }

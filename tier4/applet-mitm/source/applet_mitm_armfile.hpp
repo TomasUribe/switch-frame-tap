@@ -93,6 +93,9 @@ namespace ams::mitm::applet::armfile {
      *   (usb_mode = webcam and network = 1, the v0.4-v0.7 test keys, still mean webcam / network)
      *   detach_on_home    = 0                        -> nodethome (keep session through HOME;
      *                                                  default is detach + free donor memory)
+     *   home_detach_ms    = 50..5000 (default 200)   -> homedetach= (present stall before HOME confirm)
+     *   home_hold_ms      = 500..15000 (default 2500)-> homehold= (no engine re-setup after HOME)
+     *   home_fallback_ms  = 200..10000 (default 1500)-> homefallback= (stall-alone detach if no confirm)
      *   screen_off        = 1                        -> screenoff (v0.7.12: the console's screen
      *                                                  dark while a stream runs)
      *   early_collect     = 0 | 1 | ab (default 1)   -> earlyoff / earlyab (v0.7.12, PR #12: send a
@@ -145,6 +148,7 @@ namespace ams::mitm::applet::armfile {
     inline size_t BuildReleaseArm(const char *ini, size_t n, char *out, size_t cap) {
         unsigned qp = 20, gop = 60, wait = 20, u = 0;
         unsigned shotkey = 0;
+        unsigned homedetach = 200, homehold = 2500, homefallback = 1500;
         bool cap720 = false, anyfw = false, shot = false, audio = true, uvc = false, uvcraw = false, nvab = false, net = false, nohb = false, nodethome = false, shotalbum = false, screenoff = false, earlyoff = false, earlyab = false, homemenu = false;
         char v[32];
         if (IniValue(ini, n, "quality", v, sizeof(v))) {
@@ -173,6 +177,9 @@ namespace ams::mitm::applet::armfile {
         if (IniValue(ini, n, "homebrew", v, sizeof(v)) && std::strcmp(v, "0") == 0) { nohb = true; }
         /* default on in code; only detach_on_home=0 emits nodethome */
         if (IniValue(ini, n, "detach_on_home", v, sizeof(v)) && std::strcmp(v, "0") == 0) { nodethome = true; }
+        if (IniValue(ini, n, "home_detach_ms", v, sizeof(v)) && ParseUnsigned(v, &u) && u >= 50 && u <= 5000) { homedetach = u; }
+        if (IniValue(ini, n, "home_hold_ms", v, sizeof(v)) && ParseUnsigned(v, &u) && u >= 500 && u <= 15000) { homehold = u; }
+        if (IniValue(ini, n, "home_fallback_ms", v, sizeof(v)) && ParseUnsigned(v, &u) && u >= 200 && u <= 10000) { homefallback = u; }
         if (IniValue(ini, n, "screen_off", v, sizeof(v)) && std::strcmp(v, "1") == 0) { screenoff = true; }
         if (IniValue(ini, n, "home_menu", v, sizeof(v)) && std::strcmp(v, "1") == 0) { homemenu = true; }
         if (IniValue(ini, n, "early_collect", v, sizeof(v))) {
@@ -192,8 +199,10 @@ namespace ams::mitm::applet::armfile {
             std::snprintf(shotbuf, sizeof(shotbuf), " shot shotkey=%u%s%s", shotkey, custom, shotalbum ? " shotalbum" : "");
         }
         /* one transport: "usb" (the viewer or, with uvc, the webcam) or "net" */
-        const int w = std::snprintf(out, cap, "vic exec dbg %s live nvqp=%u nvgop=%u wait=%u%s%s%s%s%s%s%s%s%s%s%s%s%s",
-                                    net ? "net" : "usb", qp, gop, wait, cap720 ? " cap720" : "", anyfw ? " anyfw" : "", shotbuf, audio ? " audio" : "",
+        const int w = std::snprintf(out, cap,
+                                    "vic exec dbg %s live nvqp=%u nvgop=%u wait=%u homedetach=%u homehold=%u homefallback=%u%s%s%s%s%s%s%s%s%s%s%s%s%s",
+                                    net ? "net" : "usb", qp, gop, wait, homedetach, homehold, homefallback,
+                                    cap720 ? " cap720" : "", anyfw ? " anyfw" : "", shotbuf, audio ? " audio" : "",
                                     uvc ? " uvc" : "", uvcraw ? " uvcraw" : "", nvab ? " nvab" : "", nohb ? " nohb" : "",
                                     nodethome ? " nodethome" : "", screenoff ? " screenoff" : "",
                                     earlyoff ? " earlyoff" : "", earlyab ? " earlyab" : "", homemenu ? " homemenu" : "");

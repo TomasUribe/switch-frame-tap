@@ -30,6 +30,11 @@ namespace ams::mitm::applet {
     /* a toast through Ultrahand, if it is installed */
     void NotifyShot(const char *text);
 
+    /* HOME button edge while streaming (detach_on_home confirm). within_ms
+     * from the last press; false if never / too old. Read-only hid shm (+ optional
+     * hidsysActivateHomeButton once). */
+    bool HomeButtonRecent(u32 within_ms);
+
     /* a fresh (< 3 s old) request, consumed; stale ones are dropped */
     bool TakeShotRequest();
     bool ShotRequestPending();   /* without taking it */
