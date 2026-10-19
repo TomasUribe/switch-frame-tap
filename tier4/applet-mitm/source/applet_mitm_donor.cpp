@@ -1,6 +1,7 @@
 #include "applet_mitm_donor.hpp"
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
+#include "applet_mitm_shot.hpp"
 #include "applet_mitm_service.hpp"
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_uisource.hpp"
@@ -129,9 +130,16 @@ namespace ams::mitm::applet {
 
     namespace {
         constinit std::atomic<u64> g_hold_until_ns{0};
+        constinit u32 g_home_hold_ms_local = 2500;
     }
 
     bool AppletHoldActive() { return armTicksToNs(armGetSystemTick()) < g_hold_until_ns.load(std::memory_order_relaxed); }
+
+    void SetHomeHoldMs(u32 ms) {
+        if (ms < 500) { ms = 500; }
+        if (ms > 15000) { ms = 15000; }
+        g_home_hold_ms_local = ms;
+    }
 
     void PrepareForApplet(u32 applet_id) {
         const u64 t0 = armTicksToNs(armGetSystemTick());
@@ -154,11 +162,58 @@ namespace ams::mitm::applet {
         const u64 t0 = armTicksToNs(armGetSystemTick());
         /* Keep engines from remounting the donor while SwitchU / Album inits.
          * Viewer may still be connected; without this hold RunVicBlit sets up
-         * again immediately and the first Album launch OOMs. */
-        g_hold_until_ns.store(t0 + 5'000'000'000ull, std::memory_order_relaxed);
+         * again immediately and the first Album launch OOMs.
+         * Default 2.5 s (was 5 s) - long enough for Album settle, short enough
+         * that FT-off HOME stays snappy. */
+        const u64 hold_ns = static_cast<u64>(g_home_hold_ms_local) * UINT64_C(1000000);
+        g_hold_until_ns.store(t0 + hold_ns, std::memory_order_relaxed);
         g_trigger_ns = t0;
         g_applet_needs_memory.store(true, std::memory_order_relaxed);
-        LogLine("home: detach-on-home - release capture memory for home menu (no engine re-setup for 5 s)");
+        LogLine("home: detach-on-home - release capture memory for home menu (no engine re-setup for %u ms)",
+                g_home_hold_ms_local);
+    }
+
+    bool HomeDetachShouldFire(u64 stall_age_ms, u32 probe_ms, u32 fallback_ms, const char **out_reason) {
+        if (probe_ms < 50) { probe_ms = 50; }
+        if (fallback_ms < probe_ms) { fallback_ms = probe_ms; }
+
+        /* Explicit HOME button (hid shm) - snappy path. Need a tiny present
+         * gap so we do not tear down mid-frame; loads never press HOME. */
+        if (HomeButtonRecent(3000) && stall_age_ms >= 50) {
+            if (out_reason != nullptr) { *out_reason = "HOME button"; }
+            return true;
+        }
+
+        if (stall_age_ms < probe_ms) { return false; }
+
+        if (g_applet_needs_memory.load(std::memory_order_relaxed)) {
+            if (out_reason != nullptr) { *out_reason = "applet needs memory"; }
+            return true;
+        }
+        if (AppletHoldActive()) {
+            if (out_reason != nullptr) { *out_reason = "applet hold active"; }
+            return true;
+        }
+        u64 mb = 0;
+        if (AppletBusy(std::addressof(mb))) {
+            if (out_reason != nullptr) { *out_reason = "applet pool busy"; }
+            return true;
+        }
+        /* Stock Album / SwitchU replace qlaunch as 010000000000100D */
+        {
+            static constexpr u64 AlbumProgramId = 0x010000000000100Dull;
+            os::ProcessId album{};
+            if (R_SUCCEEDED(::ams::pm::dmnt::GetProcessId(std::addressof(album), ncm::ProgramId{AlbumProgramId}))) {
+                if (out_reason != nullptr) { *out_reason = "Album/SwitchU 100D up"; }
+                return true;
+            }
+        }
+        /* Stock HOME with no Album yet / HOME shm dead: wait out load gaps */
+        if (stall_age_ms >= fallback_ms) {
+            if (out_reason != nullptr) { *out_reason = "present stall fallback"; }
+            return true;
+        }
+        return false;
     }
 
     void StartAppletWatch() {

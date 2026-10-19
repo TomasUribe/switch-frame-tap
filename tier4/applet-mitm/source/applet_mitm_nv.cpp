@@ -96,6 +96,9 @@ namespace ams::mitm::applet {
      * HOME / Album is not fighting an active capture session. Set
      * detach_on_home=0 (arm "nodethome") to keep showing the suspended game. */
     constinit bool g_detach_on_home = true;
+    constinit u32  g_home_detach_ms   = 200;
+    constinit u32  g_home_hold_ms     = 2500;
+    constinit u32  g_home_fallback_ms = 1500;
     constinit bool g_nv1080_armed  = false;
     constinit bool g_cap720_armed  = false;
     constinit bool g_anyfw_armed   = false;
@@ -2880,6 +2883,8 @@ namespace ams::mitm::applet {
             }
             u64 skip_pid = 0;          /* a game whose swapchain was not found: wait for another */
             bool said_wait_viewer = false, said_wait_game = false;
+            u64 hidden_since_ns = 0;   /* app alive but not presenting - load vs HOME */
+            bool said_hidden_wait = false;
             u32 sessions = 0;
             bool said_off = false;
             /* v0.7.10: with no viewer for this long, close the engines and give
@@ -2969,20 +2974,64 @@ namespace ams::mitm::applet {
                         said_wait_game = false;
                         continue;
                     }
+                    /* home_menu kept the donor through game-session end for UI.
+                     * UI could not start (no vi buffer, etc.): free it now so
+                     * SwitchU/Album is not racing ~42 MB, and hold re-setup so
+                     * a connected viewer does not remount mid-handoff. */
+                    if (g_donor_mode && g_detach_on_home && g_ui_stream_armed) {
+                        const char *ui_why = nullptr;
+                        if (HomeDetachShouldFire(50, g_home_detach_ms, g_home_fallback_ms, std::addressof(ui_why))) {
+                            PrepareForHomeMenu();
+                            CaptureRelease("live");
+                            if (g_ind_buf == nullptr && g_capture_handles == 0) {
+                                LogLine("   live: home_menu UI unavailable (%s) - closing the engines, memory back for HOME/Album",
+                                        ui_why != nullptr ? ui_why : "?");
+                                return;
+                            }
+                        }
+                    }
                     g_live_state.store(LiveState_WaitGame, std::memory_order_relaxed);
                     SetViewerReason(!have_app ? ViewerReason_NoGame : (pid.value == skip_pid ? ViewerReason_NotFound : ViewerReason_GameHidden));
-                    /* v0.7.11: not drawing (HOME menu) or no game: the donor's
-                     * memory goes back now, not after 15 s - a browser applet
-                     * may open from the HOME menu; set up again when it draws.
-                     * (PR #13 ends the session itself; detach_on_home = 0 keeps
-                     * it all through HOME.) */
-                    if (g_donor_mode && g_detach_on_home && pid.value != skip_pid) {
+                    /* App alive but not presenting: often a load screen, not HOME.
+                     * Only tear the donor down when HomeDetachShouldFire confirms
+                     * (HOME button / Album / applet) or the fallback stall elapses.
+                     * No game at all still frees memory immediately. */
+                    const bool app_hidden = have_app && pid.value != skip_pid && !presenting;
+                    if (g_donor_mode && g_detach_on_home && app_hidden) {
+                        const u64 now_ns = armTicksToNs(armGetSystemTick());
+                        if (hidden_since_ns == 0) { hidden_since_ns = now_ns; said_hidden_wait = false; }
+                        const u64 age_ms = (now_ns - hidden_since_ns) / UINT64_C(1000000);
+                        const char *home_why = nullptr;
+                        if (HomeDetachShouldFire(age_ms, g_home_detach_ms, g_home_fallback_ms, std::addressof(home_why))) {
+                            /* Always hold: UI is not running if we are releasing here. */
+                            PrepareForHomeMenu();
+                            CaptureRelease("live");
+                            if (g_ind_buf == nullptr && g_capture_handles == 0) {
+                                LogLine("   live: home confirmed (%s) after %llu ms not presenting - closing the engines, memory back to the system",
+                                        home_why != nullptr ? home_why : "?", static_cast<unsigned long long>(age_ms));
+                                return;
+                            }
+                        } else {
+                            if (!said_hidden_wait) {
+                                LogLine("   live: game not presenting (%llu ms) - holding capture through load gaps (detach needs HOME button / Album / applet or %u ms fallback)",
+                                        static_cast<unsigned long long>(age_ms), g_home_fallback_ms);
+                                VicStage("live:no_game");
+                                said_hidden_wait = true;
+                                said_wait_game = true;
+                            }
+                            os::SleepThread(TimeSpan::FromMilliSeconds(200));
+                            continue;
+                        }
+                    } else if (g_donor_mode && g_detach_on_home && !have_app) {
+                        PrepareForHomeMenu();
                         CaptureRelease("live");
                         if (g_ind_buf == nullptr && g_capture_handles == 0) {
-                            LogLine("   live: %s - closing the engines, memory back to the system", have_app ? "the game is not on screen" : "no game");
+                            LogLine("   live: no game - closing the engines, memory back to the system");
                             return;
                         }
                     }
+                    hidden_since_ns = 0;
+                    said_hidden_wait = false;
                     if (!said_wait_game) {
                         LogLine("   live: viewer present; waiting for a game (%s)",
                                 !have_app ? "no application" : (pid.value == skip_pid ? "this game's swapchain was not found" : "not presenting"));
@@ -2994,6 +3043,8 @@ namespace ams::mitm::applet {
                     continue;
                 }
                 said_wait_game = false;
+                hidden_since_ns = 0;
+                said_hidden_wait = false;
 
                 /* v0.7.10: the capture region only now - a viewer reads and a
                  * game presents. Short of memory (an applet such as the web
@@ -3071,6 +3122,18 @@ namespace ams::mitm::applet {
                 static const char *const names[] = { "done", "the game went away", "the viewer went away", "NVENC stalled", "failed",
                                                      "the picture size changed - restarting at the new size", "turned off from the overlay" };
                 LogLine("   live[%u]: session ended - %s; detached", sessions, names[static_cast<int>(end)]);
+                /* Viewer closed while capturing: CaptureRelease alone leaves the
+                 * donor mapped. A later HOME into SwitchU Album then races that
+                 * ~42 MB (long black flash). Free it now, same as HOME handoff
+                 * when home_menu is off (with home_menu on, UI stream reuses it). */
+                if (end == StreamEnd::ViewerGone && g_donor_mode && !g_ui_stream_armed) {
+                    PrepareForHomeMenu();
+                    CaptureRelease("live");
+                    if (g_ind_buf == nullptr && g_capture_handles == 0) {
+                        LogLine("   live: viewer closed - closing the engines, memory back for HOME/Album");
+                        return;
+                    }
+                }
                 if (end == StreamEnd::Failed) { os::SleepThread(TimeSpan::FromSeconds(5)); }
                 else if (end != StreamEnd::Reconfigure && end != StreamEnd::Disabled) { os::SleepThread(TimeSpan::FromSeconds(1)); }
                 else if (end == StreamEnd::Reconfigure) { os::SleepThread(TimeSpan::FromMilliSeconds(300)); }   /* a new buffer set registers slot by slot */
@@ -6556,10 +6619,16 @@ namespace ams::mitm::applet {
                 if (g_detach_on_home && !g_ui_session_active.load(std::memory_order_relaxed)) {
                     const u64 qt = g_queue_tick.load(std::memory_order_relaxed);
                     if (qt != 0) {
-                        const u64 age_ns = armTicksToNs(armGetSystemTick() - qt);
-                        if (age_ns >= UINT64_C(1000000000)) {
+                        const u64 age_ms = armTicksToNs(armGetSystemTick() - qt) / UINT64_C(1000000);
+                        const char *home_why = nullptr;
+                        if (HomeDetachShouldFire(age_ms, g_home_detach_ms, g_home_fallback_ms, std::addressof(home_why))) {
                             why = "HOME / game stopped presenting";
-                            if (!g_ui_stream_armed) { PrepareForHomeMenu(); }   /* v0.7.14: the HOME menu streams next */
+                            LogLine("home: detach (%s) after present stall %llu ms (probe %u, fallback %u)",
+                                    home_why != nullptr ? home_why : "?",
+                                    static_cast<unsigned long long>(age_ms), g_home_detach_ms, g_home_fallback_ms);
+                            /* home_menu: keep donor for the next UI attempt; live
+                             * frees immediately if UI cannot start. Otherwise hold. */
+                            if (!g_ui_stream_armed) { PrepareForHomeMenu(); }
                             end = StreamEnd::GameGone;
                             break;
                         }
@@ -6998,9 +7067,9 @@ namespace ams::mitm::applet {
                 if (live && g_reconfig_request.exchange(false, std::memory_order_relaxed)) { why = "new settings from the manager app"; end = StreamEnd::Reconfigure; break; }
                 if (live && g_app_excluded.load(std::memory_order_relaxed)) { why = "this app was excluded"; end = StreamEnd::Disabled; break; }
                 if (live && (i & 7) == 0 && UsbViewerSaidBye()) { why = "the viewer closed"; end = StreamEnd::ViewerGone; break; }   /* v0.7.12 */
-                /* exp/detach-on-home: game stopped presenting (HOME / SwitchU).
-                 * End the session so we are not holding a debug attach through
-                 * the Album/vi handoff; RunLive reattaches on the next present. */
+                /* exp/detach-on-home: present stall is a probe only - loads also
+                 * pause queueBuffer. Detach when HOME button / Album / applet
+                 * confirms, or after home_fallback_ms. */
                 /* v0.7.14: streaming the HOME menu and a game comes to the front */
                 if (live && g_ui_session_active.load(std::memory_order_relaxed) && g_game_presented_in_ui.load(std::memory_order_relaxed)) {
                     why = "a game is on screen"; end = StreamEnd::GameGone; break;
@@ -7008,13 +7077,19 @@ namespace ams::mitm::applet {
                 if (live && g_detach_on_home && !g_ui_session_active.load(std::memory_order_relaxed)) {
                     const u64 qt = g_queue_tick.load(std::memory_order_relaxed);
                     if (qt != 0) {
-                        const u64 age_ns = armTicksToNs(armGetSystemTick() - qt);
-                        if (age_ns >= UINT64_C(1000000000)) {
+                        const u64 age_ms = armTicksToNs(armGetSystemTick() - qt) / UINT64_C(1000000);
+                        const char *home_why = nullptr;
+                        if (HomeDetachShouldFire(age_ms, g_home_detach_ms, g_home_fallback_ms, std::addressof(home_why))) {
                             why = "HOME / game stopped presenting";
+                            LogLine("home: detach (%s) after present stall %llu ms (probe %u, fallback %u)",
+                                    home_why != nullptr ? home_why : "?",
+                                    static_cast<unsigned long long>(age_ms), g_home_detach_ms, g_home_fallback_ms);
                             /* Free the 42 MB donor before SwitchU Album inits,
                              * and hold re-setup so a connected viewer does not
-                             * remount it mid-handoff. */
-                            if (!g_ui_stream_armed) { PrepareForHomeMenu(); }   /* v0.7.14: the HOME menu streams next */
+                             * remount it mid-handoff. With home_menu on, keep
+                             * the donor for the UI attempt; live frees it if
+                             * UI cannot start (no vi buffer / SwitchU race). */
+                            if (!g_ui_stream_armed) { PrepareForHomeMenu(); }
                             end = StreamEnd::GameGone;
                             break;
                         }

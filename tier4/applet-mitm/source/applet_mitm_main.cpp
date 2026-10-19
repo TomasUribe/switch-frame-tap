@@ -661,6 +661,10 @@ namespace ams {
             mitm::applet::g_nvab_armed = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "nvab");
             /* on unless config sets detach_on_home=0 (nodethome) */
             mitm::applet::g_detach_on_home = !mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "nodethome");
+            mitm::applet::g_home_detach_ms = mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "homedetach", 200);
+            mitm::applet::g_home_hold_ms = mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "homehold", 2500);
+            mitm::applet::g_home_fallback_ms = mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "homefallback", 1500);
+            mitm::applet::SetHomeHoldMs(mitm::applet::g_home_hold_ms);
             /* (home_menu is read at boot only: the Album's dispdrv mitm and the
              * HOME menu's start are set up then) */
             g_screen_off.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "screenoff"), std::memory_order_relaxed);
@@ -1152,6 +1156,10 @@ namespace ams {
         mitm::applet::g_nvab_armed    = ArmFileContains("nvab");
         mitm::applet::g_live_armed    = ArmFileContains("live");
         mitm::applet::g_detach_on_home = !ArmFileContains("nodethome");
+        mitm::applet::g_home_detach_ms = ArmFileNumber("homedetach", 200);
+        mitm::applet::g_home_hold_ms = ArmFileNumber("homehold", 2500);
+        mitm::applet::g_home_fallback_ms = ArmFileNumber("homefallback", 1500);
+        mitm::applet::SetHomeHoldMs(mitm::applet::g_home_hold_ms);
         mitm::applet::g_ui_stream_armed = ArmFileContains("homemenu");   /* v0.7.14: the HOME menu streams too */
         g_screen_off.store(ArmFileContains("screenoff"), std::memory_order_relaxed);
         mitm::applet::g_early_collect = ArmFileContains("earlyoff") ? 0 : ArmFileContains("earlyab") ? 2 : 1;
@@ -1204,8 +1212,9 @@ namespace ams {
                               mitm::applet::g_live_armed,
                               mitm::applet::g_nv1080_armed, mitm::applet::g_nv1080_n,
                               mitm::applet::g_probe_delay_s);
-        mitm::applet::LogLine("detach-on-home=%s (exp: end session when presents stall ~1s; config detach_on_home=0 to keep)",
-                              mitm::applet::g_detach_on_home ? "on" : "off");
+        mitm::applet::LogLine("detach-on-home=%s (probe %u ms, hold %u ms, fallback %u ms; HOME button / Album / applet confirm; config detach_on_home=0 to keep)",
+                              mitm::applet::g_detach_on_home ? "on" : "off",
+                              mitm::applet::g_home_detach_ms, mitm::applet::g_home_hold_ms, mitm::applet::g_home_fallback_ms);
         if ((mitm::applet::g_jpgdec_armed || mitm::applet::g_nvgrc_armed ||
              mitm::applet::g_csc_armed || mitm::applet::g_nvframe_armed || mitm::applet::g_nvstream_armed ||
              mitm::applet::g_nvp_armed) && !mitm::applet::g_vic_armed) {

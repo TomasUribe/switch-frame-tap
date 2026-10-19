@@ -34,9 +34,14 @@ namespace ams::mitm::applet {
     void PrepareForApplet(u32 applet_id);
     /* exp/detach-on-home: game stopped presenting (HOME / SwitchU). Force the
      * stream to give the donor's memory back immediately and hold engine
-     * re-setup for a few seconds so Album is not racing a 42 MB remount. */
+     * re-setup (g_home_hold_ms) so Album is not racing a 42 MB remount. */
     void PrepareForHomeMenu();
     bool AppletHoldActive();
+    void SetHomeHoldMs(u32 ms);
+    /* Present stall alone is not HOME (loads pause queueBuffer too). Detach
+     * when HOME button was pressed (stall >= 50 ms), or stall >= probe_ms with
+     * Album/applet confirm, or stall >= fallback_ms. out_reason may be null. */
+    bool HomeDetachShouldFire(u64 stall_age_ms, u32 probe_ms, u32 fallback_ms, const char **out_reason);
 
     /* sftap commands 10 / 11, from the donor */
     void DonorAccept(u64 size, os::NativeHandle tmem);
