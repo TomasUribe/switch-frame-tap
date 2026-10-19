@@ -4,7 +4,6 @@
 #include "applet_mitm_log.hpp"
 #include <cstdio>
 #include "shot_buttons.hpp"
-#include <switch/services/hidsys.h>
 
 namespace ams::mitm::applet {
 
@@ -61,34 +60,16 @@ namespace ams::mitm::applet {
             }
         };
 
-        /* HOME is also not an Npad bit - same shm layout as Capture. Libnx says
-         * ActivateHomeButton first; we try once via hidsys then read-only. */
+        /* HOME is also not an Npad bit - same shm layout as Capture.
+         * Read-only: no hid:sys (ActivateHomeButton / EnableAppletToGetInput).
+         * hid:sys is not in this module's access list, and an earlier hid:sys
+         * call from here crashed the HOME menu's controller settings (M99b). */
         struct HomeButtonReader {
             u64 last_buttons = 0;
-            bool tried_activate = false;
             bool said_live = false, said_dead = false;
             u64 t0 = 0;
 
-            void TryActivateOnce() {
-                if (tried_activate) { return; }
-                tried_activate = true;
-                SmUse sm;
-                if (!sm.ok()) {
-                    LogLine("homebtn: sm unavailable - HOME shm may stay idle");
-                    return;
-                }
-                const ::Result ri = hidsysInitialize();
-                if (R_FAILED(ri)) {
-                    LogLine("homebtn: hidsysInitialize rc=0x%x - trying shm anyway", ri);
-                    return;
-                }
-                const ::Result ra = hidsysActivateHomeButton();
-                LogLine("homebtn: ActivateHomeButton rc=0x%x", ra);
-                hidsysExit();
-            }
-
             bool PressedEdge() {
-                TryActivateOnce();
                 const auto *shm = static_cast<const HidSharedMemory *>(hidGetSharedmemAddr());
                 if (shm == nullptr) { return false; }
                 const HidHomeButtonLifo &lifo = shm->home_button.lifo;
@@ -122,14 +103,13 @@ namespace ams::mitm::applet {
             HomeButtonReader home;
             for (;;) {
                 if (!ready && !hid_failed) {
-                    /* READ-ONLY pad/shm. No EnableAppletToGetInput (crashed HOME
-                     * controller settings in M99b). ActivateHomeButton only.
-                     * Do NOT open time here: holding time from this sysmodule
-                     * blanks the HOME clock and breaks timezone / network sync.
-                     * timeInitialize stays gated to screenshots (same as upstream). */
+                    /* READ-ONLY pad/shm. No hid:sys. Do NOT open time here:
+                     * holding time from this sysmodule blanks the HOME clock
+                     * and breaks timezone / network sync. timeInitialize stays
+                     * gated to screenshots (same as upstream). */
                     SmUse sm_hid;
                     const ::Result rh = hidInitialize();
-                    LogLine("input: hid up (read-only) rc=0x%x - HOME watch always on", rh);
+                    LogLine("input: hid up (read-only) rc=0x%x - HOME watch always on (shm only, 100 ms poll when shot off)", rh);
                     if (R_FAILED(rh)) {
                         hid_failed = true;
                         LogLine("input: no hid - HOME-button detach confirm unavailable this boot");
@@ -138,12 +118,13 @@ namespace ams::mitm::applet {
                         ready = true;
                     }
                 }
+                const bool shot_on = g_shot_enabled.load(std::memory_order_relaxed);
                 if (ready) {
                     if (home.PressedEdge()) {
                         g_home_button_tick.store(armGetSystemTick(), std::memory_order_relaxed);
                         LogLine("homebtn: HOME pressed");
                     }
-                    if (g_shot_enabled.load(std::memory_order_relaxed)) {
+                    if (shot_on) {
                         /* Filename timestamps only - not needed for HOME confirm. */
                         if (!time_tried) {
                             time_tried = true;
@@ -165,7 +146,10 @@ namespace ams::mitm::applet {
                         prev = false;
                     }
                 }
-                os::SleepThread(TimeSpan::FromMilliSeconds(25));
+                /* HOME-only: 100 ms is enough for a button edge (confirm window
+                 * is seconds). Screenshots keep 25 ms so combos stay snappy.
+                 * Core 3 is shared with the display-IPC thread. */
+                os::SleepThread(TimeSpan::FromMilliSeconds(shot_on ? 25 : 100));
             }
         }
 
