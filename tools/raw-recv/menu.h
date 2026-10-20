@@ -10,59 +10,95 @@ static int g_menu = 0;                 /* the menu is on screen (not a frame) */
 static int g_menu_state = MENU_WAITING;
 static char g_menu_err[64] = "";       /* the libusb error for MENU_NODRIVER */
 static char g_menu_other[64] = "";     /* the other USB program (SysDVR) for MENU_WRONG_DEVICE */
-static SDL_Texture *g_font_tex = NULL;
+static SDL_Texture *g_font_tex[FONT_ROWS];
 static SDL_Renderer *g_font_ren = NULL;
+static float g_text_scale = 1.0f;       /* output pixels per 720-unit text size */
+
+static void text_free(void)
+{
+    for (int r = 0; r < FONT_ROWS; r++) {
+        if (g_font_tex[r]) SDL_DestroyTexture(g_font_tex[r]);
+        g_font_tex[r] = NULL;
+    }
+    g_font_ren = NULL;
+}
 
 static int text_init(SDL_Renderer *ren)
 {
-    if (g_font_tex && g_font_ren == ren) return 0;
-    if (g_font_tex) SDL_DestroyTexture(g_font_tex);
-    g_font_tex = NULL;
+    if (g_font_tex[0] && g_font_ren == ren) return 0;
+    text_free();
     g_font_ren = ren;
-    Uint32 *px = malloc((size_t)FONT_ATLAS_W * FONT_ATLAS_H * 4);
-    if (!px) return -1;
-    for (int i = 0; i < FONT_ATLAS_W * FONT_ATLAS_H; i++) {
-        const unsigned b = font_atlas[i >> 1];
-        const unsigned a = ((i & 1) ? (b & 15) : (b >> 4)) * 17;
-        px[i] = (a << 24) | 0xFFFFFFu;             /* white, the colour comes from the mod */
+    for (int r = 0; r < FONT_ROWS; r++) {
+        const int w = font_row_w[r], h = font_row_h[r];
+        if (font_row_len[r] < (unsigned)((w * h + 1) / 2)) { text_free(); return -1; }
+        Uint32 *px = malloc((size_t)w * h * 4);
+        if (!px) { text_free(); return -1; }
+        const unsigned char *src = font_atlas + font_row_off[r];
+        const int n = w * h;
+        for (int i = 0; i < n; i++) {
+            const unsigned b = src[i >> 1];
+            const unsigned a = ((i & 1) ? (b & 15) : (b >> 4)) * 17;
+            px[i] = (a << 24) | 0xFFFFFFu;         /* white, the colour comes from the mod */
+        }
+        g_font_tex[r] = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
+        if (g_font_tex[r]) {
+            SDL_UpdateTexture(g_font_tex[r], NULL, px, w * 4);
+            SDL_SetTextureBlendMode(g_font_tex[r], SDL_BLENDMODE_BLEND);
+            SDL_SetTextureScaleMode(g_font_tex[r], SDL_ScaleModeNearest);
+        }
+        free(px);
+        if (!g_font_tex[r]) { text_free(); return -1; }
     }
-    g_font_tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, FONT_ATLAS_W, FONT_ATLAS_H);
-    if (g_font_tex) {
-        SDL_UpdateTexture(g_font_tex, NULL, px, FONT_ATLAS_W * 4);
-        SDL_SetTextureBlendMode(g_font_tex, SDL_BLENDMODE_BLEND);
+    return 0;
+}
+
+/* the row whose native size is closest to the physical pixels this text
+ * needs; exact when g_text_scale is 1 or 2 */
+static int text_row(int bold, int px)
+{
+    const int want = (int)(px * g_text_scale + 0.5f);
+    int best = -1, bestd = 0x7fffffff;
+    for (int r = 0; r < FONT_ROWS; r++) {
+        if (font_row_bold[r] != (bold ? 1 : 0)) continue;
+        int d = font_row_px[r] - want;
+        if (d < 0) d = -d;
+        if (d < bestd) { bestd = d; best = r; }
     }
-    free(px);
-    return g_font_tex ? 0 : -1;
+    return best < 0 ? 0 : best;
 }
 
 static int text_width(const char *s, int px, int bold)
 {
+    const int row = text_row(bold, px);
+    const int fp = font_row_px[row];
     int w = 0;
     for (; *s; s++) {
         const int c = (unsigned char)*s;
         if (c < FONT_FIRST || c > FONT_LAST) continue;
-        w += font_glyphs[bold][c - FONT_FIRST][2];
+        w += font_glyphs[row][c - FONT_FIRST][2];
     }
-    return w * px / font_px[bold];
+    return w * px / fp;
 }
 
 /* align: 0 left, 1 centre, 2 right; y is the top of the line */
 static void text_draw(SDL_Renderer *ren, const char *s, int x, int y, int px, int bold, SDL_Color col, int align)
 {
-    if (!g_font_tex) return;
+    const int row = text_row(bold, px);
+    SDL_Texture *tex = g_font_tex[row];
+    if (!tex) return;
     if (align) x -= text_width(s, px, bold) / (align == 1 ? 2 : 1);
-    SDL_SetTextureColorMod(g_font_tex, col.r, col.g, col.b);
-    SDL_SetTextureAlphaMod(g_font_tex, col.a);
-    const int fp = font_px[bold];
+    SDL_SetTextureColorMod(tex, col.r, col.g, col.b);
+    SDL_SetTextureAlphaMod(tex, col.a);
+    const int fp = font_row_px[row];
     int pen = x * fp;                               /* in font pixels * px, to keep fractions */
     for (; *s; s++) {
         const int c = (unsigned char)*s;
         if (c < FONT_FIRST || c > FONT_LAST) continue;
-        const unsigned short *g = font_glyphs[bold][c - FONT_FIRST];
+        const unsigned short *g = font_glyphs[row][c - FONT_FIRST];
         if (c != ' ') {
-            SDL_Rect src = { g[0], font_top[bold], g[1], font_h[bold] };
-            SDL_Rect dst = { pen / fp, y, g[1] * px / fp + 1, font_h[bold] * px / fp };
-            SDL_RenderCopy(ren, g_font_tex, &src, &dst);
+            SDL_Rect src = { g[0], 0, g[1], font_row_h[row] };
+            SDL_Rect dst = { pen / fp, y, g[1] * px / fp + 1, font_row_h[row] * px / fp };
+            SDL_RenderCopy(ren, tex, &src, &dst);
         }
         pen += g[2] * px;
     }
@@ -107,15 +143,27 @@ static void ui_disc_init(SDL_Renderer *ren)
     }
 }
 
-/* v0.7.12: the settings icon - a gear (8 teeth, a hole), smooth like the disc */
-static SDL_Texture *g_ui_gear = NULL;
+/* v0.7.12: the settings icon - a gear (8 teeth, a hole), smooth like the disc.
+ * v0.7.14: rendered at the two sizes it is shown at, so it is not a 96 px
+ * texture squeezed into 22 px. */
+static const int ui_gear_sizes[2] = { 22, 44 };
+static SDL_Texture *g_ui_gear[2] = { NULL, NULL };
 static SDL_Renderer *g_ui_gear_ren = NULL;
 
-static void ui_gear_init(SDL_Renderer *ren)
+static void ui_gear_free(void)
 {
-    if (g_ui_gear && g_ui_gear_ren == ren) return;
-    enum { D = 96 };
-    static Uint32 px[D * D];
+    for (int i = 0; i < 2; i++) {
+        if (g_ui_gear[i]) SDL_DestroyTexture(g_ui_gear[i]);
+        g_ui_gear[i] = NULL;
+    }
+    g_ui_gear_ren = NULL;
+}
+
+static int ui_gear_make(SDL_Renderer *ren, int idx)
+{
+    const int D = ui_gear_sizes[idx];
+    Uint32 *px = malloc((size_t)D * D * 4);
+    if (!px) return -1;
     const float c = D / 2.0f, rb = D * 0.34f, rt = D * 0.47f, rh = D * 0.15f;
     for (int y = 0; y < D; y++)
         for (int x = 0; x < D; x++) {
@@ -135,13 +183,23 @@ static void ui_gear_init(SDL_Renderer *ren)
                 }
             px[y * D + x] = ((Uint32)(in * 255 / 16) << 24) | 0xFFFFFFu;
         }
-    g_ui_gear = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, D, D);
-    g_ui_gear_ren = ren;
-    if (g_ui_gear) {
-        SDL_UpdateTexture(g_ui_gear, NULL, px, D * 4);
-        SDL_SetTextureBlendMode(g_ui_gear, SDL_BLENDMODE_BLEND);
-        SDL_SetTextureScaleMode(g_ui_gear, SDL_ScaleModeLinear);
+    SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, D, D);
+    if (tex) {
+        SDL_UpdateTexture(tex, NULL, px, D * 4);
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(tex, SDL_ScaleModeLinear);
     }
+    free(px);
+    g_ui_gear[idx] = tex;
+    return tex ? 0 : -1;
+}
+
+static void ui_gear_init(SDL_Renderer *ren)
+{
+    if (g_ui_gear[0] && g_ui_gear_ren == ren) return;
+    ui_gear_free();
+    g_ui_gear_ren = ren;
+    for (int i = 0; i < 2; i++) if (ui_gear_make(ren, i) != 0) { ui_gear_free(); return; }
 }
 
 static void ui_rrect(SDL_Renderer *ren, float x, float y, float w, float h, float r, SDL_Color c)

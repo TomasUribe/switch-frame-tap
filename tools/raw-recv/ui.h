@@ -153,16 +153,18 @@ static void ui_gear_button(SDL_Renderer *ren, float xr, float y, SDL_Color bg, i
     if (hov) { b = UI_SURF3; b.a = bg.a > 230 ? bg.a : 230; }
     ui_rrect(ren, x, y, d, d, d / 2, b);
     ui_gear_init(ren);
-    if (g_ui_gear) {
-        SDL_SetTextureColorMod(g_ui_gear, UI_INK.r, UI_INK.g, UI_INK.b);
-        SDL_SetTextureAlphaMod(g_ui_gear, 255);
-        const SDL_FRect g = { x + 8, y + 8, d - 16, d - 16 };
-        SDL_RenderCopyF(ren, g_ui_gear, NULL, &g);
+    const float icon = d - 16, want = icon * g_text_scale;
+    const int gi = fabsf(ui_gear_sizes[1] - want) < fabsf(ui_gear_sizes[0] - want) ? 1 : 0;
+    if (g_ui_gear[gi]) {
+        SDL_SetTextureColorMod(g_ui_gear[gi], UI_INK.r, UI_INK.g, UI_INK.b);
+        SDL_SetTextureAlphaMod(g_ui_gear[gi], 255);
+        const SDL_FRect g = { x + 8, y + 8, icon, icon };
+        SDL_RenderCopyF(ren, g_ui_gear[gi], NULL, &g);
     }
     if (hov) {
-        const float tw = text_width("Settings", 14, 1) + 20;
+        const float tw = text_width("Settings", 15, 1) + 20;
         ui_rrect(ren, x - tw - 8, y + 6, tw, 26, 13, (SDL_Color){ 21, 24, 30, 230 });
-        text_draw(ren, "Settings", (int)(x - 8 - tw / 2), (int)y + 10, 14, 1, UI_INK, 1);
+        text_draw(ren, "Settings", (int)(x - 8 - tw / 2), (int)y + 10, 15, 1, UI_INK, 1);
     }
     ui_hit(x, y, d, d, id, 0);
 }
@@ -245,7 +247,7 @@ static void ui_drawer(SDL_Renderer *ren, float W)
         const float h = 44;
         ui_row(H_CONN, 0, y, h);
         ui_label(ren, cx, y, h, "Connection", NULL, ui_focused(H_CONN, 0), cw);
-        ui_seg(ren, xr, 0, y + 6, conn, 2, g_conn == CONN_NET, H_CONN, 14);
+        ui_seg(ren, xr, 0, y + 6, conn, 2, g_conn == CONN_NET, H_CONN, 15);
         y += h + 6;
         if (g_conn == CONN_NET) {
             char sub[96];
@@ -295,7 +297,7 @@ static void ui_drawer(SDL_Renderer *ren, float W)
             const float sh = 52, ty = y + 34;
             ui_row(H_FSR_SHARP, 0, y, sh);
             if (ui_focused(H_FSR_SHARP, 0)) ui_rrect(ren, cx - 12, y - 2, cw + 24, sh + 4, 10, UI_SURF2);
-            text_draw(ren, "FSR sharpness", (int)cx, (int)(y + 4), 16, 0, UI_INK, 0);
+            text_draw(ren, "FSR sharpness", (int)cx, (int)(y + 4), 17, 0, UI_INK, 0);
             char value[16]; snprintf(value, sizeof(value), "%d%%", g_fsr_sharpness);
             text_draw(ren, value, (int)xr, (int)(y + 4), 15, 1, UI_ACC, 2);
             const float vx = cx + cw * g_fsr_sharpness / 100.0f;
@@ -320,7 +322,7 @@ static void ui_drawer(SDL_Renderer *ren, float W)
         const float h = 52;
         ui_row(H_PIC, r, y, h);
         if (ui_focused(H_PIC, r)) ui_rrect(ren, cx - 12, y - 2, cw + 24, h + 4, 10, UI_SURF2);
-        text_draw(ren, pic_rows[r].name, (int)cx, (int)(y + 4), 16, 0, UI_INK, 0);
+        text_draw(ren, pic_rows[r].name, (int)cx, (int)(y + 4), 17, 0, UI_INK, 0);
         char t[16];
         pic_value_text(r, t, sizeof(t));
         const int v = *pic_field(r), lo = pic_rows[r].min, hi = pic_rows[r].max, def = *(&pic_default.bright + r);
@@ -430,6 +432,9 @@ static void ui_rec_badge(SDL_Renderer *ren, int W, int H)
     SDL_RenderGetScale(ren, &sx, &sy);
     const float k = (float)H / 720.0f, w720 = W / k;
     SDL_RenderSetScale(ren, sx * k, sy * k);
+    float tsy = 1;
+    SDL_RenderGetScale(ren, NULL, &tsy);
+    g_text_scale = tsy;
     const int s = (int)rec_seconds();
     char t[32];
     if (s >= 3600) snprintf(t, sizeof(t), "REC %d:%02d:%02d", s / 3600, s / 60 % 60, s % 60);
@@ -463,6 +468,9 @@ static void ui_overlay(SDL_Renderer *ren, int W, int H)
     SDL_RenderGetScale(ren, &sx, &sy);
     const float k = (float)H / 720.0f;
     SDL_RenderSetScale(ren, sx * k, sy * k);
+    float tsy = 1;
+    SDL_RenderGetScale(ren, NULL, &tsy);
+    g_text_scale = tsy;
     g_ui_k = k; g_ui_w = W / k;
     if (g_ui_open) ui_drawer(ren, g_ui_w);
     else ui_gear_button(ren, g_ui_w - 20, 20, (SDL_Color){ 21, 24, 30, 200 }, H_SETTINGS);
@@ -476,6 +484,9 @@ static void menu_draw(SDL_Renderer *ren)
 {
     text_init(ren);
     SDL_RenderSetLogicalSize(ren, 1280, 720);
+    float tsy = 1;
+    SDL_RenderGetScale(ren, NULL, &tsy);
+    g_text_scale = tsy > 0 ? tsy : 1;
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(ren, UI_BG.r, UI_BG.g, UI_BG.b, 255);
     SDL_RenderClear(ren);                  /* the letterbox bars too (DiM3NT0R, PR #12) */
@@ -574,9 +585,10 @@ static void menu_draw(SDL_Renderer *ren)
     ui_rrect(ren, cx - 22, card_y + 40, 44, 44, 22, ui_alpha(hc, pulse));
     ui_rrect(ren, cx - 9, card_y + 53, 18, 18, 9, hc);
     {
-        int tpx = 28;
-        while (tpx > 20 && text_width(title, tpx, 1) > cw - 60) tpx -= 2;
-        text_draw(ren, title, (int)cx, (int)card_y + 104 + (28 - tpx) / 2, tpx, 1, UI_INK, 1);
+        int tpx = 30;
+        if (text_width(title, tpx, 1) > cw - 60) tpx = 24;
+        if (text_width(title, tpx, 1) > cw - 60) tpx = 20;
+        text_draw(ren, title, (int)cx, (int)card_y + 104 + (30 - tpx) / 2, tpx, 1, UI_INK, 1);
     }
     int y = (int)card_y + 150;
     y += ui_wrap(ren, l1, (int)cx, y, 17, 0, UI_DIM, (int)cw - 80, 24);
@@ -592,7 +604,7 @@ static void menu_draw(SDL_Renderer *ren)
             ui_rrect(ren, cx - fw / 2 + 2, by, fw - 4, 36, 9, UI_SURF2);
             char ipl[64];
             snprintf(ipl, sizeof(ipl), "%s%s", ip_edit_for_menu(), ((SDL_GetTicks() / 500) & 1) ? "_" : " ");
-            text_draw(ren, ipl, (int)(cx - fw / 2 + 16), (int)by + 8, 18, 0, UI_INK, 0);
+            text_draw(ren, ipl, (int)(cx - fw / 2 + 16), (int)by + 8, 17, 0, UI_INK, 0);
             text_draw(ren, "Enter to connect, Esc to cancel", (int)cx, (int)by + 46, 13, 0, UI_DIM, 1);
         } else {
             const float sw = ui_seg(ren, -1, cx, by, conn, 2, conn_for_menu(), H_CONN, 15);
@@ -607,12 +619,12 @@ static void menu_draw(SDL_Renderer *ren)
     {
         struct { const char *k, *what; } hints[] = { { "Esc", "Settings" }, { "F11", "Fullscreen" }, { "R", "Record" }, { "Tab", "USB / Network" } };
         float total = 0;
-        for (int i = 0; i < 4; i++) total += text_width(hints[i].k, 13, 1) + 14 + 8 + text_width(hints[i].what, 14, 0) + 28;
+        for (int i = 0; i < 4; i++) total += text_width(hints[i].k, 13, 1) + 14 + 8 + text_width(hints[i].what, 15, 0) + 28;
         float x = 640 - (total - 28) / 2;
         for (int i = 0; i < 4; i++) {
             x += ui_key(ren, x, 520, hints[i].k) + 8;
-            text_draw(ren, hints[i].what, (int)x, 522, 14, 0, UI_DIM, 0);
-            x += text_width(hints[i].what, 14, 0) + 28;
+            text_draw(ren, hints[i].what, (int)x, 522, 15, 0, UI_DIM, 0);
+            x += text_width(hints[i].what, 15, 0) + 28;
         }
     }
 
@@ -622,10 +634,10 @@ static void menu_draw(SDL_Renderer *ren)
         rec_status(rs, sizeof(rs));
         if (rec_active()) {
             const char *r = rs + 5;
-            const float w = text_width(r, 14, 1) + 40;
+            const float w = text_width(r, 15, 1) + 40;
             ui_rrect(ren, 640 - w / 2, 572, w, 30, 15, ui_alpha(UI_BAD, 40));
             ui_rrect(ren, 640 - w / 2 + 12, 583, 8, 8, 4, UI_BAD);
-            text_draw(ren, r, (int)(640 - w / 2 + 28), 578, 14, 1, UI_BAD, 0);
+            text_draw(ren, r, (int)(640 - w / 2 + 28), 578, 15, 1, UI_BAD, 0);
         }
         if (g_mute) text_draw(ren, "Sound muted (M)", 1248, 690, 13, 0, UI_WARN, 2);
         const char *dir = rec_dir_for_menu();
@@ -643,6 +655,7 @@ static void menu_draw(SDL_Renderer *ren)
 
 static void ui_open(int open)
 {
+    if (g_ui_drag) prefs_save();         /* a drag ended with the drawer */
     g_ui_open = open;
     g_ui_drag = 0;
     if (open) { g_ui_kbd = 0; }
@@ -709,10 +722,10 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
     if (e->type == SDL_MOUSEMOTION) {
         g_ui_mouse_t = SDL_GetPerformanceCounter();
         g_ui_kbd = 0;
-        if (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP) { ui_slide(g_ui_mx); prefs_save(); }
+        if (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP) ui_slide(g_ui_mx);   /* saved on release */
         return g_menu;                      /* the home screen redraws for the hover */
     }
-    if (e->type == SDL_MOUSEBUTTONUP) { if (g_ui_drag) { g_ui_drag = 0; return 1; } return 0; }
+    if (e->type == SDL_MOUSEBUTTONUP) { if (g_ui_drag) { prefs_save(); g_ui_drag = 0; return 1; } return 0; }
     if (e->type == SDL_MOUSEWHEEL && g_ui_open) { g_ui_scroll -= e->wheel.y * 40; return 1; }
     if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
         for (int i = g_ui_nhits - 1; i >= 0; i--) {

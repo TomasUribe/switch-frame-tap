@@ -209,6 +209,9 @@ static void hud_draw(SDL_Renderer *ren, int W, int H, const char *conn, const ch
     SDL_RenderGetScale(ren, &sx, &sy);
     const float k = (float)H / 720.0f;
     SDL_RenderSetScale(ren, sx * k, sy * k);
+    float tsy = 1;
+    SDL_RenderGetScale(ren, NULL, &tsy);
+    g_text_scale = tsy;
     const int w720 = (int)(W / k);
 
     const Uint64 now = SDL_GetPerformanceCounter();
@@ -218,21 +221,21 @@ static void hud_draw(SDL_Renderer *ren, int W, int H, const char *conn, const ch
         char t[112];
         if (g_hud_toast_text[0]) snprintf(t, sizeof(t), "%s", g_hud_toast_text);
         else snprintf(t, sizeof(t), "Stats overlay: %s", hud_mode_name[g_hud]);
-        const int tw = text_width(t, 18, 1) + 44;
+        const int tw = text_width(t, 17, 1) + 44;
         ui_rrect(ren, (w720 - tw) / 2, 646, tw, 40, 20, (SDL_Color){ 22, 25, 31, 235 });
-        text_draw(ren, t, w720 / 2, 655, 18, 1, hud_ink, 1);
+        text_draw(ren, t, w720 / 2, 655, 17, 1, hud_ink, 1);
     }
 
     char t[256];
     const SDL_Color fc = hud_fps_colour();
     if (g_hud == HUD_FPS) {
         snprintf(t, sizeof(t), "%.0f fps", g_hs.have ? g_hs.fps : 0.0);
-        ui_rrect(ren, 10, 10, text_width(t, 26, 1) + 24, 40, 10, hud_panel);
-        hud_text(ren, t, 18, 12, 26, 1, fc, 0);
+        ui_rrect(ren, 10, 10, text_width(t, 24, 1) + 24, 40, 10, hud_panel);
+        hud_text(ren, t, 18, 12, 24, 1, fc, 0);
     } else if (g_hud == HUD_GRAPHS) {
         ui_rrect(ren, 10, 10, 470, 34, 8, hud_panel);
         snprintf(t, sizeof(t), "%.1f fps   %.1f Mbps   latency %.0f ms", g_hs.fps, g_hs.mbps, g_hs.pc + g_hs.con);
-        text_draw(ren, t, 20, 16, 19, 1, fc, 0);
+        text_draw(ren, t, 20, 16, 20, 1, fc, 0);
         const float ft[] = { 16.7f, 33.3f };
         hud_graph(ren, 10, 50, 470, 96, "FRAME TIME", "ms", &h_gap, hud_good, NULL, hud_good, 20.0f, ft, 2, 0, NULL, hud_ink, NULL, hud_ink);
         const float lt[] = { 50.0f, 100.0f };
@@ -242,8 +245,8 @@ static void hud_draw(SDL_Renderer *ren, int W, int H, const char *conn, const ch
         const int lx = 10, ly = 10, lw = 340;
         ui_rrect(ren, lx, ly, lw, 492, 10, hud_panel);
         int y = ly + 10;
-        #define HUD_ROW(name, ...) do { text_draw(ren, name, lx + 12, y, 16, 0, hud_dim, 0); \
-            snprintf(t, sizeof(t), __VA_ARGS__); text_draw(ren, t, lx + lw - 12, y, 16, 1, hud_ink, 2); y += 22; } while (0)
+        #define HUD_ROW(name, ...) do { text_draw(ren, name, lx + 12, y, 17, 0, hud_dim, 0); \
+            snprintf(t, sizeof(t), __VA_ARGS__); text_draw(ren, t, lx + lw - 12, y, 17, 1, hud_ink, 2); y += 22; } while (0)
         snprintf(t, sizeof(t), "%.1f fps", g_hs.fps);
         text_draw(ren, t, lx + 12, y - 2, 30, 1, fc, 0);
         y += 40;

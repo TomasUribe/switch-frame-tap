@@ -1043,12 +1043,10 @@ static void ren_swap(SDL_Window **winp, SDL_Renderer **renp, SDL_Texture **texp)
     SDL_RendererInfo ri;
     const int was_gl = SDL_GetRendererInfo(*renp, &ri) == 0 && strcmp(ri.name, "opengl") == 0;
     if (*texp) { SDL_DestroyTexture(*texp); *texp = NULL; }
-    if (g_font_tex) SDL_DestroyTexture(g_font_tex);
-    g_font_tex = NULL; g_font_ren = NULL;
+    text_free();
     if (g_ui_disc) SDL_DestroyTexture(g_ui_disc);
     g_ui_disc = NULL; g_ui_disc_ren = NULL;
-    if (g_ui_gear) SDL_DestroyTexture(g_ui_gear);
-    g_ui_gear = NULL; g_ui_gear_ren = NULL;
+    ui_gear_free();
     up_reset();
     SDL_DestroyRenderer(*renp);
     *renp = NULL;
@@ -1185,6 +1183,18 @@ static void act_hwdec(int on)
 
 #include "ui.h"                /* v0.7.12: the home screen and the settings drawer */
 
+/* v0.7.14: a mouse or key event only marks the menu dirty. The caller draws
+ * once after draining the event queue, instead of presenting once per event
+ * (Wayland vsync turned a burst of motion/wheel events into a backlog). */
+static int g_menu_dirty = 1;
+
+static void menu_flush(SDL_Renderer *ren)
+{
+    if (!g_menu || !g_menu_dirty) return;
+    menu_draw(ren);
+    g_menu_dirty = 0;
+}
+
 static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
 {
     g_ui_win = win;
@@ -1198,7 +1208,7 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
             e.key.keysym.scancode >= SDL_SCANCODE_A && e.key.keysym.scancode <= SDL_SCANCODE_Z)
             e.key.keysym.sym = SDLK_a + (e.key.keysym.scancode - SDL_SCANCODE_A);
         /* v0.7.12: the settings drawer and the mouse first */
-        if (!g_ip_editing && ui_event(win, ren, &e)) { if (g_menu) menu_draw(ren); continue; }
+        if (!g_ip_editing && ui_event(win, ren, &e)) { if (g_menu) g_menu_dirty = 1; continue; }
         /* v0.7: typing the Switch's address (I) takes every key */
         if (g_ip_editing) {
             if (e.type == SDL_TEXTINPUT) {
@@ -1214,7 +1224,8 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
                     g_ip_editing = 0;
                     SDL_StopTextInput();
                     snprintf(g_net_status, sizeof(g_net_status), "Connecting to %s...", g_ip_edit);
-                    if (g_menu) menu_draw(ren);
+                    g_menu_dirty = 1;
+                    menu_flush(ren);       /* before the blocking probe */
                     struct in_addr ia;
                     uint32_t w = 0;
                     if (inet_pton(AF_INET, g_ip_edit, &ia) != 1) snprintf(g_net_status, sizeof(g_net_status), "\"%s\" is not an IPv4 address", g_ip_edit);
@@ -1227,28 +1238,28 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
                     }
                 }
             }
-            if (g_menu) menu_draw(ren);
+            if (g_menu) g_menu_dirty = 1;
             continue;
         }
         /* the shortcuts (the drawer has all of them too) */
         const SDL_Keycode key = e.type == SDL_KEYDOWN && !e.key.repeat ? e.key.keysym.sym : SDLK_UNKNOWN;
-        if (key == SDLK_TAB) { act_conn(g_conn != CONN_NET); if (g_menu) menu_draw(ren); }
-        else if (key == SDLK_i && act_ip_possible()) { act_ip(); menu_draw(ren); }
+        if (key == SDLK_TAB) { act_conn(g_conn != CONN_NET); if (g_menu) g_menu_dirty = 1; }
+        else if (key == SDLK_i && act_ip_possible()) { act_ip(); g_menu_dirty = 1; }
         else if (key == SDLK_F11 || key == SDLK_f || (e.type == SDL_MOUSEBUTTONDOWN && e.button.clicks == 2)) act_fullscreen(win);
-        else if (key == SDLK_r) { act_record(win); if (g_menu) menu_draw(ren); }
+        else if (key == SDLK_r) { act_record(win); if (g_menu) g_menu_dirty = 1; }
         else if (key == SDLK_o || key == SDLK_F3) act_hud(-1);
-        else if (key == SDLK_v) { act_vsync(ren, !g_vsync); if (g_menu) menu_draw(ren); }
-        else if (key == SDLK_u) { act_upscaler(ren, -1); if (g_menu) menu_draw(ren); }
+        else if (key == SDLK_v) { act_vsync(ren, !g_vsync); if (g_menu) g_menu_dirty = 1; }
+        else if (key == SDLK_u) { act_upscaler(ren, -1); if (g_menu) g_menu_dirty = 1; }
 #ifdef __APPLE__
         else if (key == SDLK_F9) {
             g_fsr_sharpness = g_fsr_sharpness < 40 ? 40 : g_fsr_sharpness < 70 ? 70 : g_fsr_sharpness < 100 ? 100 : 40;
             act_upscaler(ren, UP_FSR);
         }
 #endif
-        else if (key == SDLK_m) { act_mute(!g_mute); if (g_menu) menu_draw(ren); }
+        else if (key == SDLK_m) { act_mute(!g_mute); if (g_menu) g_menu_dirty = 1; }
         else if (e.type == SDL_WINDOWEVENT) {
             /* resized or uncovered with no new frame: draw the last one again */
-            if (g_menu) { menu_draw(ren); continue; }
+            if (g_menu) { g_menu_dirty = 1; continue; }
             SDL_RenderClear(ren);
             if (tex) {
 #ifdef __APPLE__
@@ -1318,6 +1329,7 @@ static void app_title_cannot_open(SDL_Window *win, int err)
 #endif
     SDL_SetWindowTitle(win, t);
     g_menu_state = MENU_NODRIVER;
+    g_menu_dirty = 1;
     snprintf(g_menu_err, sizeof(g_menu_err), "%s", libusb_error_name(err));
 }
 
@@ -1328,11 +1340,15 @@ static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *r
     int said = 0;
     g_menu = 1;
     g_menu_state = MENU_WAITING;
+    Uint64 t_anim = 0;
+    const Uint64 freq = SDL_GetPerformanceFrequency();
     for (int tick = 0;; tick++) {
-        /* v0.5: the menu, redrawn often enough for the keys and the REC timer;
-         * the bus is looked at every 250 ms as before */
+        /* v0.7.14: drain the events first and draw the menu once, only when
+         * it changed (or for the pulse/REC timer). The bus is looked at every
+         * ~250 ms; the short delay keeps mouse and wheel input responsive. */
         beat();
         app_events(win, ren, tex);
+        menu_flush(ren);                   /* input feedback before the USB probe */
         if (g_quit) { finder_stop(); return 0; }
         g_lost = 0;                        /* a Tab while waiting is not a disconnect */
         if (g_conn == CONN_NET) {
@@ -1345,51 +1361,63 @@ static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *r
                 snprintf(t, sizeof(t), "Switch Frame Tap - connected over the network (%s), waiting for the picture", g_net_peer);
                 SDL_SetWindowTitle(win, t);
                 g_menu_state = MENU_CONNECTED;
-                menu_draw(ren);
+                g_menu_dirty = 1;
+                menu_flush(ren);
                 return 1;
             }
-            menu_draw(ren); SDL_Delay(50); continue;
-        }
-        finder_stop();                     /* USB only */
-        if (tick % 5 != 0) { menu_draw(ren); SDL_Delay(50); continue; }
-        libusb_device_handle *h = libusb_open_device_with_vid_pid(ctx, SFT_VID, SFT_PID);
-        if (h) {
-            libusb_set_auto_detach_kernel_driver(h, 1);
-            if (libusb_claim_interface(h, SFT_IFACE) == 0) {
-                SDL_SetWindowTitle(win, "Switch Frame Tap - connected, waiting for the picture");
-                g_menu_state = MENU_CONNECTED;
-                menu_draw(ren);
-                g_usb = h;
-                return 1;
-            }
-            libusb_close(h);
-            app_title_cannot_open(win, LIBUSB_ERROR_BUSY);
-            said = 1;
         } else {
-            int err = 0;
-            char other[96];
-            if (switch_on_bus(ctx, &err)) {
-                if (said != 1) fprintf(stderr, "usb: the Switch is present but cannot be opened (%s)\n", libusb_error_name(err));
-                app_title_cannot_open(win, err);
-                said = 1;
-            } else if (conflict_on_bus(ctx, other, sizeof(other))) {
-                snprintf(g_menu_other, sizeof(g_menu_other), "%s", other);
-                if (said != 2) {
-                    fprintf(stderr, "usb: the Switch is presenting %s, not Switch Frame Tap - remove/disable that program and reboot\n", other);
-                    char t[220];
-                    snprintf(t, sizeof(t), "Switch Frame Tap - the Switch is presenting %s, not Switch Frame Tap", other);
-                    SDL_SetWindowTitle(win, t);
+            finder_stop();                 /* USB only */
+            if (tick % 15 == 0) {
+                libusb_device_handle *h = libusb_open_device_with_vid_pid(ctx, SFT_VID, SFT_PID);
+                if (h) {
+                    libusb_set_auto_detach_kernel_driver(h, 1);
+                    if (libusb_claim_interface(h, SFT_IFACE) == 0) {
+                        SDL_SetWindowTitle(win, "Switch Frame Tap - connected, waiting for the picture");
+                        g_menu_state = MENU_CONNECTED;
+                        g_menu_dirty = 1;
+                        menu_flush(ren);
+                        g_usb = h;
+                        return 1;
+                    }
+                    libusb_close(h);
+                    app_title_cannot_open(win, LIBUSB_ERROR_BUSY);
+                    said = 1;
+                } else {
+                    int err = 0;
+                    char other[96];
+                    if (switch_on_bus(ctx, &err)) {
+                        if (said != 1) fprintf(stderr, "usb: the Switch is present but cannot be opened (%s)\n", libusb_error_name(err));
+                        app_title_cannot_open(win, err);
+                        said = 1;
+                    } else if (conflict_on_bus(ctx, other, sizeof(other))) {
+                        snprintf(g_menu_other, sizeof(g_menu_other), "%s", other);
+                        if (said != 2) {
+                            fprintf(stderr, "usb: the Switch is presenting %s, not Switch Frame Tap - remove/disable that program and reboot\n", other);
+                            char t[220];
+                            snprintf(t, sizeof(t), "Switch Frame Tap - the Switch is presenting %s, not Switch Frame Tap", other);
+                            SDL_SetWindowTitle(win, t);
+                        }
+                        g_menu_state = MENU_WRONG_DEVICE;
+                        g_menu_dirty = 1;
+                        said = 2;
+                    } else if (said) {
+                        SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)");
+                        said = 0;
+                        g_menu_state = MENU_WAITING;
+                        g_menu_dirty = 1;
+                    }
                 }
-                g_menu_state = MENU_WRONG_DEVICE;
-                said = 2;
-            } else if (said) {
-                SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)");
-                said = 0;
-                g_menu_state = MENU_WAITING;
             }
         }
-        menu_draw(ren);
-        SDL_Delay(50);
+        {
+            const Uint64 now = SDL_GetPerformanceCounter();
+            if (g_menu_dirty || (double)(now - t_anim) / (double)freq >= 0.1) {
+                menu_draw(ren);
+                g_menu_dirty = 0;
+                t_anim = now;
+            }
+        }
+        SDL_Delay(16);
     }
 }
 
@@ -1579,8 +1607,9 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
             ren_swap(&win, &ren, &tex);
             W = H = 0;
             if (g_quit) break;
-            if (g_menu) menu_draw(ren);
+            if (g_menu) { menu_draw(ren); g_menu_dirty = 0; }
         }
+        menu_flush(ren);                       /* one draw per event batch */
         if (g_run_secs > 0 && (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq >= g_run_secs) break;
         if (g_lost) {
             /* the Switch left the bus (rebooted, cable out) */
@@ -1609,7 +1638,11 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                     g_menu_state = t_prev_show ? MENU_PAUSED : MENU_CONNECTED;
                     if (t_prev_show) fprintf(stderr, "\nno new picture for 1.5 s - showing the menu\n");
                 }
-                if (g_menu && (double)(nowm - t_menu) / (double)freq > 0.2) { menu_draw(ren); t_menu = nowm; }
+                if (g_menu && (g_menu_dirty || (double)(nowm - t_menu) / (double)freq > 0.2)) {
+                    menu_draw(ren);
+                    g_menu_dirty = 0;
+                    t_menu = nowm;
+                }
             }
             goto stats;
         }
