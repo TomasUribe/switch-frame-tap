@@ -1883,11 +1883,18 @@ static int run_check(const char *net_host)
     if (me) { struct in_addr ia; ia.s_addr = me; inet_ntop(AF_INET, &ia, here, sizeof(here)); }
     printf("network: this PC is %s\n", here);
     if (net_host && net_host[0]) {
-        if (net_connect(net_host, NET_PORT)) {
-            printf("network: connected to %s:%d\n", net_host, NET_PORT);
-            transport_close();
+        struct in_addr ia;
+        uint32_t which = 0;
+        if (inet_pton(AF_INET, net_host, &ia) != 1) {
+            printf("network: \"%s\" is not an IPv4 address\n", net_host);
         } else {
-            printf("network: cannot connect to %s:%d (Connection=Network on the Switch?)\n", net_host, NET_PORT);
+            sock_t s = connect_any(&ia.s_addr, 1, NET_PORT, 3000, &which);
+            if (s != SOCK_BAD) {
+                printf("network: connected to %s:%d (TCP stream port)\n", net_host, NET_PORT);
+                sock_close(s);
+            } else {
+                printf("network: cannot connect to %s:%d (Connection=Network on the Switch?)\n", net_host, NET_PORT);
+            }
         }
     } else {
         printf("network: video uses TCP %d (UDP %d beacon), not the SD-card FTP server\n", NET_PORT, BEACON_PORT);
