@@ -25,6 +25,7 @@
 #include "applet_mitm_clk.hpp"
 #include "applet_mitm_control.hpp"
 #include "applet_mitm_capture.hpp"
+#include "applet_mitm_compositeprobe.hpp"
 #include "applet_mitm_shot.hpp"
 #include "applet_mitm_audio.hpp"
 #include "applet_mitm_uvc.hpp"
@@ -1189,6 +1190,7 @@ namespace ams {
         mitm::applet::g_nvp_armed     = ArmFileContains("nvp");
         mitm::applet::g_nvp_n         = ArmFileNumber("nvp", 30);
         mitm::applet::g_matrix_mode   = ArmFileNumber("mtx", 1);
+        mitm::applet::g_composite_probe_armed = ArmFileContains("compositeprobe");
         mitm::applet::g_stream_armed  = ArmFileContains("stream");
         mitm::applet::g_stream_w      = ArmFileNumber("sw", 0);
         mitm::applet::g_stream_h      = ArmFileNumber("sh", 0);
@@ -1286,6 +1288,10 @@ namespace ams {
 
         mitm::applet::StartControlService();
         mitm::applet::StartAppWatch();
+        if (mitm::applet::g_composite_probe_armed) {
+            mitm::applet::LogLine("compositeprobe: armed (wait=%u s); use it without live for clean data", mitm::applet::g_probe_delay_s);
+        }
+        mitm::applet::StartCompositeProbe();
         mitm::applet::StartShotInput();   /* idle, and hid untouched, until screenshots are on */
         mitm::applet::StartAudio();
         mitm::applet::SoundProbeStart();   /* v0.7.14 research: off without probe-sound.txt */

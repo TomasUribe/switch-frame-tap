@@ -198,6 +198,8 @@ int main() {
     ExpectRelease("capture_mode = composite\n", "vic exec dbg usb live capture=composite nvqp=20 nvgop=60 wait=20 audio");
     ExpectRelease("capture_mode = nonsense\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
 
+    ExpectRelease("compositeprobe = 1\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio compositeprobe");
+
     std::printf("%s (%d failure%s)\n", g_fail == 0 ? "OK" : "FAILED", g_fail, g_fail == 1 ? "" : "s");
     return g_fail == 0 ? 0 : 1;
 }

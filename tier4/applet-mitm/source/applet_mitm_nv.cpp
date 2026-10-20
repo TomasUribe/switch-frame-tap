@@ -5557,14 +5557,20 @@ namespace ams::mitm::applet {
                  * Emblem: Three Houses has an unrelated region mapped for 3
                  * and its swapchain's for 2; keeping only the 3 left nothing
                  * to match (black menus, garbage). The matcher picks among
-                 * the rest. */
-                if (!sep_layout && ncand > nslots) {
+                 * the rest.
+                 * v0.7.15: the same display-mapped filter applies to one-object-
+                 * per-slot games. DQXI registers three separate 1080p nvmap
+                 * objects; its candidate list also contained same-size
+                 * GPU-only render targets that stayed static/empty, which is
+                 * what pushed the matcher into the Layer workaround. */
+                if (ncand > nslots) {
                     u32 kept = 0;
                     for (u32 c = 0; c < ncand; ++c) { if (devc[c] >= 2) { ++kept; } }
                     if (kept >= nslots && kept < ncand) {
                         u32 k2 = 0;
                         for (u32 c = 0; c < ncand; ++c) { if (devc[c] >= 2) { cand[k2] = cand[c]; devc[k2] = devc[c]; ++k2; } }
-                        LogLine("   %s: %u of %u candidates kept - the regions mapped for 2 or more devices (the display's too)", who, kept, ncand);
+                        LogLine("   %s: %u of %u candidates kept - the regions mapped for 2 or more devices (the display's too)%s",
+                                who, kept, ncand, sep_layout ? ", one per slot" : "");
                         ncand = kept;
                     }
                 }
@@ -5602,8 +5608,8 @@ namespace ams::mitm::applet {
                     char line[280];
                     int len = std::snprintf(line, sizeof(line), "   %s: candidates:", who);
                     for (u32 c = 0; c < ncand && c < 8 && len > 0 && static_cast<size_t>(len) < sizeof(line); ++c) {
-                        len += std::snprintf(line + len, sizeof(line) - len, " [%u]0x%010llx",
-                                             c, static_cast<unsigned long long>(cand[c]));
+                        len += std::snprintf(line + len, sizeof(line) - len, " [%u]0x%010llx/d%u",
+                                             c, static_cast<unsigned long long>(cand[c]), devc[c]);
                     }
                     LogLine("%s", line);
                 }

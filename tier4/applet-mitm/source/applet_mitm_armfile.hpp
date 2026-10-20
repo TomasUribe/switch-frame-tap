@@ -102,6 +102,8 @@ namespace ams::mitm::applet::armfile {
      *   capture_mode      = auto | standard | composite | layer
      *                                                -> capture=<mode> (v0.7.15; per-title overrides
      *                                                  live in capture.ini)
+     *   compositeprobe    = 1                        -> compositeprobe (v0.7.15 test build: read vi's
+     *                                                  shared buffer and query vi:m; not release)
      *
      * Unknown keys and malformed values are ignored: a bad config file must
      * leave the defaults, never arm something else. */
@@ -148,7 +150,7 @@ namespace ams::mitm::applet::armfile {
     inline size_t BuildReleaseArm(const char *ini, size_t n, char *out, size_t cap) {
         unsigned qp = 20, gop = 60, wait = 20, u = 0;
         unsigned shotkey = 0;
-        bool cap720 = false, anyfw = false, shot = false, audio = true, uvc = false, uvcraw = false, nvab = false, net = false, nohb = false, nodethome = false, shotalbum = false, screenoff = false, earlyoff = false, earlyab = false, homemenu = false;
+        bool cap720 = false, anyfw = false, shot = false, audio = true, uvc = false, uvcraw = false, nvab = false, net = false, nohb = false, nodethome = false, shotalbum = false, screenoff = false, earlyoff = false, earlyab = false, homemenu = false, compositeprobe = false;
         const char *capture = "auto";
         char v[32];
         if (IniValue(ini, n, "quality", v, sizeof(v))) {
@@ -179,6 +181,7 @@ namespace ams::mitm::applet::armfile {
         if (IniValue(ini, n, "detach_on_home", v, sizeof(v)) && std::strcmp(v, "0") == 0) { nodethome = true; }
         if (IniValue(ini, n, "screen_off", v, sizeof(v)) && std::strcmp(v, "1") == 0) { screenoff = true; }
         if (IniValue(ini, n, "home_menu", v, sizeof(v)) && std::strcmp(v, "1") == 0) { homemenu = true; }
+        if (IniValue(ini, n, "compositeprobe", v, sizeof(v)) && std::strcmp(v, "1") == 0) { compositeprobe = true; }
         if (IniValue(ini, n, "capture_mode", v, sizeof(v))) {
             if (std::strcmp(v, "auto") == 0) { capture = "auto"; }
             else if (std::strcmp(v, "standard") == 0) { capture = "standard"; }
@@ -202,11 +205,12 @@ namespace ams::mitm::applet::armfile {
             std::snprintf(shotbuf, sizeof(shotbuf), " shot shotkey=%u%s%s", shotkey, custom, shotalbum ? " shotalbum" : "");
         }
         /* one transport: "usb" (the viewer or, with uvc, the webcam) or "net" */
-        const int w = std::snprintf(out, cap, "vic exec dbg %s live capture=%s nvqp=%u nvgop=%u wait=%u%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        const int w = std::snprintf(out, cap, "vic exec dbg %s live capture=%s nvqp=%u nvgop=%u wait=%u%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
                                     net ? "net" : "usb", capture, qp, gop, wait, cap720 ? " cap720" : "", anyfw ? " anyfw" : "", shotbuf, audio ? " audio" : "",
                                     uvc ? " uvc" : "", uvcraw ? " uvcraw" : "", nvab ? " nvab" : "", nohb ? " nohb" : "",
                                     nodethome ? " nodethome" : "", screenoff ? " screenoff" : "",
-                                    earlyoff ? " earlyoff" : "", earlyab ? " earlyab" : "", homemenu ? " homemenu" : "");
+                                    earlyoff ? " earlyoff" : "", earlyab ? " earlyab" : "", homemenu ? " homemenu" : "",
+                                    compositeprobe ? " compositeprobe" : "");
         return (w < 0 || static_cast<size_t>(w) >= cap) ? 0 : static_cast<size_t>(w);
     }
 

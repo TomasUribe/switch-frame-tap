@@ -101,14 +101,23 @@ namespace ams::mitm::applet {
 
                 Result GetCaptureInfo(sf::Out<CaptureInfo> out) {
                     CaptureInfo ci = {};
+                    /* The overlay edits the running game's override, so report
+                     * that game, not whichever title happened to start the last
+                     * session. requested is resolved immediately (including a
+                     * just-written capture.ini line); mode is the live session. */
+                    const u64 current = g_app_tid.load(std::memory_order_relaxed);
+                    const u64 active_tid = g_capture_tid.load(std::memory_order_relaxed);
                     ci.version   = 1;
-                    ci.mode      = g_capture_mode_active.load(std::memory_order_relaxed);
-                    ci.requested = g_capture_mode_requested.load(std::memory_order_relaxed);
-                    ci.candidates = g_capture_ncand.load(std::memory_order_relaxed);
-                    ci.live      = g_capture_live_cands.load(std::memory_order_relaxed);
-                    ci.dead      = g_capture_dead_cands.load(std::memory_order_relaxed);
-                    ci.tid       = g_capture_tid.load(std::memory_order_relaxed);
+                    ci.tid       = current;
+                    ci.requested = ResolveCaptureMode(current);
                     ci.composite = CompositeCaptureAvailable() ? 1u : 0u;
+                    if (current != 0 && current == active_tid) {
+                        ci.mode      = g_capture_mode_active.load(std::memory_order_relaxed);
+                        ci.candidates = g_capture_ncand.load(std::memory_order_relaxed);
+                        ci.live      = g_capture_live_cands.load(std::memory_order_relaxed);
+                        ci.dead      = g_capture_dead_cands.load(std::memory_order_relaxed);
+                        ci.reserved  = 1;   /* an active session belongs to this title */
+                    }
                     sftcapture::Override ov[sftcapture::MaxOverrides] = {};
                     ci.overrides = static_cast<u32>(CaptureOverrides(ov, sftcapture::MaxOverrides));
                     out.SetValue(ci);

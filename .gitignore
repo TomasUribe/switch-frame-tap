@@ -23,3 +23,12 @@ dist/
 tools/raw-recv/clarity.o
 tools/raw-recv/clarity_shader.h
 *.nro
+
+# local test builds, captures and logs left in the repository root
+/*.zip
+/*.7z
+/*.tar.gz
+/*.log
+/log*.txt
+/report_*.bin
+/probe/

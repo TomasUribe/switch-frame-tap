@@ -6,6 +6,7 @@
 #include "applet_mitm_gbuf.hpp"
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_control.hpp"
+#include "applet_mitm_compositeprobe.hpp"
 #include "applet_mitm_uibinder.hpp"
 #include <atomic>
 
@@ -218,6 +219,7 @@ namespace ams::mitm::applet {
             LogMark("binder:parse_preallocated");
             if (const auto *gb = FindGraphicBuffer(parcel_in.GetPointer(), parcel_in.GetSize()); gb != nullptr) {
                 const s32 pslot = ParseQueueBufferSlot(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize());
+                CompositeProbeNoteTxn(ci.program_id.value, session_id, 14, pslot);
                 char tag[48];
                 std::snprintf(tag, sizeof(tag), "setPreallocatedBuffer#%u slot %d", per, pslot);
                 LogGraphicBuffer(tag, gb);
@@ -240,6 +242,7 @@ namespace ams::mitm::applet {
             static constinit os::SdkMutex s_present_lock;
             std::scoped_lock present_lk(s_present_lock);
             const s32 qs = ParseQueueBufferSlot(static_cast<const u8 *>(parcel_in.GetPointer()), parcel_in.GetSize());
+            CompositeProbeNoteTxn(ci.program_id.value, session_id, 7, qs);
             u32 fn = 0, xf = 0;
             u64 fv[4] = {};
             s32 crop[4] = {};

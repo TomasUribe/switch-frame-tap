@@ -112,10 +112,58 @@ namespace {
         return R_SUCCEEDED(serviceDispatchOut(&g_sftap, 6, *ci));
     }
 
-    void SftapSetCaptureMode(u64 tid, u32 mode) {
-        if (!SftapConnect() || tid == 0) { return; }
-        const struct { u64 tid; u32 mode; u32 pad; } in = { tid, mode, 0 };
-        serviceDispatchIn(&g_sftap, 5, in);
+    bool SftapReload() {
+        if (!SftapConnect()) { return false; }
+        return R_SUCCEEDED(serviceDispatch(&g_sftap, 2));
+    }
+
+    u32 SftapSetCaptureMode(u64 tid, u32 mode) {
+        if (!SftapConnect() || tid == 0) { return 0xFFFFFFFFu; }
+        /* Keep the 16-byte shape used by SetAppExcluded: the SF layer accepts
+         * trailing padding, and this matches the existing sftap commands. */
+        u8 in[16] = {};
+        std::memcpy(in, &tid, sizeof(tid));
+        std::memcpy(in + 8, &mode, sizeof(mode));
+        const Result rc = serviceDispatchIn(&g_sftap, 5, in);
+        return rc;
+    }
+
+    /* Fallback for a sysmodule without command 5: write capture.ini directly
+     * and ask the service to reload it. The manager already owns the same file
+     * format; this keeps the overlay usable while command 5 is unavailable. */
+    bool SaveCaptureOverrideFile(u64 tid, u32 mode) {
+        char text[4096] = {};
+        size_t n = 0;
+        if (FILE *f = std::fopen(sftcapture::IniPath, "rb")) {
+            n = std::fread(text, 1, sizeof(text) - 1, f);
+            std::fclose(f);
+        }
+        sftcapture::Override ov[sftcapture::MaxOverrides] = {};
+        size_t count = sftcapture::ParseIni(text, n, ov, sftcapture::MaxOverrides);
+        size_t i = 0;
+        while (i < count && ov[i].tid != tid) { ++i; }
+        if (mode == sftcapture::Auto) {
+            if (i < count) {
+                for (size_t k = i; k + 1 < count; ++k) { ov[k] = ov[k + 1]; }
+                --count;
+            }
+        } else {
+            if (i == count && count < sftcapture::MaxOverrides) { ++count; }
+            if (i < count) { ov[i].tid = tid; ov[i].mode = mode; }
+        }
+        std::string out =
+            "# Switch Frame Tap per-title capture modes - written by the overlay\n"
+            "# <title id> = auto | standard | composite | layer\n";
+        char line[64];
+        for (size_t k = 0; k < count; ++k) {
+            const size_t len = sftcapture::FormatLine(line, sizeof(line), ov[k].tid, ov[k].mode);
+            if (len != 0) { out.append(line, len); }
+        }
+        FILE *f = std::fopen(sftcapture::IniPath, "wb");
+        if (f == nullptr) { return false; }
+        const bool ok = std::fwrite(out.data(), 1, out.size(), f) == out.size();
+        std::fclose(f);
+        return ok;
     }
 
     /* ---- ReverseNX-RT, through SaltyNX ---------------------------------- */
@@ -286,8 +334,19 @@ namespace {
                     const u32 mode = i;
                     item->setClickListener([this, mode](u64 keys) {
                         if ((keys & HidNpadButton_A) && m_have && m_st.version >= 3 && m_st.app_tid != 0) {
-                            SftapSetCaptureMode(m_st.app_tid, mode);
+                            const u64 tid = m_st.app_tid;
+                            m_capture_rc = SftapSetCaptureMode(tid, mode);
+                            bool ok = R_SUCCEEDED(m_capture_rc);
+                            if (!ok) {
+                                tsl::hlp::doWithSDCardHandle([&] { ok = SaveCaptureOverrideFile(tid, mode); });
+                                if (ok) { SftapReload(); }
+                            }
+                            m_capture_failed = !ok;
+                            m_capture_pending = mode;
+                            m_capture_pending_tid = tid;
+                            m_capture_pending_valid = ok && !R_SUCCEEDED(m_capture_rc);
                             m_tick = 0;
+                            this->Refresh();
                             return true;
                         }
                         return false;
@@ -295,6 +354,10 @@ namespace {
                     m_caps[mode] = item;
                     list->addItem(item);
                 }
+                list->addItem(new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
+                    r->drawString(m_capture_note.c_str(), false, x + 15, y + 22, 16,
+                                  r->a(m_capture_failed ? tsl::style::color::ColorHighlight : tsl::style::color::ColorDescription));
+                }), 36);
 
                 {
                     /* libtesla keeps sdmc unmounted: mount it around each access
@@ -376,10 +439,30 @@ namespace {
                 if (m_toggle != nullptr && m_have && m_toggle->getState() != (m_st.enabled != 0)) {
                     m_toggle->setState(m_st.enabled != 0);
                 }
+                const bool have_game = m_have_ci && m_st.version >= 3 && m_st.app_tid != 0;
+                const bool active = have_game && (m_ci.reserved & 1) != 0;
+                if (m_capture_pending_valid && (m_capture_pending_tid != m_st.app_tid || m_ci.requested == m_capture_pending)) {
+                    m_capture_pending_valid = false;
+                }
+                const u32 requested = (m_capture_pending_valid ? m_capture_pending : m_ci.requested);
                 for (u32 i = 0; i < 4; ++i) {
                     if (m_caps[i] == nullptr) { continue; }
-                    if (!m_have_ci || m_st.version < 3 || m_st.app_tid == 0) { m_caps[i]->setValue("-", true); }
-                    else { m_caps[i]->setValue(m_ci.mode == i ? "Active" : "", false); }
+                    if (!have_game) { m_caps[i]->setValue("-", true); continue; }
+                    std::string v;
+                    if (active && m_ci.mode == i) { v = "Active"; }
+                    if (requested == i) { v += v.empty() ? "Selected" : " / Selected"; }
+                    m_caps[i]->setValue(v, v.empty() || v == "Selected");
+                }
+                if (!have_game) {
+                    m_capture_note = m_have ? "No game in front" : "sftap unavailable";
+                } else if (m_capture_failed) {
+                    char b[64];
+                    std::snprintf(b, sizeof(b), "Could not save capture.ini (rc=0x%x)", m_capture_rc);
+                    m_capture_note = b;
+                } else if (active) {
+                    m_capture_note = std::string("Active: ") + sftcapture::Label(m_ci.mode);
+                } else {
+                    m_capture_note = std::string("Selected: ") + sftcapture::Label(requested) + " - applies to the next stream";
                 }
                 const Mode cur = CurrentMode();
                 for (int i = 1; i <= 3; ++i) {
@@ -399,6 +482,12 @@ namespace {
             tsl::elm::ListItem *m_app = nullptr;
             tsl::elm::ListItem *m_caps[4] = {};
             tsl::elm::ListItem *m_modes[4] = {};
+            std::string m_capture_note;
+            bool m_capture_failed = false;
+            u32 m_capture_rc = 0;
+            u32 m_capture_pending = sftcapture::Auto;
+            u64 m_capture_pending_tid = 0;
+            bool m_capture_pending_valid = false;
             tsl::elm::ToggleListItem *m_patch = nullptr;
             PatchState m_patch_state = PatchState::Missing;
             bool m_patch_changed = false;     /* toggled since the last restart (in this overlay session) */

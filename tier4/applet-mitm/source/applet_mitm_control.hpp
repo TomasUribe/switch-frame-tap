@@ -58,7 +58,7 @@ namespace ams::mitm::applet {
         u64 tid;           /* 0: no game override applies */
         u32 overrides;     /* lines in capture.ini */
         u32 composite;     /* 1 when the compositor route is available */
-        u32 reserved;
+        u32 reserved;      /* bit 0: the active session belongs to tid */
     };
     static_assert(sizeof(CaptureInfo) == 48);
 

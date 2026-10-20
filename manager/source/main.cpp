@@ -718,12 +718,14 @@ namespace {
                 "Per-title overrides are listed below and win over this setting." });
             if (have_ci && ci.tid != 0) {
                 rows.push_back({ Kind::Info, "This game", [this] {
-                        char b[64];
-                        std::snprintf(b, sizeof(b), "%s%s", sftcapture::Label(ci.mode),
-                                      ci.live || ci.dead ? "" : " (waiting for frames)");
-                        return std::string(b);
-                    }, [this] { return ci.live != 0 && ci.dead != 0 ? ColWarn : ColGood; }, nullptr,
-                    "The mode the running game is using. A Layer fallback is expected for a game that draws several surfaces." });
+                        std::string v = "Selected: " + std::string(sftcapture::Label(ci.requested));
+                        if (ci.reserved & 1) { v += " / Active: " + std::string(sftcapture::Label(ci.mode)); }
+                        else { v += " (next stream)"; }
+                        if (!ci.live && !ci.dead) { v += " - waiting for frames"; }
+                        return v;
+                    }, [this] { return (ci.reserved & 1) && ci.live != 0 && ci.dead != 0 ? ColWarn : ColText; }, nullptr,
+                    "Selected is the per-title mode from capture.ini; Active is what the running stream is using. "
+                    "A Layer fallback is expected when the stream restarts after a multi-surface detection." });
             }
             if (!capture_overrides.empty()) {
                 rows.push_back({ Kind::Header, "Capture overrides", nullptr, nullptr, nullptr, "" });
