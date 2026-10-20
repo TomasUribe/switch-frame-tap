@@ -51,6 +51,7 @@
 #include "applet_mitm_uvc.hpp"
 #include "applet_mitm_net.hpp"
 #include "applet_mitm_slotmatch.hpp"
+#include "applet_mitm_capture.hpp"
 #include "applet_mitm_idlework.hpp"
 #include <atomic>
 #include <cstring>
@@ -3061,7 +3062,28 @@ namespace ams::mitm::applet {
                 }
                 if (!DbgIsDmnt(dbg)) { DebugPumpStart(dbg); }
                 g_reconfig_request.store(false, std::memory_order_relaxed);   /* this session starts with the current settings */
+                g_capture_reconfig.store(false, std::memory_order_relaxed);
                 const GameSurface *gp = (geo.num_slots != 0 && geo.buf_size != 0) ? std::addressof(geo) : nullptr;
+                /* v0.7.15: resolve the capture mode for this title. Auto starts
+                 * in Standard and probes; Composite is not implemented yet, so
+                 * it falls back to Layer as decided. */
+                const u64 cap_tid = applet_target ? 0 : g_app_tid.load(std::memory_order_relaxed);
+                const u32 cap_requested = cap_tid != 0 ? ResolveCaptureMode(cap_tid) : sftcapture::Standard;
+                u32 cap_mode = cap_requested == sftcapture::Auto ? sftcapture::Standard : cap_requested;
+                if (cap_mode == sftcapture::Composite && !CompositeCaptureAvailable()) {
+                    LogLine("   capture: composite is not available in this build - using layer");
+                    cap_mode = sftcapture::Layer;
+                }
+                g_capture_auto_probe.store(cap_requested == sftcapture::Auto, std::memory_order_relaxed);
+                g_capture_mode_active.store(cap_mode, std::memory_order_relaxed);
+                g_capture_mode_requested.store(cap_requested, std::memory_order_relaxed);
+                g_capture_tid.store(cap_tid, std::memory_order_relaxed);
+                g_capture_ncand.store(0, std::memory_order_relaxed);
+                g_capture_live_cands.store(0, std::memory_order_relaxed);
+                g_capture_dead_cands.store(0, std::memory_order_relaxed);
+                LogLine("   capture: %s for %016llx (requested %s)%s", sftcapture::Key(cap_mode),
+                        static_cast<unsigned long long>(cap_tid), sftcapture::Key(cap_requested),
+                        cap_requested == sftcapture::Auto ? ", probing" : "");
                 const StreamEnd end = g_uvc_raw ? TryUvcRawStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, gp)
                                                 : TryNvencStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true, gp);
                 if (!DbgIsDmnt(dbg)) { DebugPumpStop(); }
@@ -5483,13 +5505,28 @@ namespace ams::mitm::applet {
             bool guess_trusted = false;    /* v0.7.3: slot_cand is the last session's match */
             u32 held_ms = 0;               /* v0.7.3: how long the first frames waited for the match */
             bool hold_done = false;        /* v0.7.3: the wait happens once a session */
+            u32 diag_caps = 0, diag_bad_slot = 0;   /* v0.7.14-slotdiag */
             u64 cand[MaxSlotCand] = {};
             u32 ncand = 0;
             u8 slot_cand[8] = {};
             slotmatch::Matcher matcher;
+            /* v0.7.15: Auto/Layer probe. A multi-surface game (DQXI: one live
+             * layer and two static/empty ones) is detected from how the
+             * candidate signatures change while presents go by. */
+            bool auto_probe = false;   /* this session is Auto: look, then switch */
+            bool layer_mode = false;   /* use only the changing layer */
+            bool obs_done = false;
+            bool layer_locked = false;
+            u8 layer_cand = 0;
+            u32 obs_frames = 0;
+            bool obs_have[MaxSlotCand] = {};
+            u32 obs_prev[MaxSlotCand] = {};
+            u32 obs_changed[MaxSlotCand] = {};
+            u32 obs_seen[MaxSlotCand] = {};
 
             u64 SlotAddr(u64 slot_base, s32 slot) const {
                 const bool valid = slot >= 0 && static_cast<u32>(slot) < nslots;
+                if (layer_mode && layer_locked && layer_cand < ncand) { return cand[layer_cand]; }
                 if (sep) { return cand[slot_cand[valid ? slot : 0]]; }
                 return slot_base + (valid ? slot_off[slot] : 0);
             }
@@ -5499,6 +5536,10 @@ namespace ams::mitm::applet {
              * the slots are offsets in it (MK8) */
             void PrepareSlots(::ams::svc::Handle dbg, u64 slot_base, const char *who) {
                 sep = sep_locked = still_guessed = false;
+                obs_done = layer_locked = false;
+                layer_cand = 0;
+                obs_frames = 0;
+                for (u32 c = 0; c < MaxSlotCand; ++c) { obs_have[c] = false; obs_prev[c] = 0; obs_changed[c] = 0; obs_seen[c] = 0; }
                 u64 span = buf_bytes;
                 for (u32 k = 0; k < nslots; ++k) { if (slot_off[k] + static_cast<u64>(buf_bytes) > span) { span = slot_off[k] + static_cast<u64>(buf_bytes); } }
                 ::ams::svc::MemoryInfo mi = {};
@@ -5557,6 +5598,15 @@ namespace ams::mitm::applet {
                         who, nslots, sep_layout ? "each its own nvmap object" : "no region exactly the swapchain's size",
                         ncand, buf_bytes, static_cast<unsigned long long>(cand[0]),
                         reused ? " (starting from the last session's match)" : "");
+                {
+                    char line[280];
+                    int len = std::snprintf(line, sizeof(line), "   %s: candidates:", who);
+                    for (u32 c = 0; c < ncand && c < 8 && len > 0 && static_cast<size_t>(len) < sizeof(line); ++c) {
+                        len += std::snprintf(line + len, sizeof(line) - len, " [%u]0x%010llx",
+                                             c, static_cast<unsigned long long>(cand[c]));
+                    }
+                    LogLine("%s", line);
+                }
             }
 
             /* a hash of SigPoints 64-byte samples spread over the buffer;
@@ -5577,14 +5627,92 @@ namespace ams::mitm::applet {
                 return h;
             }
 
+            /* v0.7.15: conservative multi-surface probe. One live candidate
+             * plus two static/empty ones is the DQXI signature; a normal
+             * triple buffer has three live candidates, and a still picture has
+             * none, so neither switches. */
+            void ObserveCandidates(const u32 *sig, const bool *varied) {
+                if (obs_done) { return; }
+                for (u32 c = 0; c < ncand; ++c) {
+                    if (obs_have[c] && sig[c] != obs_prev[c]) { ++obs_changed[c]; }
+                    obs_prev[c] = sig[c];
+                    obs_have[c] = true;
+                    ++obs_seen[c];
+                }
+                ++obs_frames;
+                if ((obs_frames % 30) == 0) {
+                    LogLine("   capture: probe %u frames, candidate changes %u/%u/%u (seen %u/%u/%u)",
+                            obs_frames, obs_changed[0], obs_changed[1], obs_changed[2],
+                            obs_seen[0], obs_seen[1], obs_seen[2]);
+                }
+                if (obs_frames < 60) { return; }
+                u32 live = 0, dead = 0, best = 0;
+                sftcapture::ClassifyCandidates(obs_changed, obs_seen, ncand, obs_frames, &live, &dead, &best);
+                const bool best_live = live >= 1 && obs_changed[best] >= 3;
+                g_capture_ncand.store(ncand, std::memory_order_relaxed);
+                g_capture_live_cands.store(live, std::memory_order_relaxed);
+                g_capture_dead_cands.store(dead, std::memory_order_relaxed);
+                if (layer_mode) {
+                    if (best_live) {
+                        layer_cand = static_cast<u8>(best);
+                        layer_locked = true;
+                        g_capture_layer_cand.store(layer_cand, std::memory_order_relaxed);
+                        g_capture_layer_addr.store(cand[layer_cand], std::memory_order_relaxed);
+                        g_capture_layer_tid.store(g_app_tid.load(std::memory_order_relaxed), std::memory_order_relaxed);
+                        LogLine("   capture: layer -> candidate %u (changes %u, %u live, %u static)",
+                                layer_cand, obs_changed[best], live, dead);
+                    } else {
+                        LogLine("   capture: layer probe found no changing layer (%u live, %u static) - keeping the slot mapping", live, dead);
+                    }
+                    obs_done = true;
+                    return;
+                }
+                if (auto_probe) {
+                    if (sftcapture::IsMultiSurface(live, dead)) {
+                        const u32 next = CompositeCaptureAvailable() ? sftcapture::Composite : sftcapture::Layer;
+                        if (next == sftcapture::Layer) {
+                            g_capture_layer_cand.store(static_cast<u32>(best), std::memory_order_relaxed);
+                            g_capture_layer_addr.store(cand[best], std::memory_order_relaxed);
+                            g_capture_layer_tid.store(g_app_tid.load(std::memory_order_relaxed), std::memory_order_relaxed);
+                        }
+                        g_capture_auto_probe.store(false, std::memory_order_relaxed);
+                        CaptureAutoDetected(g_app_tid.load(std::memory_order_relaxed), next,
+                                            "one live layer, two static/empty ones");
+                    } else {
+                        LogLine("   capture: auto probe stays standard (%u live, %u static of %u candidates)", live, dead, ncand);
+                    }
+                    obs_done = true;
+                }
+                (void)varied;
+            }
+
             /* once the present of `slot` (present number `count`) is
              * finished, before it is read: a sample for the slot matcher
              * (applet_mitm_slotmatch.hpp) until it has matched every slot */
             void Calibrate(::ams::svc::Handle dbg, u32 count, s32 slot) {
-                if (!sep || sep_locked || slot < 0 || static_cast<u32>(slot) >= nslots) { return; }
+                if (!sep) { return; }
                 u32 sig[MaxSlotCand];
                 bool varied[MaxSlotCand];
-                for (u32 c = 0; c < ncand; ++c) { sig[c] = this->SampleSig(dbg, cand[c], std::addressof(varied[c])); }
+                bool sampled = false;
+                if (!sep_locked) {
+                    for (u32 c = 0; c < ncand; ++c) { sig[c] = this->SampleSig(dbg, cand[c], std::addressof(varied[c])); }
+                    sampled = true;
+                }
+                if (!obs_done && (auto_probe || layer_mode)) {
+                    if (!sampled) {
+                        for (u32 c = 0; c < ncand; ++c) { sig[c] = this->SampleSig(dbg, cand[c], std::addressof(varied[c])); }
+                        sampled = true;
+                    }
+                    this->ObserveCandidates(sig, varied);
+                }
+                if (sep_locked) { return; }
+                if (slot < 0 || static_cast<u32>(slot) >= nslots) {
+                    if ((diag_bad_slot++ % 30) == 0) {
+                        LogLine("   slotmatch: present %u has slot %d (nslots %u) - cannot calibrate", count, slot, nslots);
+                    }
+                    return;
+                }
+                (void)sampled;
                 /* v0.7.9: the slots drawn since the last sample, from the present
                  * ring - a stream slower than the game skips presents */
                 u32 drawn = 0;
@@ -5597,21 +5725,58 @@ namespace ams::mitm::applet {
                     }
                 }
                 matcher.AddSpan(count, drawn, sig);
+                /* v0.7.14-slotdiag: why a game's slots never match */
+                if ((matcher.samples % 30) == 0) {
+                    LogLine("   slotmatch: present %u slot %d drawn=0x%x intervals %u samples %u in %u/%u/%u out %u/%u/%u",
+                            count, slot, drawn, matcher.intervals, matcher.samples,
+                            matcher.tot_in[0], matcher.tot_in[1], matcher.tot_in[2],
+                            matcher.tot_out[0], matcher.tot_out[1], matcher.tot_out[2]);
+                }
+                if (matcher.intervals != 0 && (matcher.intervals % 15) == 0) {
+                    for (u32 s = 0; s < nslots; ++s) {
+                        if (matcher.tot_in[s] == 0 || matcher.tot_out[s] == 0) { continue; }
+                        s32 best = -1, best_score = -100000, second = -100000;
+                        for (u32 c = 0; c < ncand; ++c) {
+                            const s32 score = static_cast<s32>(matcher.hit_in[s][c] * 1000u / matcher.tot_in[s]) -
+                                              static_cast<s32>(matcher.hit_out[s][c] * 1000u / matcher.tot_out[s]);
+                            if (score > best_score) { second = best_score; best_score = score; best = static_cast<s32>(c); }
+                            else if (score > second) { second = score; }
+                        }
+                        LogLine("   slotmatch: slot %u best candidate %d score %d (second %d, cands %u)",
+                                s, best, best_score, second, ncand);
+                    }
+                }
                 u8 m[8] = {};
                 s32 weakest = 0;
-                if (matcher.Match(m, std::addressof(weakest))) {
+                bool matched = matcher.Match(m, std::addressof(weakest));
+                bool relaxed = false;
+                if (!matched) {
+                    /* DQXI: slot 2 has a second candidate that changes exactly
+                     * like it, so the strict margin can never pass - its best
+                     * candidate is still the right one (the first guess read
+                     * one buffer before the real slots and sent black frames).
+                     * Accept the distinct best candidates once they are clear. */
+                    relaxed = matcher.Match(m, std::addressof(weakest), false);
+                    matched = relaxed;
+                }
+                if (matched) {
                     std::memcpy(slot_cand, m, nslots);
                     sep_locked = true;
                     g_slot_match.n = nslots;
                     g_slot_match.buf = buf_bytes;
-                    char line[200];
-                    int len = std::snprintf(line, sizeof(line), "   swapchain: slots matched to their buffers after %u frame intervals (weakest score %d/1000):",
-                                            matcher.intervals, weakest);
-                    for (u32 s = 0; s < nslots && len > 0 && static_cast<size_t>(len) < sizeof(line); ++s) {
+                    char tail[160];
+                    int tl = 0;
+                    for (u32 s = 0; s < nslots && tl >= 0 && static_cast<size_t>(tl) < sizeof(tail); ++s) {
                         g_slot_match.addr[s] = cand[m[s]];
-                        len += std::snprintf(line + len, sizeof(line) - len, " %u->0x%010llx", s, static_cast<unsigned long long>(cand[m[s]]));
+                        tl += std::snprintf(tail + tl, sizeof(tail) - tl, " %u->0x%010llx", s, static_cast<unsigned long long>(cand[m[s]]));
                     }
-                    LogLine("%s", line);
+                    if (relaxed) {
+                        LogLine("   swapchain: slots matched on best scores (a tied second candidate; %u intervals, weakest %d/1000):%s",
+                                matcher.intervals, weakest, tail);
+                    } else {
+                        LogLine("   swapchain: slots matched to their buffers after %u frame intervals (weakest score %d/1000):%s",
+                                matcher.intervals, weakest, tail);
+                    }
                 } else if (u8 g[8] = {}; !still_guessed && slotmatch::StillGuess(sig, varied, ncand, nslots, !sep_layout, g)) {
                     /* the picture stands still: show it while waiting for motion */
                     std::memcpy(slot_cand, g, nslots);
@@ -5620,7 +5785,11 @@ namespace ams::mitm::applet {
                             static_cast<unsigned long long>(cand[g[0]]));
                 } else if (matcher.GaveUp()) {
                     sep_locked = true;
-                    LogLine("   swapchain: slots not told apart in %u samples (%u with a change) - keeping the first guess", matcher.samples, matcher.intervals);
+                    LogLine("   swapchain: slots not told apart in %u samples (%u with a change) - keeping the first guess (cand %u/%u/%u @ 0x%010llx/0x%010llx/0x%010llx)",
+                            matcher.samples, matcher.intervals, slot_cand[0], slot_cand[1], slot_cand[2],
+                            static_cast<unsigned long long>(cand[slot_cand[0]]),
+                            static_cast<unsigned long long>(cand[slot_cand[1]]),
+                            static_cast<unsigned long long>(cand[slot_cand[2]]));
                 }
             }
 
@@ -5656,6 +5825,15 @@ namespace ams::mitm::applet {
                 LogLine("   %s: game swapchain %ux%u stride %u px, block height 2^%u, %u slot(s) of %u B, format %#llx%s",
                         who, g.width, g.height, g.stride_px, g.block_h_log2, nslots, buf_bytes,
                         static_cast<unsigned long long>(g.color_format), known_fmt ? "" : " (not MK8's - colours unverified)");
+                {
+                    char line[240];
+                    int len = std::snprintf(line, sizeof(line), "   %s: binder slots:", who);
+                    for (u32 k = 0; k < nslots && k < 8 && len > 0 && static_cast<size_t>(len) < sizeof(line); ++k) {
+                        len += std::snprintf(line + len, sizeof(line) - len, " %u->nvmap %u off 0x%x",
+                                             k, g.slot_nvmap[k], g.slot_offset[k]);
+                    }
+                    LogLine("%s", line);
+                }
                 return true;
             }
 
@@ -5856,6 +6034,19 @@ namespace ams::mitm::applet {
                 return nslots <= 2 || g_queue_count.load(std::memory_order_acquire) - c >= nslots - 1;
             }
 
+            /* v0.7.14-slotdiag: the present the capture took and the buffer
+             * it will read - once a second, and on the first frame */
+            void DiagCapture(u32 count, s32 slot, u32 crop) {
+                ++diag_caps;
+                if (diag_caps % 30 != 1) { return; }
+                LogLine("   slotmatch: capture %u present %u slot %d crop %ux%u sep %d locked %d still %d first %u/%u/%u @0x%010llx/0x%010llx/0x%010llx",
+                        diag_caps, count, slot, crop >> 16, crop & 0xFFFF, sep ? 1 : 0, sep_locked ? 1 : 0, still_guessed ? 1 : 0,
+                        slot_cand[0], slot_cand[1], slot_cand[2],
+                        static_cast<unsigned long long>(cand[slot_cand[0]]),
+                        static_cast<unsigned long long>(cand[slot_cand[1]]),
+                        static_cast<unsigned long long>(cand[slot_cand[2]]));
+            }
+
             /* v0.7.3: before the first frame of a buffer set the matcher has
              * not seen, watch presents go by - every one, in order, once its
              * fence is reached - until it matches or sees a still picture, for
@@ -5878,6 +6069,12 @@ namespace ams::mitm::applet {
                 held_ms = static_cast<u32>((armTicksToNs(armGetSystemTick()) - t0) / 1000000);
                 LogLine("   swapchain: the first frame waited %u ms for the slot match (%s)", held_ms,
                         sep_locked ? "matched" : still_guessed ? "a still picture" : "not yet - streaming the first guess");
+                if (!sep_locked) {
+                    LogLine("   swapchain: first guess slot0->cand %u @0x%010llx, slot1->cand %u @0x%010llx, slot2->cand %u @0x%010llx",
+                            slot_cand[0], static_cast<unsigned long long>(cand[slot_cand[0]]),
+                            slot_cand[1], static_cast<unsigned long long>(cand[slot_cand[1]]),
+                            slot_cand[2], static_cast<unsigned long long>(cand[slot_cand[2]]));
+                }
                 seen = g_queue_count.load(std::memory_order_acquire) - 1;   /* the latest present is new */
             }
 
@@ -5927,11 +6124,12 @@ namespace ams::mitm::applet {
                          * double-buffered game), the read may hold some of the
                          * NEXT picture: take that newer one instead. Triple
                          * buffering needs two presents queued after ours. */
-                        if (retry < 2 && SlotMayBeReused(pick.count) && ChangedSinceRead(dbg)) {
+                        if (!layer_mode && retry < 2 && SlotMayBeReused(pick.count) && ChangedSinceRead(dbg)) {
                             ++reread;
                             ++retry;
                             continue;
                         }
+                        this->DiagCapture(pick.count, slot, cap_crop);
                         return true;
                     }
                 }
@@ -5964,6 +6162,7 @@ namespace ams::mitm::applet {
                 if (dropped != nullptr && now - seen > 1) { *dropped += now - seen - 1; }
                 seen = now;
                 this->Calibrate(dbg, now, slot);
+                this->DiagCapture(now, slot, cap_crop);
                 return this->ReadSlot(dbg, this->SlotAddr(slot_base, slot), read_ns, sig);
             }
 
@@ -6667,8 +6866,23 @@ namespace ams::mitm::applet {
             if (!g_tx_net && !UsbReady()) { LogLine("   nvstream: USB not Configured (no host, or \"usb\" absent from the arm file) - not streaming"); VicStage("ns:no_usb"); return StreamEnd::ViewerGone; }
             ON_SCOPE_EXIT { ClockWatchStop(); };
             NvfSession s;
+            s.auto_probe = g_capture_auto_probe.load(std::memory_order_relaxed);
+            s.layer_mode = g_capture_mode_active.load(std::memory_order_relaxed) == sftcapture::Layer;
             if (geo != nullptr && !s.SetGeometry(*geo, "nvstream")) { VicStage("ns:geometry"); return StreamEnd::Failed; }
             if (geo != nullptr) { s.PrepareSlots(dbg, slot_base, "nvstream"); }
+            if (s.layer_mode && g_capture_layer_tid.load(std::memory_order_relaxed) == g_capture_tid.load(std::memory_order_relaxed)) {
+                const u64 want = g_capture_layer_addr.load(std::memory_order_relaxed);
+                for (u32 c = 0; c < s.ncand && want != 0; ++c) {
+                    if (s.cand[c] == want) {
+                        s.layer_cand = static_cast<u8>(c);
+                        s.layer_locked = true;
+                        s.obs_done = true;
+                        LogLine("   capture: layer starts on candidate %u (0x%010llx) from the probe", c,
+                                static_cast<unsigned long long>(want));
+                        break;
+                    }
+                }
+            }
             /* M93: the first frame decides the size. A 1280x720 picture in the
              * corner of the 1920x1080 surface (handheld) streams at 720p; full
              * 1920x1080 content (docked, or a game told it is docked) streams
@@ -6995,6 +7209,7 @@ namespace ams::mitm::applet {
                 const u64 t0 = armTicksToNs(armGetSystemTick());
                 if (live && !g_stream_enabled.load(std::memory_order_relaxed)) { why = "turned off from the overlay"; end = StreamEnd::Disabled; break; }
                 if (live && g_applet_needs_memory.load(std::memory_order_relaxed)) { why = "an applet (manual, news, eShop) needs the memory"; end = StreamEnd::Disabled; break; }
+                if (live && g_capture_reconfig.exchange(false, std::memory_order_relaxed)) { why = "capture mode changed"; end = StreamEnd::Reconfigure; break; }
                 if (live && g_reconfig_request.exchange(false, std::memory_order_relaxed)) { why = "new settings from the manager app"; end = StreamEnd::Reconfigure; break; }
                 if (live && g_app_excluded.load(std::memory_order_relaxed)) { why = "this app was excluded"; end = StreamEnd::Disabled; break; }
                 if (live && (i & 7) == 0 && UsbViewerSaidBye()) { why = "the viewer closed"; end = StreamEnd::ViewerGone; break; }   /* v0.7.12 */

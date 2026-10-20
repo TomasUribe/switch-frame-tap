@@ -24,6 +24,8 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 echo "switch-frame-tap PC-side checks"
+run "capture modes: capture.ini parser and per-title resolution" \
+    bash -c "g++ -std=c++20 -Icommon tier4/applet-mitm/test/capture_mode_test.cpp -o $tmp/capture_mode_test && $tmp/capture_mode_test"
 run "arm-file parser (whole tokens, numbers)" \
     bash -c "g++ -std=c++20 -Itier4/applet-mitm/source tier4/applet-mitm/test/armfile_test.cpp -o $tmp/armfile_test && $tmp/armfile_test"
 run "early encode collection: pending, ready, once only, cancelled (PR #12)" \

@@ -379,10 +379,12 @@ captured on the console.*
 **Switch Frame Tap** in the homebrew menu: what the stream is doing (and its
 frame rate), streaming on/off, start with the console, USB mode (PC viewer or
 webcam), picture quality
-(High/Medium/Low), keyframe interval, maximum resolution (1080p/720p), game
-audio on/off, sound in no-record games, start delay, screenshots, **Get
-extras** (below) and a setup check. Changes apply at once - a running stream
-restarts with them. Settings live in `sdmc:/config/switch-frame-tap/config.ini`.
+(High/Medium/Low), keyframe interval, maximum resolution (1080p/720p), capture
+mode and per-game capture overrides, game audio on/off, sound in no-record
+games, start delay, screenshots, **Get extras** (below) and a setup check.
+Changes apply at once - a running stream restarts with them. Settings live in
+`sdmc:/config/switch-frame-tap/config.ini`; capture overrides live in
+`sdmc:/config/switch-frame-tap/capture.ini`.
 
 ### Get extras
 
@@ -402,8 +404,37 @@ missing).
 
 Needs an overlay menu (Tesla Menu or Ultrahand, on nx-ovlloader): stream
 on/off (remembered across reboots), live status, **Stream this app** (see
-below), **Enable sound in no-record games** (below), and Game default /
-Handheld (720p) / Docked (1080p) through ReverseNX-RT.
+below), **Capture mode for this game**, **Enable sound in no-record games**
+(below), and Game default / Handheld (720p) / Docked (1080p) through
+ReverseNX-RT.
+
+### Capture modes
+
+Most games present one swapchain, and **Standard** reads it directly. A few
+draw the picture in separate layers or surfaces; Dragon Quest XI, for one,
+has one live layer and two static/empty buffers, so reading them as a normal
+three-frame swapchain shows garbage, loading screens or a piece of the game in
+a corner.
+
+| mode | what it does |
+|---|---|
+| **Auto** (default) | starts in Standard and watches the game's buffers for the first seconds. A conservative check (one live layer plus at least two that stay static or empty) switches the next session to Layer. |
+| **Standard** | always reads the game's swapchain. Best for normal games. |
+| **Compositor** | reads the final screen after compositing. It is a research route in this build and is not available yet; selecting it falls back to Layer. |
+| **Layer** | ignores the static/empty buffers and sends only the layer that changes. Stable for layered games, but its frame rate can be lower than the game's. |
+
+The global setting is `capture_mode` in `config.ini`. Per-title overrides live
+in `sdmc:/config/switch-frame-tap/capture.ini`:
+
+```ini
+# <title id> = auto | standard | composite | layer
+01006c300e9f0000 = layer
+```
+
+The manager app and the overlay edit both files; the overlay applies the
+current game's mode on the next stream without a reboot. Overrides win over
+the global setting. The manager's whole-file rewrite of `config.ini` never
+touches `capture.ini`.
 
 ### Sound in games that block recording
 

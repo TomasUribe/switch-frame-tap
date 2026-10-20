@@ -136,62 +136,67 @@ int main() {
     }
 
     /* M98: the release config */
-    ExpectRelease("", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
-    ExpectRelease("# comment\nquality = medium\n", "vic exec dbg usb live nvqp=24 nvgop=60 wait=20 audio");
-    ExpectRelease("[stream]\r\nquality=low\r\nkeyframe_interval = 30\r\nmax_resolution = 720\r\n", "vic exec dbg usb live nvqp=28 nvgop=30 wait=20 cap720 audio");
-    ExpectRelease("quality=high\nqp=22\nstart_delay=5\n", "vic exec dbg usb live nvqp=22 nvgop=60 wait=5 audio");
-    ExpectRelease("qp=99\nkeyframe_interval=0\nstart_delay=-3\nmax_resolution=4k\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
-    ExpectRelease("; quality=low\n#qp=30\nallow_untested_firmware = 1", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 anyfw audio");
-    ExpectRelease("myquality=low\nquality_x=low\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("# comment\nquality = medium\n", "vic exec dbg usb live capture=auto nvqp=24 nvgop=60 wait=20 audio");
+    ExpectRelease("[stream]\r\nquality=low\r\nkeyframe_interval = 30\r\nmax_resolution = 720\r\n", "vic exec dbg usb live capture=auto nvqp=28 nvgop=30 wait=20 cap720 audio");
+    ExpectRelease("quality=high\nqp=22\nstart_delay=5\n", "vic exec dbg usb live capture=auto nvqp=22 nvgop=60 wait=5 audio");
+    ExpectRelease("qp=99\nkeyframe_interval=0\nstart_delay=-3\nmax_resolution=4k\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("; quality=low\n#qp=30\nallow_untested_firmware = 1", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 anyfw audio");
+    ExpectRelease("myquality=low\nquality_x=low\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
     /* v0.3: audio is on unless audio = 0 */
-    ExpectRelease("audio = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
-    ExpectRelease("audio = 1\nquality = low\n", "vic exec dbg usb live nvqp=28 nvgop=60 wait=20 audio");
+    ExpectRelease("audio = 0\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20");
+    ExpectRelease("audio = 1\nquality = low\n", "vic exec dbg usb live capture=auto nvqp=28 nvgop=60 wait=20 audio");
     /* v0.4: webcam mode */
-    ExpectRelease("usb_mode = webcam\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio uvc");
-    ExpectRelease("usb_mode = viewer\naudio = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20");
-    ExpectRelease("usb_mode = Webcam2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("usb_mode = webcam\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio uvc");
+    ExpectRelease("usb_mode = viewer\naudio = 0\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20");
+    ExpectRelease("usb_mode = Webcam2\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
     /* v0.6: the bitrate experiment */
-    ExpectRelease("encoder_test = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio nvab");
+    ExpectRelease("encoder_test = 1\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio nvab");
     /* v0.7: the network transport */
-    ExpectRelease("network = 1\nquality = medium\n", "vic exec dbg net live nvqp=24 nvgop=60 wait=20 audio");
-    ExpectRelease("homebrew = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio nohb");
+    ExpectRelease("network = 1\nquality = medium\n", "vic exec dbg net live capture=auto nvqp=24 nvgop=60 wait=20 audio");
+    ExpectRelease("homebrew = 0\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio nohb");
     /* v0.7: one connection at a time */
-    ExpectRelease("connection = network\n", "vic exec dbg net live nvqp=20 nvgop=60 wait=20 audio");
-    ExpectRelease("connection = webcam\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio uvc");
+    ExpectRelease("connection = network\n", "vic exec dbg net live capture=auto nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("connection = webcam\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio uvc");
     /* v0.7.7: the uncompressed webcam */
-    ExpectRelease("connection = webcam-any\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio uvc uvcraw");
-    ExpectRelease("usb_mode = webcam\nconnection = webcam-any\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio uvc uvcraw");
-    ExpectRelease("connection = webcam-anything\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
-    ExpectRelease("connection = usb\nusb_mode = webcam\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
-    ExpectRelease("usb_mode = webcam\nconnection = network\n", "vic exec dbg net live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("connection = webcam-any\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio uvc uvcraw");
+    ExpectRelease("usb_mode = webcam\nconnection = webcam-any\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio uvc uvcraw");
+    ExpectRelease("connection = webcam-anything\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("connection = usb\nusb_mode = webcam\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("usb_mode = webcam\nconnection = network\n", "vic exec dbg net live capture=auto nvqp=20 nvgop=60 wait=20 audio");
     /* M99: screenshots */
-    ExpectRelease("screenshot = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
-    ExpectRelease("screenshot = 1\nscreenshot_buttons = 2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=2 audio");
-    ExpectRelease("screenshot = 0\nscreenshot_buttons = 2\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
-    ExpectRelease("screenshot = 1\nscreenshot_buttons = 9\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
+    ExpectRelease("screenshot = 1\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
+    ExpectRelease("screenshot = 1\nscreenshot_buttons = 2\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 shot shotkey=2 audio");
+    ExpectRelease("screenshot = 0\nscreenshot_buttons = 2\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("screenshot = 1\nscreenshot_buttons = 9\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
     /* a comment word must not arm a flag the way an arm-file token would */
-    ExpectRelease("# grc dump nvp\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("# grc dump nvp\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
     /* default on; only detach_on_home=0 emits nodethome */
-    ExpectRelease("detach_on_home = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio nodethome");
+    ExpectRelease("detach_on_home = 0\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio nodethome");
     /* v0.7.12: early collection (PR #12) - on by default, 0 or ab emit a token */
-    ExpectRelease("early_collect = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio earlyoff");
-    ExpectRelease("early_collect = ab\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio earlyab");
-    ExpectRelease("early_collect = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("early_collect = 0\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio earlyoff");
+    ExpectRelease("early_collect = ab\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio earlyab");
+    ExpectRelease("early_collect = 1\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
     /* v0.7.12: screen off while streaming */
-    ExpectRelease("screen_off = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio screenoff");
-    ExpectRelease("screen_off = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
-    ExpectRelease("detach_on_home = 0\nscreen_off = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio nodethome screenoff");
+    ExpectRelease("screen_off = 1\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio screenoff");
+    ExpectRelease("screen_off = 0\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("detach_on_home = 0\nscreen_off = 1\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio nodethome screenoff");
     /* v0.7.11: screenshots next to the system's */
-    ExpectRelease("screenshot = 1\nscreenshot_location = album\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 shotalbum audio");
-    ExpectRelease("screenshot = 1\nscreenshot_location = app\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
+    ExpectRelease("screenshot = 1\nscreenshot_location = album\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 shot shotkey=0 shotalbum audio");
+    ExpectRelease("screenshot = 1\nscreenshot_location = app\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
     /* v0.7.11: custom combos (ZR = bit 9 = 512, Down = bit 15 = 32768) */
-    ExpectRelease("screenshot = 1\nscreenshot_buttons = 4\nscreenshot_custom = ZR+Down+Capture\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=4 shotmask=33280 shotcap audio");
-    ExpectRelease("screenshot = 1\nscreenshot_buttons = 4\nscreenshot_custom = zr + down\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=4 shotmask=33280 audio");
-    ExpectRelease("screenshot = 1\nscreenshot_buttons = 4\nscreenshot_custom = Capture\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=4 shotmask=0 shotcap audio");
-    ExpectRelease("screenshot = 1\nscreenshot_buttons = 4\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
-    ExpectRelease("detach_on_home = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("screenshot = 1\nscreenshot_buttons = 4\nscreenshot_custom = ZR+Down+Capture\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 shot shotkey=4 shotmask=33280 shotcap audio");
+    ExpectRelease("screenshot = 1\nscreenshot_buttons = 4\nscreenshot_custom = zr + down\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 shot shotkey=4 shotmask=33280 audio");
+    ExpectRelease("screenshot = 1\nscreenshot_buttons = 4\nscreenshot_custom = Capture\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 shot shotkey=4 shotmask=0 shotcap audio");
+    ExpectRelease("screenshot = 1\nscreenshot_buttons = 4\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 shot shotkey=0 audio");
+    ExpectRelease("detach_on_home = 1\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
     ExpectContains("vic live nodethome wait=20\n", "nodethome", true);
     ExpectContains("vic live wait=20\n", "nodethome", false);
+
+    /* v0.7.15: the global capture mode */
+    ExpectRelease("capture_mode = layer\n", "vic exec dbg usb live capture=layer nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("capture_mode = composite\n", "vic exec dbg usb live capture=composite nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("capture_mode = nonsense\n", "vic exec dbg usb live capture=auto nvqp=20 nvgop=60 wait=20 audio");
 
     std::printf("%s (%d failure%s)\n", g_fail == 0 ? "OK" : "FAILED", g_fail, g_fail == 1 ? "" : "s");
     return g_fail == 0 ? 0 : 1;

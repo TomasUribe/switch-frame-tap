@@ -100,7 +100,7 @@ namespace ams::mitm::applet::slotmatch {
 
         /* true once every slot has a candidate that stands out, each a
          * different one: out[slot] = candidate, *weakest = the lowest score */
-        bool Match(uint8_t *out, int32_t *weakest) const {
+        bool Match(uint8_t *out, int32_t *weakest, bool require_margin = true) const {
             if (nslots < 2) { return false; }
             for (uint32_t s = 0; s < nslots; ++s) { if (tot_in[s] < MinPerSlot || tot_out[s] < MinPerSlot) { return false; } }
             uint8_t m[MaxSlots] = {};
@@ -114,7 +114,7 @@ namespace ams::mitm::applet::slotmatch {
                     if (score > best_score) { second = best_score; best_score = score; best = static_cast<int32_t>(c); }
                     else if (score > second) { second = score; }
                 }
-                if (best < 0 || best_score < MinScore || best_score - second < MinMargin || (used & (UINT64_C(1) << best)) != 0) { return false; }
+                if (best < 0 || best_score < MinScore || (require_margin && best_score - second < MinMargin) || (used & (UINT64_C(1) << best)) != 0) { return false; }
                 m[s] = static_cast<uint8_t>(best);
                 used |= UINT64_C(1) << best;
                 if (best_score < worst) { worst = best_score; }

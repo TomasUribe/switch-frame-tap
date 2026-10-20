@@ -10,6 +10,10 @@
  *                            list, sdmc:/config/switch-frame-tap/excluded.txt
  *   4  SetScreenOff(u8 on) - v0.7.12: "screen off while streaming", now (the
  *                            overlay keeps config.ini's screen_off in step)
+ *   5  SetCaptureMode(u64 title_id, u32 mode) - v0.7.15: Auto/Standard/
+ *                            Compositor/Layer, persisted in capture.ini
+ *   6  GetCaptureInfo() -> CaptureInfo - v0.7.15: the active mode and the
+ *                            conservative Auto probe's counts
  *
  * It runs on its own server thread, never on vi:u's: nothing a client does
  * here can delay the game's binder traffic. Both commands only touch atomics
@@ -42,6 +46,22 @@ namespace ams::mitm::applet {
     };
     static_assert(sizeof(StreamStatus) == 64);
 
+    /* v0.7.15: sftap 6. Kept separate from StreamStatus so older manager and
+     * overlay builds keep reading the same 64 bytes. */
+    struct CaptureInfo {
+        u32 version;       /* 1 */
+        u32 mode;          /* what the session is using */
+        u32 requested;     /* global/override/Auto resolution */
+        u32 candidates;    /* buffers found for the game's swapchain */
+        u32 live;          /* candidates whose contents change */
+        u32 dead;          /* candidates that stayed static/empty */
+        u64 tid;           /* 0: no game override applies */
+        u32 overrides;     /* lines in capture.ini */
+        u32 composite;     /* 1 when the compositor route is available */
+        u32 reserved;
+    };
+    static_assert(sizeof(CaptureInfo) == 48);
+
     /* read the persisted switch; called once at boot, before live mode can start */
     void LoadStreamEnabled();
     /* M98: implemented in applet_mitm_main.cpp, next to the config reader */
@@ -59,6 +79,8 @@ namespace ams::mitm::applet {
     AMS_SF_METHOD_INFO(C, H, 2, Result, ReloadConfig, (), ()) \
     AMS_SF_METHOD_INFO(C, H, 3, Result, SetAppExcluded, (u64 program_id, u8 excluded), (program_id, excluded)) \
     AMS_SF_METHOD_INFO(C, H, 4, Result, SetScreenOff, (u8 on), (on)) \
+    AMS_SF_METHOD_INFO(C, H, 5, Result, SetCaptureMode, (u64 title_id, u32 mode), (title_id, mode)) \
+    AMS_SF_METHOD_INFO(C, H, 6, Result, GetCaptureInfo, (sf::Out<ams::mitm::applet::CaptureInfo> out), (out)) \
     AMS_SF_METHOD_INFO(C, H, 10, Result, Donate, (u64 size, sf::CopyHandle &&tmem), (size, std::move(tmem))) \
     AMS_SF_METHOD_INFO(C, H, 11, Result, DonateFailed, (u32 rc), (rc)) \
     AMS_SF_METHOD_INFO(C, H, 12, Result, Donate2, (u64 size, u64 nv_size, sf::CopyHandle &&tmem, sf::CopyHandle &&nv_tmem), (size, nv_size, std::move(tmem), std::move(nv_tmem))) \

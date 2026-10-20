@@ -29,6 +29,7 @@
 #include <vector>
 #include <functional>
 #include "../../common/sound_patch.hpp"
+#include "../../common/capture_mode.hpp"
 #include "../../tier4/applet-mitm/source/shot_buttons.hpp"
 #include "extras.hpp"
 #include <unordered_map>
@@ -49,6 +50,7 @@ namespace {
     constexpr const char *ConfigIni   = "sdmc:/config/switch-frame-tap/config.ini";
     constexpr const char *StreamOff   = "sdmc:/config/switch-frame-tap/stream-off";
     constexpr const char *ExclFile    = "sdmc:/config/switch-frame-tap/excluded.txt";
+    constexpr const char *CaptureIni  = sftcapture::IniPath;
 
     /* v0.1.1b: the never-attach list (one hex program id per line) */
     size_t CountExcluded() {
@@ -156,6 +158,14 @@ namespace {
         u64 app_tid; u32 app_excluded, reserved3;          /* version 3 (v0.1.1b) */
     };
 
+    /* v0.7.15: sftap 6 */
+    struct CaptureInfo {
+        u32 version, mode, requested, candidates, live, dead;
+        u64 tid;
+        u32 overrides, composite, reserved;
+    };
+    static_assert(sizeof(CaptureInfo) == 48);
+
     Service g_sftap;
     bool g_sftap_open = false;
 
@@ -189,6 +199,48 @@ namespace {
         if (SftapConnect()) { serviceDispatch(&g_sftap, 2); }
     }
 
+    bool SftapCaptureInfo(CaptureInfo *ci) {
+        if (!SftapConnect()) { return false; }
+        if (R_FAILED(serviceDispatchOut(&g_sftap, 6, *ci))) { return false; }
+        return true;
+    }
+
+    std::string ReadTextFile(const char *path) {
+        std::string s;
+        if (FILE *f = std::fopen(path, "rb")) {
+            char b[1024];
+            size_t n;
+            while ((n = std::fread(b, 1, sizeof(b), f)) > 0) { s.append(b, n); }
+            std::fclose(f);
+        }
+        return s;
+    }
+
+    std::vector<sftcapture::Override> LoadCaptureOverridesFile() {
+        std::vector<sftcapture::Override> out(sftcapture::MaxOverrides);
+        const std::string text = ReadTextFile(CaptureIni);
+        out.resize(sftcapture::ParseIni(text.data(), text.size(), out.data(), out.size()));
+        return out;
+    }
+
+    bool SaveCaptureOverridesFile(const std::vector<sftcapture::Override> &ov) {
+        mkdir("sdmc:/config", 0777);
+        mkdir(ConfigDir, 0777);
+        std::string text =
+            "# Switch Frame Tap per-title capture modes - written by the manager app\n"
+            "# <title id> = auto | standard | composite | layer\n";
+        char line[64];
+        for (const auto &o : ov) {
+            const size_t n = sftcapture::FormatLine(line, sizeof(line), o.tid, o.mode);
+            if (n != 0) { text.append(line, n); }
+        }
+        FILE *f = std::fopen(CaptureIni, "wb");
+        if (f == nullptr) { return false; }
+        const bool ok = std::fwrite(text.data(), 1, text.size(), f) == text.size();
+        std::fclose(f);
+        return ok;
+    }
+
     /* ---- settings (config.ini) ------------------------------------------ */
 
     const char *const QualityNames[]  = { "High", "Medium", "Low" };
@@ -219,6 +271,7 @@ namespace {
         std::string early = "1";  /* v0.7.12: early_collect (1 / 0 / ab); kept when saving */
         bool home_menu = false;   /* v0.7.14: stream the HOME menu and system applets too (beta); from the next boot */
         int conn = 0;           /* v0.7: connection - 0 USB (PC viewer), 1 USB webcam, 2 (v0.7.7) USB webcam NV12, 3 network; from the next boot */
+        u32 capture_mode = sftcapture::Auto;   /* v0.7.15: Auto/Standard/Compositor/Layer, overridable per title */
     };
 
     bool IniGet(const std::string &ini, const char *key, std::string *out) {
@@ -266,6 +319,7 @@ namespace {
         if (IniGet(ini, "early_collect", &v) && (v == "0" || v == "1" || v == "ab")) { s.early = v; }
         if (IniGet(ini, "audio", &v)) { s.audio = v != "0"; }
         if (IniGet(ini, "home_menu", &v)) { s.home_menu = v == "1"; }
+        if (IniGet(ini, "capture_mode", &v)) { u32 m = sftcapture::Auto; if (sftcapture::Parse(v.data(), v.size(), &m)) { s.capture_mode = m; } }
         /* the v0.4-v0.7 keys first, then the one that replaced them */
         if (IniGet(ini, "usb_mode", &v) && v == "webcam") { s.conn = 1; }
         if (IniGet(ini, "network", &v) && v == "1") { s.conn = ConnNetwork; }
@@ -316,10 +370,12 @@ namespace {
             "#             network (the PC viewer over Wi-Fi or the dock's LAN port - play docked). Read at boot.\n"
             "connection = %s\n"
             "# home_menu: 1 = also stream the HOME menu and the system applets when no game is on screen (beta). Read at boot.\n"
-            "home_menu = %d\n",
+            "home_menu = %d\n"
+            "# capture_mode: auto | standard | composite | layer. Overrides per title live in capture.ini.\n"
+            "capture_mode = %s\n",
             QualityKeys[s.quality], KeyframeFrames[s.keyframe], s.cap720 ? "720" : "1080",
             DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo, custom, s.shot_album ? "album" : "app", s.detach_home ? 1 : 0, s.screen_off ? 1 : 0, s.early.c_str(),
-            s.audio ? 1 : 0, ConnKeys[s.conn], s.home_menu ? 1 : 0);
+            s.audio ? 1 : 0, ConnKeys[s.conn], s.home_menu ? 1 : 0, sftcapture::Key(s.capture_mode));
         std::fclose(f);
         return true;
     }
@@ -400,6 +456,10 @@ namespace {
         bool stream_file_on = true;
         size_t shot_files = 0, excluded = 0;
         bool confirm_clear = false;
+        bool confirm_capture_clear = false;                 /* v0.7.15: two-step clear of capture.ini */
+        std::vector<sftcapture::Override> capture_overrides = LoadCaptureOverridesFile();
+        CaptureInfo ci = {};
+        bool have_ci = false;
         sftsound::State sound = sftsound::State::Missing;   /* v0.7.4: the bundled dvr-patches */
         int confirm_extra = -1;                              /* v0.7.5: the Get extras row waiting for its second A */
         bool sound_changed = false;                          /* toggled since this app started: a restart applies it */
@@ -420,6 +480,7 @@ namespace {
             sound = sftsound::Get();
             running = ModuleRunning();
             have_status = running && SftapStatus(&st);
+            have_ci = running && SftapCaptureInfo(&ci);
         }
 
         void Toast(const std::string &s) { toast = s; toast_frames = 180; }
@@ -437,6 +498,13 @@ namespace {
             if (!SaveSettings(set)) { Toast("Could not write config.ini"); return; }
             if (test_install) { Toast("Saved - but a test arm file is installed, so the sysmodule ignores config.ini"); return; }
             if (have_status) { SftapReload(); Toast("Saved - the stream picks it up right away"); }
+            else { Toast("Saved - used from the next boot"); }
+        }
+
+        void SaveCaptureOverrides() {
+            if (!SaveCaptureOverridesFile(capture_overrides)) { Toast("Could not write capture.ini"); return; }
+            if (test_install) { Toast("Saved - a test install reads capture.ini at boot"); return; }
+            if (have_status) { SftapReload(); Toast("Saved - the next stream uses it"); }
             else { Toast("Saved - used from the next boot"); }
         }
 
@@ -640,6 +708,49 @@ namespace {
                 "System Settings, the user picker, Controllers, My Page, the Album and the Homebrew Menu. "
                 "No sound outside games yet. Beta: off by default, and a reboot applies it." });
 
+            rows.push_back({ Kind::Header, "Capture", nullptr, nullptr, nullptr, "" });
+            rows.push_back({ Kind::Setting, "Capture mode", [this] { return std::string(sftcapture::Label(set.capture_mode)); }, nullptr,
+                [this](int d) { set.capture_mode = (set.capture_mode + (d > 0 ? 1u : 3u)) % 4u; Saved(); },
+                "How the sysmodule gets the picture. Auto (default) starts with the game's swapchain and, if it sees a game "
+                "that draws in layers, switches to Layer (or Compositor when that route is available). Standard always reads "
+                "the game's swapchain. Compositor reads the final screen; not available in this build yet, so it falls back "
+                "to Layer. Layer sends only the part of the picture that changes - stable, but it can be slower. "
+                "Per-title overrides are listed below and win over this setting." });
+            if (have_ci && ci.tid != 0) {
+                rows.push_back({ Kind::Info, "This game", [this] {
+                        char b[64];
+                        std::snprintf(b, sizeof(b), "%s%s", sftcapture::Label(ci.mode),
+                                      ci.live || ci.dead ? "" : " (waiting for frames)");
+                        return std::string(b);
+                    }, [this] { return ci.live != 0 && ci.dead != 0 ? ColWarn : ColGood; }, nullptr,
+                    "The mode the running game is using. A Layer fallback is expected for a game that draws several surfaces." });
+            }
+            if (!capture_overrides.empty()) {
+                rows.push_back({ Kind::Header, "Capture overrides", nullptr, nullptr, nullptr, "" });
+                for (size_t i = 0; i < capture_overrides.size(); ++i) {
+                    const size_t oi = i;
+                    char label[48];
+                    std::snprintf(label, sizeof(label), "%016llx", static_cast<unsigned long long>(capture_overrides[oi].tid));
+                    rows.push_back({ Kind::Setting, label, [this, oi] { return std::string(sftcapture::Label(capture_overrides[oi].mode)); }, nullptr,
+                        [this, oi](int d) {
+                            capture_overrides[oi].mode = (capture_overrides[oi].mode + (d > 0 ? 1u : 3u)) % 4u;
+                            SaveCaptureOverrides();
+                        },
+                        "Per-title mode from sdmc:/config/switch-frame-tap/capture.ini. Auto follows the global setting and "
+                        "detects multi-surface games; Standard, Compositor and Layer force that route for this title." });
+                }
+                rows.push_back({ Kind::Setting, "Clear capture overrides", [this] { return std::string(confirm_capture_clear ? "Press A to clear" : "A"); },
+                    [this] { return confirm_capture_clear ? ColWarn : ColText; }, [this](int) {
+                        if (!confirm_capture_clear) { confirm_capture_clear = true; return; }
+                        confirm_capture_clear = false;
+                        capture_overrides.clear();
+                        SaveCaptureOverrides();
+                        Build();
+                        Toast("Capture overrides cleared");
+                    },
+                    "Removes every per-title mode; every game follows Capture mode above." });
+            }
+
             rows.push_back({ Kind::Header, "Picture", nullptr, nullptr, nullptr, "" });
             rows.push_back({ Kind::Setting, "Quality", [this] { return std::string(QualityNames[set.quality]); }, nullptr,
                 [this](int d) { set.quality = (set.quality + (d > 0 ? 1 : 2)) % 3; Saved(); },
@@ -814,6 +925,7 @@ namespace {
 
         void Move(int d) {
             confirm_clear = false;
+            confirm_capture_clear = false;
             confirm_extra = -1;
             int i = sel;
             do { i += d; } while (i >= 0 && i < static_cast<int>(rows.size()) && !Selectable(i));

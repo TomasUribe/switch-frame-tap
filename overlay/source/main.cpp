@@ -22,6 +22,7 @@
 #include <cstring>
 #include "../../common/sound_patch.hpp"
 #include "../../common/config_ini.hpp"
+#include "../../common/capture_mode.hpp"
 
 namespace {
 
@@ -33,6 +34,14 @@ namespace {
         u64 app_tid; u32 app_excluded, reserved3;          /* version 3 (v0.1.1b) */
     };
     static_assert(sizeof(StreamStatus) == 64);
+
+    /* v0.7.15: sftap 6 */
+    struct CaptureInfo {
+        u32 version, mode, requested, candidates, live, dead;
+        u64 tid;
+        u32 overrides, composite, reserved;
+    };
+    static_assert(sizeof(CaptureInfo) == 48);
 
     enum : u32 {
         LiveState_Starting = 0, LiveState_Off, LiveState_WaitViewer, LiveState_WaitGame,
@@ -96,6 +105,17 @@ namespace {
         if (!SftapConnect()) { return; }
         const u8 v = on ? 1 : 0;
         serviceDispatchIn(&g_sftap, 1, v);
+    }
+
+    bool SftapCaptureInfo(CaptureInfo *ci) {
+        if (!SftapConnect()) { return false; }
+        return R_SUCCEEDED(serviceDispatchOut(&g_sftap, 6, *ci));
+    }
+
+    void SftapSetCaptureMode(u64 tid, u32 mode) {
+        if (!SftapConnect() || tid == 0) { return; }
+        const struct { u64 tid; u32 mode; u32 pad; } in = { tid, mode, 0 };
+        serviceDispatchIn(&g_sftap, 5, in);
     }
 
     /* ---- ReverseNX-RT, through SaltyNX ---------------------------------- */
@@ -259,6 +279,23 @@ namespace {
                     return false;
                 });
                 list->addItem(m_app);
+
+                list->addItem(new tsl::elm::CategoryHeader("Capture mode (this game)"));
+                for (u32 i = 0; i < 4; ++i) {
+                    auto *item = new tsl::elm::ListItem(sftcapture::Label(i));
+                    const u32 mode = i;
+                    item->setClickListener([this, mode](u64 keys) {
+                        if ((keys & HidNpadButton_A) && m_have && m_st.version >= 3 && m_st.app_tid != 0) {
+                            SftapSetCaptureMode(m_st.app_tid, mode);
+                            m_tick = 0;
+                            return true;
+                        }
+                        return false;
+                    });
+                    m_caps[mode] = item;
+                    list->addItem(item);
+                }
+
                 {
                     /* libtesla keeps sdmc unmounted: mount it around each access
                      * (v0.7.13-test2: the setting was applied but never saved) */
@@ -323,6 +360,7 @@ namespace {
         private:
             void Refresh() {
                 m_have = SftapStatus(&m_st);
+                m_have_ci = m_have && SftapCaptureInfo(&m_ci);
                 m_status = StatusText(m_have, m_st);
                 if (m_have && m_st.state == LiveState_Streaming && m_st.game_fps_x10 != 0) {
                     char b[64];
@@ -338,6 +376,11 @@ namespace {
                 if (m_toggle != nullptr && m_have && m_toggle->getState() != (m_st.enabled != 0)) {
                     m_toggle->setState(m_st.enabled != 0);
                 }
+                for (u32 i = 0; i < 4; ++i) {
+                    if (m_caps[i] == nullptr) { continue; }
+                    if (!m_have_ci || m_st.version < 3 || m_st.app_tid == 0) { m_caps[i]->setValue("-", true); }
+                    else { m_caps[i]->setValue(m_ci.mode == i ? "Active" : "", false); }
+                }
                 const Mode cur = CurrentMode();
                 for (int i = 1; i <= 3; ++i) {
                     if (m_modes[i] == nullptr) { continue; }
@@ -347,11 +390,14 @@ namespace {
             }
 
             StreamStatus m_st = {};
+            CaptureInfo m_ci = {};
             bool m_have = false;
+            bool m_have_ci = false;
             u32 m_tick = 0;
             std::string m_status, m_game;
             tsl::elm::ToggleListItem *m_toggle = nullptr;
             tsl::elm::ListItem *m_app = nullptr;
+            tsl::elm::ListItem *m_caps[4] = {};
             tsl::elm::ListItem *m_modes[4] = {};
             tsl::elm::ToggleListItem *m_patch = nullptr;
             PatchState m_patch_state = PatchState::Missing;

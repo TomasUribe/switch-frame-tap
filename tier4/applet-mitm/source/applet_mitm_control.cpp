@@ -8,6 +8,7 @@
 #include "applet_mitm_shot.hpp"
 #include "applet_mitm_audio.hpp"
 #include "applet_mitm_uisource.hpp"
+#include "applet_mitm_capture.hpp"
 
 namespace ams::mitm::applet {
 
@@ -88,6 +89,29 @@ namespace ams::mitm::applet {
                 Result ReloadConfig() {
                     ReloadReleaseConfig();
                     LoadExcluded();
+                    R_SUCCEED();
+                }
+
+                /* v0.7.15: the overlay's mode picker. The sysmodule owns
+                 * capture.ini, so the setting survives a manager rewrite. */
+                Result SetCaptureMode(u64 title_id, u32 mode) {
+                    ::ams::mitm::applet::SetCaptureMode(title_id, mode);
+                    R_SUCCEED();
+                }
+
+                Result GetCaptureInfo(sf::Out<CaptureInfo> out) {
+                    CaptureInfo ci = {};
+                    ci.version   = 1;
+                    ci.mode      = g_capture_mode_active.load(std::memory_order_relaxed);
+                    ci.requested = g_capture_mode_requested.load(std::memory_order_relaxed);
+                    ci.candidates = g_capture_ncand.load(std::memory_order_relaxed);
+                    ci.live      = g_capture_live_cands.load(std::memory_order_relaxed);
+                    ci.dead      = g_capture_dead_cands.load(std::memory_order_relaxed);
+                    ci.tid       = g_capture_tid.load(std::memory_order_relaxed);
+                    ci.composite = CompositeCaptureAvailable() ? 1u : 0u;
+                    sftcapture::Override ov[sftcapture::MaxOverrides] = {};
+                    ci.overrides = static_cast<u32>(CaptureOverrides(ov, sftcapture::MaxOverrides));
+                    out.SetValue(ci);
                     R_SUCCEED();
                 }
 

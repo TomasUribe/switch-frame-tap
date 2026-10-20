@@ -24,6 +24,7 @@
 #include "applet_mitm_armfile.hpp"
 #include "applet_mitm_clk.hpp"
 #include "applet_mitm_control.hpp"
+#include "applet_mitm_capture.hpp"
 #include "applet_mitm_shot.hpp"
 #include "applet_mitm_audio.hpp"
 #include "applet_mitm_uvc.hpp"
@@ -652,6 +653,16 @@ namespace ams {
             mitm::applet::g_nvstream_gop  = mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "nvgop", 0);
             mitm::applet::g_cap720_armed  = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "cap720");
             mitm::applet::g_anyfw_armed   = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "anyfw");
+            {
+                const char *cv = nullptr; size_t cn = 0;
+                u32 cm = sftcapture::Auto;
+                if (mitm::applet::armfile::FindToken(g_arm_buf, g_arm_len, "capture", &cv, &cn) &&
+                    sftcapture::Parse(cv, cn, &cm)) {
+                    mitm::applet::SetCaptureDefault(cm);
+                } else {
+                    mitm::applet::SetCaptureDefault(sftcapture::Auto);
+                }
+            }
             mitm::applet::g_shot_enabled.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "shot"));
             mitm::applet::g_shot_combo.store(std::min(mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "shotkey", 0), 4u));
             mitm::applet::g_shot_mask.store(mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "shotmask", 0) & sft::shotbuttons::AllButtons);
@@ -1187,6 +1198,17 @@ namespace ams {
                                          mitm::applet::g_stream_h == 0);
         mitm::applet::g_stream_frames = ArmFileNumber("sframes", 600);
         mitm::applet::g_probe_delay_s = ArmFileNumber("wait", 120);
+        {
+            const char *cv = nullptr; size_t cn = 0;
+            u32 cm = sftcapture::Auto;
+            if (mitm::applet::armfile::FindToken(g_arm_buf, g_arm_len, "capture", &cv, &cn) &&
+                sftcapture::Parse(cv, cn, &cm)) {
+                mitm::applet::SetCaptureDefault(cm);
+            } else {
+                mitm::applet::SetCaptureDefault(sftcapture::Auto);
+            }
+            mitm::applet::LoadCaptureConfig();
+        }
         mitm::applet::LogLine("ARMED FLAGS: vic=%d exec=%d dbg=%d dump=%d usb=%d bench=%d nvenc=%d "
                               "jpg=%d sweep=%d mtx=%d stream=%d grc=%d grcscan=%d clk=%d jpgdec=%d nvgrc=%d csc=%d nvframe=%d(%u) nvstream=%d(%u, qp %u, gop %u) nvp=%d(%u) live=%d nv1080=%d(%u) wait=%u",
                               mitm::applet::g_vic_armed, mitm::applet::g_vic_execute,
@@ -1366,6 +1388,7 @@ namespace ams::mitm::applet {
         ::ams::g_arm_loaded = false;
         ::ams::LoadArm();
         ::ams::ApplySessionSettings();
+        LoadCaptureConfig();
         LogLine("sftap: config reloaded -> %.*s", static_cast<int>(::ams::g_arm_len), ::ams::g_arm_buf);
         g_reconfig_request.store(true, std::memory_order_relaxed);
     }
