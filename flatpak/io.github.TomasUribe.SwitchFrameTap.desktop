@@ -7,3 +7,6 @@ PrefersNonDefaultGPU=true
 Icon=io.github.TomasUribe.SwitchFrameTap
 Terminal=false
 Categories=Game;
+StartupNotify=true
+X-KDE-StartupNotify=true
+Keywords=Switch;Nintendo;stream;viewer;game;

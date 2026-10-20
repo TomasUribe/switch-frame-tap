@@ -17,6 +17,9 @@ DESK="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")/switch-frame-t
 
 if [ "$1" = "--remove" ]; then
     rm -f "$BIN" "$ICON" "$APPS" "$DESK"
+    update-desktop-database "$(dirname "$APPS")" 2>/dev/null || true
+    gtk-update-icon-cache -q "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+    command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 --noincremental 2>/dev/null || true
     echo "removed"
     exit 0
 fi
@@ -39,11 +42,16 @@ Icon=$ICON
 Terminal=false
 Categories=Game;
 StartupNotify=true
+X-KDE-StartupNotify=true
+Keywords=Switch;Nintendo;stream;viewer;game;
 EOF
 chmod 755 "$APPS"
 install -m 755 "$APPS" "$DESK"
 # GNOME's desktop only launches files marked trusted ("Allow Launching")
 gio set "$DESK" metadata::trusted true 2>/dev/null || true
 update-desktop-database "$(dirname "$APPS")" 2>/dev/null || true
+gtk-update-icon-cache -q "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 --noincremental 2>/dev/null || true
 echo "installed: $BIN"
 echo "launcher:  $DESK (and in the applications menu)"
+echo "log:       ${XDG_STATE_HOME:-$HOME/.local/state}/switch-frame-tap/viewer.log"

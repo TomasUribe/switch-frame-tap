@@ -40,7 +40,11 @@
  *   ./raw-view --app           # M97: the desktop launcher's mode - the window opens at
  *                              # once, waits for the Switch, reconnects whenever it comes
  *                              # back, and only closes when you close it. F11 or a
- *                              # double-click toggles fullscreen.
+ *                              # double-click toggles fullscreen. On Linux it logs to
+ *                              # $XDG_STATE_HOME/switch-frame-tap/viewer.log.
+ *   ./raw-view --check         # v0.7.14: session, video/audio driver, udev, USB, network
+ *   ./raw-view --check --net 192.168.1.23   # also test the console's TCP 9950 stream
+ *   ./raw-view --video-driver wayland       # force wayland (or x11) for this run
  *
  * Decoding: v0.7.11 decodes on one thread by default (no decoder delay):
  * since v0.6 the stream is P frames at ~2-15 Mbps, a few ms per frame on one
@@ -75,10 +79,13 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <time.h>
 #endif
 #include <SDL2/SDL.h>
 #ifdef SFT_H264
 #include <libavcodec/avcodec.h>
+#include <libavutil/error.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
@@ -112,11 +119,91 @@ static const char *g_shot = NULL;    /* --shot: save the last frame drawn (overl
 static const char *g_mp4 = NULL;     /* --mp4 FILE: record into FILE from the start (tests) */
 static const char *g_rec_dir = NULL; /* --rec-dir DIR: where R saves (default Videos/Switch Frame Tap) */
 static int g_win_w = 0, g_win_h = 0;  /* --window WxH: keep the window this size (tests) */
+static const char *g_video_driver = NULL; /* --video-driver: wayland, x11, ... */
 #ifdef __APPLE__   /* v0.7.11 (DiM3NT0R, PR #12): Retina - the picture at the screen's real pixels */
 #define VIDEO_WINDOW_FLAGS (SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI)
 #else
 #define VIDEO_WINDOW_FLAGS (SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE)
 #endif
+
+/* v0.7.14: a window that stops presenting must not become KWin's "not
+ * responding" dialog. The watchdog sees the display loop stop beating and
+ * closes the process after 15 s, leaving the cause in the log. */
+static volatile Uint64 g_loop_beat = 0;
+static volatile int g_watchdog_stop = 0;
+static SDL_Thread *g_watchdog = NULL;
+static void beat(void) { g_loop_beat = SDL_GetPerformanceCounter(); }
+static int watchdog_main(void *arg)
+{
+    (void)arg;
+    const Uint64 freq = SDL_GetPerformanceFrequency();
+    while (!g_watchdog_stop) {
+        SDL_Delay(1000);
+        const Uint64 last = g_loop_beat;
+        if (last && (double)(SDL_GetPerformanceCounter() - last) * 1000.0 / (double)freq > 15000.0) {
+            fprintf(stderr, "\ndisplay: the window stopped presenting for 15 s - closing the viewer (video driver: %s)\n",
+                    SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "?");
+            fflush(stderr);
+            _Exit(3);
+        }
+    }
+    return 0;
+}
+static void watchdog_start(void)
+{
+    if (g_watchdog) return;
+    g_watchdog_stop = 0;
+    g_loop_beat = SDL_GetPerformanceCounter();
+    g_watchdog = SDL_CreateThread(watchdog_main, "display-watchdog", NULL);
+}
+static void watchdog_stop(void)
+{
+    if (!g_watchdog) return;
+    g_watchdog_stop = 1;
+    SDL_WaitThread(g_watchdog, NULL);
+    g_watchdog = NULL;
+}
+
+/* v0.7.14: on KDE Wayland the release's static SDL could fall back to X11
+ * (XWayland); its GLX/DRI3 present path is what froze the window on the
+ * author's 165 Hz desktop. Prefer the session's own Wayland driver, keep an
+ * explicit SDL_VIDEODRIVER/SFT_VIDEO_DRIVER override, and fall back to SDL's
+ * default if Wayland cannot start. */
+static int video_init(void)
+{
+    const char *explicit = g_video_driver;
+    if (!explicit || !explicit[0]) explicit = getenv("SFT_VIDEO_DRIVER");
+#ifndef _WIN32
+    const int user_env = getenv("SDL_VIDEODRIVER") != NULL;
+    int forced = 0;
+    if (explicit && explicit[0]) {
+        setenv("SDL_VIDEODRIVER", explicit, 1);
+        forced = 1;
+    } else if (!user_env) {
+        const char *sess = getenv("XDG_SESSION_TYPE");
+        if (sess && !strcmp(sess, "wayland") && getenv("WAYLAND_DISPLAY")) {
+            setenv("SDL_VIDEODRIVER", "wayland", 1);
+            forced = 1;
+        }
+    }
+#else
+    (void)explicit;
+    const int forced = 0;
+#endif
+    SDL_SetHint(SDL_HINT_APP_NAME, "Switch Frame Tap");
+    int rc = SDL_Init(SDL_INIT_VIDEO);
+    if (rc != 0 && forced) {
+        fprintf(stderr, "video: the requested driver failed (%s) - trying SDL's default\n", SDL_GetError());
+#ifndef _WIN32
+        unsetenv("SDL_VIDEODRIVER");
+#endif
+        SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "1");
+        rc = SDL_Init(SDL_INIT_VIDEO);
+    }
+    if (rc == 0) fprintf(stderr, "video: driver %s\n", SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "?");
+    else fprintf(stderr, "video: SDL_Init failed: %s\n", SDL_GetError());
+    return rc;
+}
 
 /* v0.7.11 (DiM3NT0R, PR #12): the window at the picture's size, but never
  * bigger than the screen (a 1080p stream on a 1366x768 laptop) */
@@ -343,6 +430,53 @@ static void prefs_save(void)
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
     fclose(f);
 }
+
+#if defined(__linux__)
+/* v0.7.14: a launcher-started viewer has no terminal. Keep the same log the
+ * Windows app writes, under $XDG_STATE_HOME (normally ~/.local/state). The
+ * previous run is kept as viewer.prev.log, so a crash survives a relaunch. */
+static void log_mkdir(const char *path)
+{
+    char tmp[1024];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = 0;
+        mkdir(tmp, 0755);
+        *p = '/';
+    }
+    mkdir(tmp, 0755);
+}
+
+static void viewer_log_init(void)
+{
+    const char *state = getenv("XDG_STATE_HOME");
+    const char *home = getenv("HOME");
+    char dir[1024], path[1200], prev[1200];
+    if (state && state[0]) snprintf(dir, sizeof(dir), "%s/switch-frame-tap", state);
+    else if (home && home[0]) snprintf(dir, sizeof(dir), "%s/.local/state/switch-frame-tap", home);
+    else return;
+    log_mkdir(dir);
+    snprintf(path, sizeof(path), "%s/viewer.log", dir);
+    snprintf(prev, sizeof(prev), "%s/viewer.prev.log", dir);
+    remove(prev);
+    rename(path, prev);
+    FILE *f = freopen(path, "w", stderr);
+    if (!f) return;
+    setvbuf(stderr, NULL, _IONBF, 0);
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    char when[64];
+    strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tm);
+    fprintf(stderr, "Switch Frame Tap viewer log\nwhen: %s\nsession: %s  desktop: %s\nwayland: %s  display: %s\n",
+            when,
+            getenv("XDG_SESSION_TYPE") ? getenv("XDG_SESSION_TYPE") : "?",
+            getenv("XDG_CURRENT_DESKTOP") ? getenv("XDG_CURRENT_DESKTOP") : "?",
+            getenv("WAYLAND_DISPLAY") ? getenv("WAYLAND_DISPLAY") : "-",
+            getenv("DISPLAY") ? getenv("DISPLAY") : "-");
+}
+#endif
 
 static void sock_nonblock(sock_t s, int on)
 {
@@ -758,7 +892,10 @@ static const enum AVHWDeviceType h264_hw_order[] = {
 #elif defined(__APPLE__)
     AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
 #else
-    AV_HWDEVICE_TYPE_CUDA, AV_HWDEVICE_TYPE_VAAPI,
+    /* v0.7.14: VAAPI first on Linux. On AMD/Intel CUDA is not there and the
+     * failed probe is wasted; on NVIDIA without nvidia-vaapi-driver VAAPI
+     * fails quickly and NVDEC is still tried. */
+    AV_HWDEVICE_TYPE_VAAPI, AV_HWDEVICE_TYPE_CUDA,
 #endif
 };
 
@@ -787,6 +924,7 @@ static int h264_open(h264_t *d, int low_latency, int threads, int hw)
 {
     const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_H264);
     if (!codec) return -1;
+    const int want_low = low_latency;
     d->c = avcodec_alloc_context3(codec);
     d->pkt = av_packet_alloc();
     d->frm = av_frame_alloc();
@@ -823,8 +961,33 @@ static int h264_open(h264_t *d, int low_latency, int threads, int hw)
         d->c->thread_count = threads;        /* 0 = one per core */
         d->c->thread_type = FF_THREAD_FRAME;
     }
-    const int rc = avcodec_open2(d->c, codec, NULL);
+    int rc = avcodec_open2(d->c, codec, NULL);
+    if (rc < 0 && d->hwfmt != AV_PIX_FMT_NONE) {
+        char err[128];
+        av_strerror(rc, err, sizeof(err));
+        fprintf(stderr, "decode: %s could not open the stream (%s) - software\n", d->hwname ? d->hwname : "GPU", err);
+        avcodec_free_context(&d->c);
+        av_buffer_unref(&d->hwdev);
+        d->hwfmt = AV_PIX_FMT_NONE;
+        d->hwname = NULL;
+        d->c = avcodec_alloc_context3(codec);
+        if (!d->c) return -1;
+        low_latency = want_low;
+        if (low_latency) {
+            d->c->flags |= AV_CODEC_FLAG_LOW_DELAY;
+            d->c->thread_count = 1;
+        } else {
+            d->c->thread_count = threads;
+            d->c->thread_type = FF_THREAD_FRAME;
+        }
+        rc = avcodec_open2(d->c, codec, NULL);
+    }
     if (rc == 0) fprintf(stderr, "decode: %s\n", d->hwname ? d->hwname : "software");
+    else {
+        char err[128];
+        av_strerror(rc, err, sizeof(err));
+        fprintf(stderr, "decode: no H.264 decoder (%s)\n", err);
+    }
     return rc;
 }
 
@@ -1119,6 +1282,32 @@ static int switch_on_bus(libusb_context *ctx, int *open_err)
     return found;
 }
 
+/* v0.7.14: the console can present another USB gadget first. SysDVR is the
+ * common one (18d1:4ee0): its module owns usb:ds, so the viewer waits forever
+ * for a 1209:5f1e that will never appear. Say which program is in the way. */
+static int conflict_on_bus(libusb_context *ctx, char *out, size_t cap)
+{
+    libusb_device **list = NULL;
+    const ssize_t n = libusb_get_device_list(ctx, &list);
+    int found = 0;
+    out[0] = 0;
+    for (ssize_t i = 0; i < n && !found; i++) {
+        struct libusb_device_descriptor dd;
+        if (libusb_get_device_descriptor(list[i], &dd) != 0) continue;
+        if (dd.idVendor != 0x18d1 || dd.idProduct != 0x4ee0) continue;
+        char product[96] = "";
+        libusb_device_handle *h = NULL;
+        if (libusb_open(list[i], &h) == 0) {
+            if (dd.iProduct) libusb_get_string_descriptor_ascii(h, dd.iProduct, (unsigned char *)product, sizeof(product));
+            libusb_close(h);
+        }
+        snprintf(out, cap, "%s", product[0] ? product : "SysDVR (18d1:4ee0)");
+        found = 1;
+    }
+    if (list) libusb_free_device_list(list, 1);
+    return found;
+}
+
 static void app_title_cannot_open(SDL_Window *win, int err)
 {
     char t[256];
@@ -1142,6 +1331,7 @@ static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *r
     for (int tick = 0;; tick++) {
         /* v0.5: the menu, redrawn often enough for the keys and the REC timer;
          * the bus is looked at every 250 ms as before */
+        beat();
         app_events(win, ren, tex);
         if (g_quit) { finder_stop(); return 0; }
         g_lost = 0;                        /* a Tab while waiting is not a disconnect */
@@ -1177,8 +1367,26 @@ static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *r
             said = 1;
         } else {
             int err = 0;
-            if (switch_on_bus(ctx, &err)) { app_title_cannot_open(win, err); said = 1; }
-            else if (said) { SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)"); said = 0; g_menu_state = MENU_WAITING; }
+            char other[96];
+            if (switch_on_bus(ctx, &err)) {
+                if (said != 1) fprintf(stderr, "usb: the Switch is present but cannot be opened (%s)\n", libusb_error_name(err));
+                app_title_cannot_open(win, err);
+                said = 1;
+            } else if (conflict_on_bus(ctx, other, sizeof(other))) {
+                snprintf(g_menu_other, sizeof(g_menu_other), "%s", other);
+                if (said != 2) {
+                    fprintf(stderr, "usb: the Switch is presenting %s, not Switch Frame Tap - remove/disable that program and reboot\n", other);
+                    char t[220];
+                    snprintf(t, sizeof(t), "Switch Frame Tap - the Switch is presenting %s, not Switch Frame Tap", other);
+                    SDL_SetWindowTitle(win, t);
+                }
+                g_menu_state = MENU_WRONG_DEVICE;
+                said = 2;
+            } else if (said) {
+                SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)");
+                said = 0;
+                g_menu_state = MENU_WAITING;
+            }
         }
         menu_draw(ren);
         SDL_Delay(50);
@@ -1318,7 +1526,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     else g_dec_mode = low_latency ? "1 thread" : "frame threads (--threads)";
     fprintf(stderr, "decode: %s\n", dec.hwname ? g_dec_name : low_latency ? "one thread, no decoder delay" : "frame threads (--threads)");
     if (!win) {
-        if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+        if (video_init() != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
         SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
         win = SDL_CreateWindow("Switch Frame Tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -1326,6 +1534,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
         ren = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : NULL;
         if (!ren) { fprintf(stderr, "SDL window: %s\n", SDL_GetError()); return 1; }
     }
+    watchdog_start();
     /* v0.3: the sound device (opened paused; audio_packet starts it) */
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
         SDL_AudioSpec want = {0}, have = {0};
@@ -1364,6 +1573,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     char title[512];
 
     while (!g_quit) {
+        beat();
         app_events(win, ren, tex);
         if (g_ren_swap) {                      /* v0.7.11: the upscaler wants the other renderer */
             ren_swap(&win, &ren, &tex);
@@ -1569,6 +1779,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     if (es) fclose(es);
     if (tex) SDL_DestroyTexture(tex);
     up_reset();
+    watchdog_stop();
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
     SDL_Quit();
@@ -1579,10 +1790,116 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
 }
 #endif
 
+/* v0.7.14: --check, the one command to run on a Linux/KDE machine that has no
+ * picture. It touches nothing on the console and prints what the viewer sees. */
+static void check_usb_product(libusb_device *dev, char *out, size_t cap)
+{
+    out[0] = 0;
+    struct libusb_device_descriptor dd;
+    if (libusb_get_device_descriptor(dev, &dd) != 0 || !dd.iProduct) return;
+    libusb_device_handle *h = NULL;
+    if (libusb_open(dev, &h) == 0) {
+        libusb_get_string_descriptor_ascii(h, dd.iProduct, (unsigned char *)out, cap);
+        libusb_close(h);
+    }
+}
+
+static int run_check(const char *net_host)
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
+    printf("Switch Frame Tap viewer check\n");
+    printf("session: %s  desktop: %s\n",
+           getenv("XDG_SESSION_TYPE") ? getenv("XDG_SESSION_TYPE") : "?",
+           getenv("XDG_CURRENT_DESKTOP") ? getenv("XDG_CURRENT_DESKTOP") : "?");
+    printf("wayland: %s  display: %s\n",
+           getenv("WAYLAND_DISPLAY") ? getenv("WAYLAND_DISPLAY") : "-",
+           getenv("DISPLAY") ? getenv("DISPLAY") : "-");
+#ifndef _WIN32
+    printf("udev rule: %s\n", access("/etc/udev/rules.d/99-switch-frame-tap.rules", R_OK) == 0 ? "installed" : "missing");
+#endif
+
+    if (video_init() == 0) {
+        printf("video driver: %s\n", SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "?");
+        SDL_Window *w = SDL_CreateWindow("Switch Frame Tap check", 0, 0, 320, 180, SDL_WINDOW_HIDDEN);
+        if (!w) printf("window: %s\n", SDL_GetError());
+        else {
+            SDL_Renderer *r = SDL_CreateRenderer(w, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+            if (!r) printf("renderer: FAILED (%s)\n", SDL_GetError());
+            else {
+                SDL_RendererInfo ri;
+                if (SDL_GetRendererInfo(r, &ri) == 0) printf("renderer: %s%s\n", ri.name, (ri.flags & SDL_RENDERER_PRESENTVSYNC) ? " (vsync)" : "");
+                SDL_DestroyRenderer(r);
+            }
+            SDL_DestroyWindow(w);
+        }
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
+            printf("audio driver: %s\n", SDL_GetCurrentAudioDriver() ? SDL_GetCurrentAudioDriver() : "?");
+            SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        } else printf("audio: FAILED (%s)\n", SDL_GetError());
+    } else {
+        printf("video: FAILED (%s)\n", SDL_GetError());
+    }
+    SDL_Quit();
+
+    libusb_context *ctx = NULL;
+    if (libusb_init(&ctx) != 0) {
+        printf("usb: libusb_init failed\n");
+    } else {
+        libusb_device **list = NULL;
+        const ssize_t n = libusb_get_device_list(ctx, &list);
+        int sft = 0, wrong = 0;
+        for (ssize_t i = 0; i < n; i++) {
+            struct libusb_device_descriptor dd;
+            if (libusb_get_device_descriptor(list[i], &dd) != 0) continue;
+            if (dd.idVendor != SFT_VID || dd.idProduct != SFT_PID) continue;
+            char product[96];
+            check_usb_product(list[i], product, sizeof(product));
+            int err = 0;
+            libusb_device_handle *h = NULL;
+            err = libusb_open(list[i], &h);
+            if (h) libusb_close(h);
+            printf("usb: Switch Frame Tap found (%s) - open: %s\n", product[0] ? product : "1209:5f1e",
+                   err == 0 ? "yes" : libusb_error_name(err));
+            sft++;
+        }
+        for (ssize_t i = 0; i < n; i++) {
+            struct libusb_device_descriptor dd;
+            if (libusb_get_device_descriptor(list[i], &dd) != 0) continue;
+            if (dd.idVendor == 0x18d1 && dd.idProduct == 0x4ee0) {
+                char product[96];
+                check_usb_product(list[i], product, sizeof(product));
+                printf("usb: CONFLICT - %s (18d1:4ee0) is presenting the USB gadget\n", product[0] ? product : "SysDVR");
+                wrong++;
+            }
+        }
+        if (!sft && !wrong) printf("usb: no Switch Frame Tap device (is the console on USB mode and the cable in?)\n");
+        if (list) libusb_free_device_list(list, 1);
+        libusb_exit(ctx);
+    }
+
+    net_init();
+    const uint32_t me = local_ip();
+    char here[64] = "?";
+    if (me) { struct in_addr ia; ia.s_addr = me; inet_ntop(AF_INET, &ia, here, sizeof(here)); }
+    printf("network: this PC is %s\n", here);
+    if (net_host && net_host[0]) {
+        if (net_connect(net_host, NET_PORT)) {
+            printf("network: connected to %s:%d\n", net_host, NET_PORT);
+            transport_close();
+        } else {
+            printf("network: cannot connect to %s:%d (Connection=Network on the Switch?)\n", net_host, NET_PORT);
+        }
+    } else {
+        printf("network: video uses TCP %d (UDP %d beacon), not the SD-card FTP server\n", NET_PORT, BEACON_PORT);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int swap_rb = 0, scale = 1, headless = 0, low_latency = 1, threads = 2;   /* v0.7.11: one decode thread unless --threads */
     long max_frames = 0;
+    int check = 0;
     const char *file = NULL, *record = NULL, *h264_out = NULL, *net_host = NULL;
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);          /* v0.7.13: the viewer sends (key_request); a closed socket must not end it */
@@ -1618,6 +1935,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--mp4") && i + 1 < argc) g_mp4 = argv[++i];
         else if (!strcmp(argv[i], "--rec-dir") && i + 1 < argc) g_rec_dir = argv[++i];
         else if (!strcmp(argv[i], "--net") && i + 1 < argc) net_host = argv[++i];
+        else if (!strcmp(argv[i], "--video-driver") && i + 1 < argc) g_video_driver = argv[++i];
+        else if (!strcmp(argv[i], "--check") || !strcmp(argv[i], "--doctor")) check = 1;
         else { fprintf(stderr, "unknown option %s (see the comment at the top of raw-view.c)\n", argv[i]); return 2; }
     }
     if (scale < 1) scale = 1;
@@ -1636,9 +1955,14 @@ int main(int argc, char **argv)
             SDL_free(dir);
         }
     }
+#elif defined(__linux__)
+    /* v0.7.14: the KDE application launcher has no terminal. Keep the viewer's
+     * log under $XDG_STATE_HOME so a failure is visible after the fact. */
+    if (g_app && !file && !check) viewer_log_init();
 #endif
     /* Ctrl-C before the first frame still ends with the summary below */
     signal(SIGINT, on_sigint);
+    if (check) return run_check(net_host);
 
     libusb_context *ctx = NULL;
     SDL_Window *win = NULL; SDL_Renderer *ren = NULL; SDL_Texture *tex = NULL;
@@ -1650,7 +1974,7 @@ int main(int argc, char **argv)
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Switch Frame Tap", "USB support could not be started (libusb_init failed).", NULL);
             return 1;
         }
-        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        if (video_init() != 0) {
             fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Switch Frame Tap", SDL_GetError(), NULL);
             return 1;
@@ -1669,8 +1993,9 @@ int main(int argc, char **argv)
         }
         rec_init(g_rec_dir, g_mp4);
         net_init();
+        watchdog_start();
         menu_draw(ren);
-        if (!app_wait_device(ctx, win, ren, NULL)) { SDL_Quit(); libusb_exit(ctx); return 0; }
+        if (!app_wait_device(ctx, win, ren, NULL)) { watchdog_stop(); SDL_Quit(); libusb_exit(ctx); return 0; }
     } else if (net_host) {
         /* v0.7: straight to a console on the network (tests; or a network
          * where broadcasts do not arrive) */
@@ -1745,6 +2070,7 @@ int main(int argc, char **argv)
     if (g_mp4) { rec_init(NULL, g_mp4); rec_toggle(); }
 
     while (!g_quit && (max_frames == 0 || packets < max_frames)) {
+        beat();
         if (g_app && g_lost) {
             /* the Switch left the bus (rebooted, cable out): keep the window */
             reader_stop();
@@ -1853,7 +2179,7 @@ int main(int argc, char **argv)
                                 : packed420 ? SDL_PIXELFORMAT_RGB24
                                 : (swap_rb ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_ABGR8888);
         if (!win) {
-            if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); break; }
+            if (video_init() != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); break; }
             /* the stream is BT.709 limited range (VUI says so too) */
             SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
             win = SDL_CreateWindow("switch-frame-tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -1863,6 +2189,7 @@ int main(int argc, char **argv)
              * 16:9 with letterboxing instead of stretching. */
             SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
             ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+            watchdog_start();
             t_first = SDL_GetPerformanceCounter(); t_prev = t_first;
         }
         /* the console can change size or format mid-run: rebuild on change */
@@ -1964,6 +2291,7 @@ int main(int argc, char **argv)
     if (es) fclose(es);
     if (tex) SDL_DestroyTexture(tex);
     up_reset();
+    watchdog_stop();
     if (ren) SDL_DestroyRenderer(ren);
     if (win) SDL_DestroyWindow(win);
     SDL_Quit();

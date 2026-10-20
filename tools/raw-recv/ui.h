@@ -518,6 +518,15 @@ static void menu_draw(SDL_Renderer *ren)
         snprintf(errline, sizeof(errline), "(%s)", g_menu_err);
         l2 = errline;
         break;
+    case MENU_WRONG_DEVICE:
+        hc = UI_WARN;
+        head = "Another USB program has the Switch";
+        snprintf(errline, sizeof(errline),
+                 "The PC sees \"%s\". Remove or disable it on the SD card, install Switch Frame Tap, and reboot the console.",
+                 g_menu_other[0] ? g_menu_other : "SysDVR");
+        l1 = errline;
+        l2 = "Or set Connection to Network in the Switch Frame Tap app and use Network here (Tab).";
+        break;
     case MENU_PAUSED:
         hc = UI_GOOD;
         head = "Connected - the game is not on screen";

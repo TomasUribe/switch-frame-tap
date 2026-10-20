@@ -4,11 +4,12 @@
  * (tools/raw-recv/gen_font.py). */
 #include "font_dejavu.h"
 
-enum { MENU_WAITING = 0, MENU_NODRIVER, MENU_CONNECTED, MENU_PAUSED };
+enum { MENU_WAITING = 0, MENU_NODRIVER, MENU_WRONG_DEVICE, MENU_CONNECTED, MENU_PAUSED };
 
 static int g_menu = 0;                 /* the menu is on screen (not a frame) */
 static int g_menu_state = MENU_WAITING;
 static char g_menu_err[64] = "";       /* the libusb error for MENU_NODRIVER */
+static char g_menu_other[64] = "";     /* the other USB program (SysDVR) for MENU_WRONG_DEVICE */
 static SDL_Texture *g_font_tex = NULL;
 static SDL_Renderer *g_font_ren = NULL;
 

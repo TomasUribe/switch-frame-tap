@@ -15,7 +15,16 @@ make                                   # must say "raw-view built WITH H.264"
 ./raw-view --file s.sft                # replay a recording
 ./raw-view --threads N                 # decode threads (default 2; 0 = one per core)
 ./raw-view --low-latency               # one decode thread, frames out immediately
+./raw-view --app                       # the desktop launcher: wait, reconnect, log
+./raw-view --check                     # session, drivers, udev, USB and network
+./raw-view --check --net 10.0.0.252    # test the Switch's TCP 9950 stream path
+./raw-view --video-driver wayland      # force wayland (or x11) for one run
 ```
+
+`--app` writes `$XDG_STATE_HOME/switch-frame-tap/viewer.log` (normally
+`~/.local/state/switch-frame-tap/viewer.log`), keeping the previous run as
+`viewer.prev.log`. On KDE Wayland the viewer prefers the native Wayland driver
+and falls back to X11 only if it cannot start.
 
 `python3 ../sft_tool.py stats|last|artifacts|head` inspects recordings.
 

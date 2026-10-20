@@ -104,13 +104,15 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 cd "$HERE"
 SDL_CFLAGS=$("$SDL/bin/sdl2-config" --cflags)
 SDL_LIBS=$("$SDL/bin/sdl2-config" --static-libs)
+LIBUSB_A="$(pkg-config --variable=libdir libusb-1.0)/libusb-1.0.a"
+[ -f "$LIBUSB_A" ] || { echo "no static libusb at $LIBUSB_A (install libusb-1.0-0-dev / libusb-devel)"; exit 1; }
 python3 "$HERE/gen_va_shim.py" "$OUT/va_shim.c" "$FF/lib/libavcodec.a" "$FF/lib/libavutil.a"
 gcc -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 -DSFT_VA_SHIM \
     -I"$FF/include" $SDL_CFLAGS $(pkg-config --cflags libusb-1.0) \
     -o "$OUT/switch-frame-tap-viewer" raw-view.c "$OUT/va_shim.c" \
     "$FF/lib/libavformat.a" "$FF/lib/libavcodec.a" "$FF/lib/libavutil.a" \
     $SDL_LIBS \
-    /usr/lib/x86_64-linux-gnu/libusb-1.0.a -ludev -lpthread -lm -ldl
+    "$LIBUSB_A" -ludev -lpthread -lm -ldl
 strip "$OUT/switch-frame-tap-viewer"
 echo "   needs from the system: $(readelf -d "$OUT/switch-frame-tap-viewer" | awk '/NEEDED/{gsub(/[\[\]]/,"",$5); printf "%s ", $5}')"
 echo "   glibc: up to $(objdump -T "$OUT/switch-frame-tap-viewer" | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1)"
@@ -133,6 +135,17 @@ D=$(cd "$(dirname "$0")" && pwd)
 BIN="$HOME/.local/bin/switch-frame-tap-viewer"
 ICON="$HOME/.local/share/icons/hicolor/scalable/apps/switch-frame-tap.svg"
 APPS="$HOME/.local/share/applications/switch-frame-tap.desktop"
+refresh_menu() {
+    update-desktop-database "$(dirname "$APPS")" 2>/dev/null || true
+    gtk-update-icon-cache -q "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+    command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 --noincremental 2>/dev/null || true
+}
+if [ "$1" = "--remove" ]; then
+    rm -f "$BIN" "$ICON" "$APPS"
+    refresh_menu
+    echo "removed"
+    exit 0
+fi
 mkdir -p "$(dirname "$BIN")" "$(dirname "$ICON")" "$(dirname "$APPS")"
 install -m 755 "$D/switch-frame-tap-viewer" "$BIN"
 install -m 644 "$D/switch-frame-tap.svg" "$ICON"
@@ -145,10 +158,16 @@ Exec=$BIN --app
 PrefersNonDefaultGPU=true
 Icon=switch-frame-tap
 Terminal=false
-Categories=Game;AudioVideo;
+Categories=Game;
+StartupNotify=true
+X-KDE-StartupNotify=true
+Keywords=Switch;Nintendo;stream;viewer;game;
 DESK
 chmod 755 "$APPS"
+refresh_menu
 echo "installed: $BIN (and Switch Frame Tap in the applications menu)"
+echo "check:     $BIN --check"
+echo "log:       ${XDG_STATE_HOME:-$HOME/.local/state}/switch-frame-tap/viewer.log"
 if [ ! -f /etc/udev/rules.d/99-switch-frame-tap.rules ]; then
     echo
     echo "Once, so the viewer may open the Switch over USB (asks for your password):"
@@ -164,6 +183,14 @@ Switch Frame Tap $VER - the Linux viewer, for any distribution (x86_64)
 installs it for your user (the applications menu: Switch Frame Tap) and shows
 the one command, with sudo, that lets it open the Switch over USB. Or run it
 from here: ./switch-frame-tap-viewer --app
+
+  ./install.sh --remove     uninstall it again
+
+KDE Plasma: the launcher uses Wayland natively; if the window ever freezes,
+run "switch-frame-tap-viewer --app" in a terminal to see the reason and the
+log in $XDG_STATE_HOME/switch-frame-tap/viewer.log. "switch-frame-tap-viewer
+--check" prints the session, video driver, audio driver, udev rule, USB
+devices and network status.
 
 One binary: FFmpeg (H.264, AAC, MP4), SDL 2 and libusb are built in. It
 uses your system's glibc (2.35 or newer), libudev, and its X11 or Wayland

@@ -246,6 +246,20 @@ Bazzite, SteamOS - x86_64). Unpack `switch-frame-tap-0.7.13-linux.tar.gz` and
 run `./install.sh`: it puts **Switch Frame Tap** in the applications menu and
 prints the one `sudo` command that installs the USB rule (lets the viewer open
 the Switch). It is a single program with FFmpeg, SDL 2 and libusb built in.
+`./install.sh --remove` uninstalls it.
+
+On **KDE Plasma** the viewer uses the session's Wayland driver when there is
+one (the old XWayland path could freeze the window on a high-refresh desktop).
+Its log is `$XDG_STATE_HOME/switch-frame-tap/viewer.log` (normally
+`~/.local/state/switch-frame-tap/viewer.log`); `switch-frame-tap-viewer --check`
+prints the session, video and audio drivers, the udev rule, the USB devices and
+the network state. If Wayland itself misbehaves, start it once with
+`SDL_VIDEODRIVER=x11 switch-frame-tap-viewer --app`.
+
+For USB the PC must see **`1209:5f1e` "Switch Frame Tap"** (`lsusb -d
+1209:5f1e`). If it shows **`18d1:4ee0` "SysDVR"**, SysDVR still owns the
+console's USB gadget: remove or disable it on the SD card and reboot. The
+viewer now names it on its home screen.
 
 To build it from source instead (Ubuntu/Debian):
 
@@ -290,8 +304,10 @@ default audio device.
 It reads USB, decodes and draws on separate threads and shows the frames in
 order, one per screen refresh (vsync), so the picture stays smooth. Its
 statistics - frame rate, latencies, decode and draw times, once a second - go
-to the terminal on Linux and to `%APPDATA%\switch-frame-tap\viewer\viewer.log`
-on Windows.
+to the terminal, and to `$XDG_STATE_HOME/switch-frame-tap/viewer.log`
+(normally `~/.local/state/switch-frame-tap/viewer.log`) for the desktop
+launcher on Linux, and to `%APPDATA%\switch-frame-tap\viewer\viewer.log` on
+Windows.
 
 **Hardware decoding** (v0.7.12): the viewer decodes with the graphics card's
 video decoder - about 5 ms less latency in busy scenes and no keyframe
@@ -468,6 +484,11 @@ network (many Wi-Fi routers drop broadcasts between wireless devices, so the
 scan is what finds it there). **I** in the viewer types the Switch's IP by hand
 (the manager shows it). One connection at a time: in Network mode the Switch
 leaves USB alone.
+
+The stream is **not** the SD-card FTP server a homebrew FTP app exposes (for
+example port 5000): those are only for copying files. Switch Frame Tap listens
+on **TCP 9950** and beacons on **UDP 9951**. `switch-frame-tap-viewer --check
+--net 192.168.1.50` tests that path.
 
 The stream is the same as over USB - sound, recording, the menu - with one
 addition: **the quality adapts to the network**. Five times a second the

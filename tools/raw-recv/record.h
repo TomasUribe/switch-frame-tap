@@ -112,8 +112,52 @@ static void rec_mkdir(const char *p)
 #endif
 }
 
+#ifndef _WIN32
+/* v0.7.14: KDE and other desktops can rename/localise Videos. Read the same
+ * XDG user-dirs file the file manager uses; "$HOME/Videos" stays the fallback. */
+static int rec_xdg_videos(char *out, size_t cap)
+{
+    const char *cfg = getenv("XDG_CONFIG_HOME");
+    const char *home = getenv("HOME");
+    char path[1024], line[1200];
+    if (cfg && cfg[0]) snprintf(path, sizeof(path), "%s/user-dirs.dirs", cfg);
+    else if (home && home[0]) snprintf(path, sizeof(path), "%s/.config/user-dirs.dirs", home);
+    else return 0;
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    int found = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *p = strstr(line, "XDG_VIDEOS_DIR=");
+        if (!p) continue;
+        p += strlen("XDG_VIDEOS_DIR=");
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '"') p++;
+        char *end = p + strlen(p);
+        while (end > p && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == '"')) end--;
+        *end = 0;
+        char tmp[900];
+        size_t n = 0;
+        for (const char *s = p; *s && n + 1 < sizeof(tmp); s++) {
+            if (*s == '\\' && s[1]) { s++; tmp[n++] = *s; continue; }
+            if (*s == '$' && !strncmp(s, "$HOME", 5) && (s[5] == 0 || s[5] == '/') && home) {
+                const size_t hl = strlen(home);
+                if (n + hl + 1 < sizeof(tmp)) { memcpy(tmp + n, home, hl); n += hl; }
+                s += 4;
+                continue;
+            }
+            tmp[n++] = *s;
+        }
+        tmp[n] = 0;
+        if (n && strcmp(tmp, home ? home : "") != 0) { snprintf(out, cap, "%s", tmp); found = 1; }
+        break;
+    }
+    fclose(f);
+    return found;
+}
+#endif
+
 /* Videos/Switch Frame Tap (Windows: the Videos folder, wherever the user
- * or OneDrive moved it; Linux: ~/Videos) */
+ * or OneDrive moved it; Linux: the XDG Videos folder, normally ~/Videos) */
 static void rec_default_dir(char *out, size_t cap)
 {
 #ifdef _WIN32
@@ -134,6 +178,14 @@ static void rec_default_dir(char *out, size_t cap)
 #endif
     if (!home) home = ".";
     char videos[900];
+#ifndef _WIN32
+    if (rec_xdg_videos(videos, sizeof(videos))) {
+        rec_mkdir(videos);
+        snprintf(out, cap, "%s%cSwitch Frame Tap", videos, sep);
+        rec_mkdir(out);
+        return;
+    }
+#endif
     snprintf(videos, sizeof(videos), "%s%cVideos", home, sep);
     rec_mkdir(videos);
     snprintf(out, cap, "%s%cSwitch Frame Tap", videos, sep);
