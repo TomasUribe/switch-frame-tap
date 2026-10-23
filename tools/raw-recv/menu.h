@@ -112,6 +112,9 @@ static void ui_disc_init(SDL_Renderer *ren)
 /* v0.7.12: the settings icon - a gear (8 teeth, a hole), smooth like the disc */
 static SDL_Texture *g_ui_gear = NULL;
 static SDL_Renderer *g_ui_gear_ren = NULL;
+/* Always-on-top pin (map-pin silhouette, same AA style as the gear). */
+static SDL_Texture *g_ui_pin = NULL;
+static SDL_Renderer *g_ui_pin_ren = NULL;
 
 static void ui_gear_init(SDL_Renderer *ren)
 {
@@ -143,6 +146,46 @@ static void ui_gear_init(SDL_Renderer *ren)
         SDL_UpdateTexture(g_ui_gear, NULL, px, D * 4);
         SDL_SetTextureBlendMode(g_ui_gear, SDL_BLENDMODE_BLEND);
         SDL_SetTextureScaleMode(g_ui_gear, SDL_ScaleModeLinear);
+    }
+}
+
+static void ui_pin_init(SDL_Renderer *ren)
+{
+    if (g_ui_pin && g_ui_pin_ren == ren) return;
+    enum { D = 96 };
+    static Uint32 px[D * D];
+    /* Upright map pin: round head with a hole, tapered point below.
+     * Coords are relative to the head centre (slightly above texture mid). */
+    const float c = D / 2.0f;
+    const float hy = -D * 0.08f;                /* head centre above mid */
+    const float hr = D * 0.27f, hole = D * 0.105f;
+    const float tip = D * 0.52f;                /* tip distance below head */
+    for (int y = 0; y < D; y++)
+        for (int x = 0; x < D; x++) {
+            int in = 0;
+            for (int sy = 0; sy < 4; sy++)
+                for (int sx = 0; sx < 4; sx++) {
+                    const float fx = x + (sx + 0.5f) / 4 - c;
+                    const float fy = y + (sy + 0.5f) / 4 - c - hy;
+                    const float r = sqrtf(fx * fx + fy * fy);
+                    int hit = 0;
+                    if (r <= hr) hit = 1;                      /* head disc */
+                    else if (fy > 0.f && fy <= tip) {
+                        /* Tapered point: width shrinks from head to tip. */
+                        const float t = fy / tip;
+                        const float half = hr * (1.f - t);
+                        if (fabsf(fx) <= half) hit = 1;
+                    }
+                    if (hit && !(r < hole && fy < hr * 0.35f)) in++;
+                }
+            px[y * D + x] = ((Uint32)(in * 255 / 16) << 24) | 0xFFFFFFu;
+        }
+    g_ui_pin = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, D, D);
+    g_ui_pin_ren = ren;
+    if (g_ui_pin) {
+        SDL_UpdateTexture(g_ui_pin, NULL, px, D * 4);
+        SDL_SetTextureBlendMode(g_ui_pin, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(g_ui_pin, SDL_ScaleModeLinear);
     }
 }
 

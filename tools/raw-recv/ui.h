@@ -50,7 +50,7 @@ static void ui_open(int open);
 
 enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_ASPECT, H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
        H_PIC, H_PIC_RESET, H_SOUND, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
-       H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE };
+       H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_PIN };
 
 typedef struct { SDL_FRect r; int id, arg, window_space; } ui_hit_t;
 static ui_hit_t g_ui_hits[96];
@@ -315,7 +315,30 @@ static void ui_win_btn(SDL_Renderer *ren, float x, float y, float d, int id, int
     ui_chrome_hit(x, y, d, id);
 }
 
-/* Layout of top-right chrome in window/output pixels. Returns button count. */
+/* Pin / always-on-top: sits right of the gear, left of min/max/close when borderless.
+ * Status is the bottom toast only - no hover label (it sat under the gear). */
+static void ui_pin_button(SDL_Renderer *ren, float x, float y, float d)
+{
+    const int hov = ui_in(x, y, d, d);
+    const int on = g_always_on_top;
+    SDL_Color b = (SDL_Color){ 21, 24, 30, 200 };
+    if (on) b = (SDL_Color){ UI_ACC.r, UI_ACC.g, UI_ACC.b, 220 };
+    else if (hov) { b = UI_SURF3; b.a = 230; }
+    ui_rrect(ren, x, y, d, d, d / 2, b);
+    ui_pin_init(ren);
+    if (g_ui_pin) {
+        if (on) SDL_SetTextureColorMod(g_ui_pin, 12, 14, 18);
+        else SDL_SetTextureColorMod(g_ui_pin, UI_INK.r, UI_INK.g, UI_INK.b);
+        SDL_SetTextureAlphaMod(g_ui_pin, 255);
+        const float inset = d * 0.18f;
+        const SDL_FRect g = { x + inset, y + inset, d - inset * 2, d - inset * 2 };
+        SDL_RenderCopyF(ren, g_ui_pin, NULL, &g);
+    }
+    ui_chrome_hit(x, y, d, H_PIN);
+}
+
+/* Layout of top-right chrome in window/output pixels. Returns button count.
+ * Right→left: [close max min] pin gear  (window controls only when borderless). */
 static int ui_chrome_layout(int ow, float *xs, int *ids, float *out_d, float *out_y)
 {
     const float dens = ui_chrome_dens(ow);
@@ -328,6 +351,7 @@ static int ui_chrome_layout(int ow, float *xs, int *ids, float *out_d, float *ou
         ids[n] = H_WIN_MAX;   xs[n] = right - d; n++; right -= d + gap;
         ids[n] = H_WIN_MIN;   xs[n] = right - d; n++; right -= d + gap;
     }
+    ids[n] = H_PIN;      xs[n] = right - d; n++; right -= d + gap;
     ids[n] = H_SETTINGS; xs[n] = right - d; n++;
     *out_d = d; *out_y = y;
     return n;
@@ -339,8 +363,8 @@ static int ui_chrome_at(SDL_Renderer *ren, float wx, float wy, int *out_id)
     int ow = 0, oh = 0;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
     if (ow < 80 || oh < 40) return 0;
-    float xs[4], d = 42.f, y = 10.f;
-    int ids[4];
+    float xs[5], d = 42.f, y = 10.f;
+    int ids[5];
     const int n = ui_chrome_layout(ow, xs, ids, &d, &y);
     const float pad = d * 0.14f;
     for (int i = 0; i < n; i++) {
@@ -357,6 +381,7 @@ static void ui_chrome_activate(SDL_Window *win, int id)
 {
     switch (id) {
     case H_SETTINGS: ui_open(1); break;
+    case H_PIN: act_always_on_top(win, !g_always_on_top); break;
     case H_WIN_MIN: if (win) SDL_MinimizeWindow(win); break;
     case H_WIN_MAX:
         /* Same expand/restore path as F11, double-click, and middle-click. */
@@ -377,13 +402,16 @@ static void ui_top_chrome(SDL_Renderer *ren, float xr, float y, SDL_Color gear_b
     (void)xr; (void)y;
     int ow = 0, oh = 0;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
-    float xs[4], d = 42.f, cy = 10.f;
-    int ids[4];
+    float xs[5], d = 42.f, cy = 10.f;
+    int ids[5];
     const int n = ui_chrome_layout(ow, xs, ids, &d, &cy);
     for (int i = 0; i < n; i++) {
         if (ids[i] == H_SETTINGS) {
             if (paint) ui_gear_button(ren, xs[i] + d, cy, d, gear_bg, H_SETTINGS);
             else ui_chrome_hit(xs[i], cy, d, H_SETTINGS);
+        } else if (ids[i] == H_PIN) {
+            if (paint) ui_pin_button(ren, xs[i], cy, d);
+            else ui_chrome_hit(xs[i], cy, d, H_PIN);
         } else {
             if (paint) ui_win_btn(ren, xs[i], cy, d, ids[i], ids[i] == H_WIN_CLOSE);
             else ui_chrome_hit(xs[i], cy, d, ids[i]);
@@ -1207,6 +1235,7 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_SETTINGS: ui_open(1); break;
             case H_CLOSE: ui_open(0); break;
             case H_BACKDROP: return 0; /* don't close; allow window drag underneath */
+            case H_PIN:
             case H_WIN_MIN:
             case H_WIN_MAX:
             case H_WIN_CLOSE:
