@@ -117,6 +117,16 @@ namespace ams::mitm::applet {
     constinit std::atomic<bool> g_ui_session_active{false};
     constinit std::atomic<bool> g_game_presented_in_ui{false};
 
+    /* v0.7.16: a crop in the middle of the game's surface (2 px either way), w << 16 | h; 0: not */
+    static u32 CenteredCrop(const s32 crop[4]) {
+        const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
+        const s32 sw = static_cast<s32>(g_game_surface.width), sh = static_cast<s32>(g_game_surface.height);
+        if (cw <= 0 || chh <= 0 || sw <= 0 || sh <= 0 || (crop[0] == 0 && crop[1] == 0)) { return 0; }
+        const s32 dx = 2 * crop[0] + cw - sw, dy = 2 * crop[1] + chh - sh;
+        if (dx < -2 || dx > 2 || dy < -2 || dy > 2) { return 0; }
+        return static_cast<u32>(cw) << 16 | static_cast<u32>(chh);
+    }
+
     void RecordPresent(s32 qs, bool have_fence, u32 fn, const u64 fv[4], u32 xf, const s32 crop[4]) {
         static constinit os::SdkMutex s_record_lock;   /* the vi server threads and the UI feeder */
         std::scoped_lock lk(s_record_lock);
@@ -125,6 +135,7 @@ namespace ams::mitm::applet {
             const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
             g_queue_crop_wh.store((cw > 0 && chh > 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
             g_queue_crop_origin0.store(crop[0] == 0 && crop[1] == 0, std::memory_order_relaxed);
+            g_queue_crop_c.store(CenteredCrop(crop), std::memory_order_relaxed);
             /* v0.7.9: this game's crop follows its mode (it has shown a
              * whole 1920x1080 picture) - the size check trusts it */
             if (cw >= 1920 && chh >= 1080) { g_crop_full_pid.store(g_app_pid.load(std::memory_order_relaxed), std::memory_order_relaxed); }
@@ -158,6 +169,7 @@ namespace ams::mitm::applet {
             {
                 const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
                 r.crop.store((cw > 0 && chh > 0 && crop[0] == 0 && crop[1] == 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
+                r.crop_c.store(CenteredCrop(crop), std::memory_order_relaxed);
             }
             r.seq.fetch_add(1, std::memory_order_release);
         }
@@ -512,6 +524,45 @@ namespace ams::mitm::applet {
             else if (len > 0) { LogLine("process memory (KB, change since the first look):%s", line); }
         }
 
+        /* v0.7.16: what an application left behind. pm starts the next one
+         * only once every resource of the Application group is back to 0 and
+         * its memory is 0 (or the 96 MB of gameplay recording) - it waits in
+         * a loop, and every pm call waits with it (Kingdom Hearts' launcher
+         * quitting into the game hung the console there). The memory comes
+         * from the kernel (no pm, so it cannot hang); the group's counters
+         * from pm, once, right away. Then the memory every 250 ms for 3 s. */
+        void LogAppLeftovers() {
+            u64 mem = 0;
+            static_cast<void>(svc::GetSystemInfo(std::addressof(mem), svc::SystemInfoType_UsedPhysicalMemorySize, svc::InvalidHandle, svc::PhysicalMemorySystemInfo_Application));
+            LogLine("app left: Application memory in use %llu KB (pm starts the next app at 0 or 98304 KB)", static_cast<unsigned long long>(mem / 1024));
+            static constexpr struct { svc::LimitableResource r; const char *name; } Res[] = {
+                { svc::LimitableResource_PhysicalMemoryMax, "memory" }, { svc::LimitableResource_ThreadCountMax, "threads" },
+                { svc::LimitableResource_EventCountMax, "events" }, { svc::LimitableResource_TransferMemoryCountMax, "transfer memories" },
+                { svc::LimitableResource_SessionCountMax, "sessions" },
+            };
+            char line[256];
+            int len = 0;
+            for (const auto &e : Res) {
+                u64 cur = 0, lim = 0;
+                const Result rc = ::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Application, e.r);
+                if (len < static_cast<int>(sizeof(line)) - 48) {
+                    if (R_SUCCEEDED(rc)) { len += std::snprintf(line + len, sizeof(line) - len, " %s %llu;", e.name, static_cast<unsigned long long>(e.r == svc::LimitableResource_PhysicalMemoryMax ? cur / 1024 : cur)); }
+                    else { len += std::snprintf(line + len, sizeof(line) - len, " %s rc=0x%x;", e.name, rc.GetValue()); }
+                }
+            }
+            LogLine("app left: Application group still holds (memory in KB):%s", line);
+            u64 prev = mem;
+            for (u32 i = 0; i < 12; ++i) {
+                os::SleepThread(TimeSpan::FromMilliSeconds(250));
+                static_cast<void>(svc::GetSystemInfo(std::addressof(mem), svc::SystemInfoType_UsedPhysicalMemorySize, svc::InvalidHandle, svc::PhysicalMemorySystemInfo_Application));
+                if (mem != prev) {
+                    LogLine("app left: +%u ms Application memory %llu KB", (i + 1) * 250, static_cast<unsigned long long>(mem / 1024));
+                    prev = mem;
+                }
+            }
+            LogLine("app left: after 3 s Application memory %llu KB", static_cast<unsigned long long>(mem / 1024));
+        }
+
         void AppWatchThread(void *) {
             u64 last = ~UINT64_C(0);
             const bool info_ok = [] { SmUse sm_pm; return R_SUCCEEDED(::pminfoInitialize()); }();
@@ -525,10 +576,16 @@ namespace ams::mitm::applet {
                     if (now != 0 && info_ok && R_FAILED(::pminfoGetProgramId(&tid, now))) { tid = 0; }
                     g_app_tid.store(tid, std::memory_order_relaxed);
                     g_app_excluded.store(tid != 0 && IsExcluded(tid), std::memory_order_relaxed);
+                    /* v0.7.16: a new game has its own 5 s before it counts as not
+                     * presenting (LongNotPresenting) - the launcher's last present
+                     * made Mario 3D All-Stars' games look gone at once */
+                    if (now != 0) { g_app_present_tick.store(armGetSystemTick(), std::memory_order_relaxed); }
                     LogLine("app watch: application pid %llu, program %016llx%s", static_cast<unsigned long long>(now),
                             static_cast<unsigned long long>(tid), g_app_excluded.load() ? " (EXCLUDED)" : "");
+                    const bool app_left = now == 0 && last != 0 && last != ~UINT64_C(0);
                     last = now;
                     LogProcessMemory(now);
+                    if (app_left) { LogAppLeftovers(); }
                 }
                 os::SleepThread(TimeSpan::FromMilliSeconds(100));
             }
@@ -550,6 +607,7 @@ namespace ams::mitm::applet {
         LogMark("GetDisplayService:enter");
         LogLine("   program=%016llx cmd %u mode=%u%s", static_cast<unsigned long long>(ci.program_id.value), cmd, mode,
                 cmd == 2 ? " (vi:m - a homebrew application)" : "");
+        if (cmd == 2) { g_vim_program.store(ci.program_id.value, std::memory_order_relaxed); }
 
         ::Service disp_svc = {};
         const Result rc = serviceDispatchIn(fwd, cmd, mode,

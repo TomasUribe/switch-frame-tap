@@ -80,11 +80,17 @@ namespace ams::mitm::applet {
      * go through dmnt:cht - slower, but the stream works where it used to
      * attach-fail forever. Never ForceOpen: that would attach dmnt (and
      * trip anti-debug builds) on games that need no debugger at all. */
+    constinit std::atomic<u32> g_app_dbg{0};
+    constinit std::atomic<u64> g_app_dbg_pid{0};
+    constinit os::SdkMutex g_app_dbg_lock;
+
     bool DmAttach(u64 pid, svc::Handle *out_dbg) {
         const Result ra = svc::DebugActiveProcess(out_dbg, pid);
         if (R_SUCCEEDED(ra)) {
             LogLine("dmdbg: direct DebugActiveProcess(pid=%llu) ok",
                     static_cast<unsigned long long>(pid));
+            g_app_dbg_pid.store(pid, std::memory_order_relaxed);
+            g_app_dbg.store(static_cast<u32>(*out_dbg), std::memory_order_release);
             return true;
         }
         if (ChtService()) {
@@ -152,7 +158,14 @@ namespace ams::mitm::applet {
 
     void DbgDetach(svc::Handle dbg) {
         if (DbgIsDmnt(dbg)) { return; }
-        if (dbg != svc::InvalidHandle) { svc::CloseHandle(dbg); }
+        if (dbg != svc::InvalidHandle) {
+            /* v0.7.17: the audout reader stops using it first */
+            u32 expected = static_cast<u32>(dbg);
+            if (g_app_dbg.compare_exchange_strong(expected, 0, std::memory_order_acq_rel)) {
+                std::scoped_lock lk(g_app_dbg_lock);
+            }
+            svc::CloseHandle(dbg);
+        }
     }
 
 }

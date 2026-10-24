@@ -31,6 +31,13 @@ static const char *const up_name[UP_COUNT] = { "off", "FSR 1", "NIS" };
 static const char *const up_key[UP_COUNT] = { "off", "fsr", "nis" };
 #endif
 static int g_upscaler = UP_OFF;          /* the choice (viewer.ini: upscaler=) */
+/* v0.7.16: dynamic resolution - the part of the frame (from its top left) the
+ * game drew this time; the rest is older picture. 0: the whole frame. The
+ * upscalers stretch only that part over the picture's place on screen. */
+static int g_up_crop_w = 0, g_up_crop_h = 0;
+static int g_up_crop_x = 0, g_up_crop_y = 0;   /* v0.7.16: its top left (Kingdom Hearts: in the middle) */
+#define UP_CW(W) (g_up_crop_w > 0 && g_up_crop_w <= (W) ? g_up_crop_w : (W))
+#define UP_CH(H) (g_up_crop_h > 0 && g_up_crop_h <= (H) ? g_up_crop_h : (H))
 static int g_fsr_sharpness = 70;         /* macOS RCAS strength, percent */
 static char g_up_note[72] = "";         /* why it is not available, if not */
 static char g_up_why[40] = "";          /* why the last frame was not upscaled (the overlay) */
@@ -268,7 +275,7 @@ static const char *up_fs_show =
 
 static const char *up_cs_nis_head =
     "#version 430 compatibility\n"
-    "#define NIS_GLSL 1\n#define NIS_SCALER 1\n#define NIS_USE_HALF_PRECISION 0\n#define NIS_VIEWPORT_SUPPORT 0\n"
+    "#define NIS_GLSL 1\n#define NIS_SCALER 1\n#define NIS_USE_HALF_PRECISION 0\n#define NIS_VIEWPORT_SUPPORT 1\n"
     "#define NIS_BLOCK_WIDTH 32\n#define NIS_BLOCK_HEIGHT 24\n#define NIS_THREAD_GROUP_SIZE 128\n"
     "layout(local_size_x = NIS_THREAD_GROUP_SIZE) in;\n"
     "layout(std140, binding = 0) uniform const_buffer {\n"
@@ -300,7 +307,8 @@ typedef struct {
     float reserved0, reserved1;
 } up_nis_config_t;
 
-static void up_nis_config(up_nis_config_t *c, float sharpness, int in_w, int in_h, int out_w, int out_h)
+/* in_w x in_h: the part of the tex_w x tex_h texture to scale */
+static void up_nis_config(up_nis_config_t *c, float sharpness, int in_x, int in_y, int in_w, int in_h, int tex_w, int tex_h, int out_w, int out_h)
 {
     memset(c, 0, sizeof(*c));
     if (sharpness < 0.f) sharpness = 0.f;
@@ -324,9 +332,10 @@ static void up_nis_config(up_nis_config_t *c, float sharpness, int in_w, int in_
     c->kSharpStrengthScale = smax - smin;
     c->kSharpLimitMin = lmin;
     c->kSharpLimitScale = lmax - lmin;
+    c->kInputViewportOriginX = (uint32_t)in_x; c->kInputViewportOriginY = (uint32_t)in_y;
     c->kInputViewportWidth = (uint32_t)in_w; c->kInputViewportHeight = (uint32_t)in_h;
     c->kOutputViewportWidth = (uint32_t)out_w; c->kOutputViewportHeight = (uint32_t)out_h;
-    c->kSrcNormX = 1.f / in_w; c->kSrcNormY = 1.f / in_h;
+    c->kSrcNormX = 1.f / tex_w; c->kSrcNormY = 1.f / tex_h;
     c->kDstNormX = 1.f / out_w; c->kDstNormY = 1.f / out_h;
     c->kScaleX = (float)in_w / out_w; c->kScaleY = (float)in_h / out_h;
 }
@@ -613,7 +622,8 @@ static int vsr_draw(SDL_Renderer *ren, uint8_t *const data[3], const int linesiz
     if (W <= 0 || H <= 0 || ow <= 0 || oh <= 0 || (W & 1) || (H & 1)) return up_skip("odd picture size", 0);
     int vw, vh;
     if ((long)ow * H > (long)oh * W) { vh = oh; vw = (int)((long)oh * W / H); } else { vw = ow; vh = (int)((long)ow * H / W); }
-    if (vw <= W && vh <= H) return up_skip("window too small", 0);
+    const int cw = UP_CW(W), ch = UP_CH(H);     /* v0.7.16: the part drawn this frame */
+    if (vw <= cw && vh <= ch) return up_skip("window too small", 0);
     const int vx = (ow - vw) / 2, vy = (oh - vh) / 2;
     if (!vsr_setup(W, H, vw, vh)) return 0;
     /* the planes into NV12 (Y, then U and V interleaved) */
@@ -650,7 +660,8 @@ static int vsr_draw(SDL_Renderer *ren, uint8_t *const data[3], const int linesiz
     hr = ID3D11VideoDevice_CreateVideoProcessorOutputView(g_vsr.vdev, bb, g_vsr.en, &ovd, &ov);
     ID3D11Resource_Release(bb);
     if (FAILED(hr) || !ov) return up_skip("failed: output view", hr);
-    RECT src = { 0, 0, W, H }, dstr = { vx, vy, vx + vw, vy + vh };
+    const int cx = cw < W ? g_up_crop_x : 0, cy = ch < H ? g_up_crop_y : 0;
+    RECT src = { cx, cy, cx + cw, cy + ch }, dstr = { vx, vy, vx + vw, vy + vh };
     ID3D11VideoContext_VideoProcessorSetStreamSourceRect(g_vsr.vctx, g_vsr.vp, 0, TRUE, &src);
     ID3D11VideoContext_VideoProcessorSetStreamDestRect(g_vsr.vctx, g_vsr.vp, 0, TRUE, &dstr);
     ID3D11VideoContext_VideoProcessorSetOutputTargetRect(g_vsr.vctx, g_vsr.vp, TRUE, &dstr);
@@ -693,6 +704,7 @@ static int up_draw(SDL_Renderer *ren, uint8_t *const data[3], const int linesize
     if (W <= 0 || H <= 0 || ow <= 0 || oh <= 0) return 0;
     const double scale = SDL_min((double)ow / W, (double)oh / H);
     if (scale <= 1.001) return up_skip("window too small", 0);
+    if (UP_CW(W) != W || UP_CH(H) != H) return up_skip("dynamic resolution", 0);   /* v0.7.16: drawn plainly (part of the frame) */
     if (!clarity_draw(ren, (const uint8_t *const *)data, linesize, W, H,
                       g_fsr_sharpness / 100.0f, nv12)) return up_skip("Metal FSR unavailable", 0);
     g_up.active = 1;
@@ -711,7 +723,9 @@ static int up_draw(SDL_Renderer *ren, uint8_t *const data[3], const int linesize
     if (W <= 0 || H <= 0 || ow <= 0 || oh <= 0) return 0;
     int vw, vh;                                   /* the picture on screen, letterboxed */
     if ((long)ow * H > (long)oh * W) { vh = oh; vw = (int)((long)oh * W / H); } else { vw = ow; vh = (int)((long)ow * H / W); }
-    if (vw <= W && vh <= H) return up_skip("window too small", 0);
+    const int cw = UP_CW(W), ch = UP_CH(H);     /* v0.7.16: the part drawn this frame */
+    const int cx = (cw < W && g_up_crop_x + cw <= W) ? g_up_crop_x : 0, cy = (ch < H && g_up_crop_y + ch <= H) ? g_up_crop_y : 0;
+    if (vw <= cw && vh <= ch) return up_skip("window too small", 0);
     const int vx = (ow - vw) / 2, vy = (oh - vh) / 2;
 
     SDL_RenderFlush(ren);
@@ -732,7 +746,7 @@ static int up_draw(SDL_Renderer *ren, uint8_t *const data[3], const int linesize
         g_up.mid_w = g_up.mid_h = 0;
     }
     int mw = vw, mh = vh;                         /* NIS goes up to 2x; the rest is a linear scale */
-    if (mode == UP_NIS) { if (mw > 2 * W) mw = 2 * W; if (mh > 2 * H) mh = 2 * H; }
+    if (mode == UP_NIS) { if (mw > 2 * cw) mw = 2 * cw; if (mh > 2 * ch) mh = 2 * ch; }
     if (mw != g_up.mid_w || mh != g_up.mid_h) {
         g_up.t_mid = up_tex(GL_RGBA8, mw, mh, GL_RGBA, GL_UNSIGNED_BYTE, NULL, GL_LINEAR);
         g_up.mid_w = mw; g_up.mid_h = mh;
@@ -761,8 +775,8 @@ static int up_draw(SDL_Renderer *ren, uint8_t *const data[3], const int linesize
     if (mode == UP_FSR) {
         /* EASU into the picture's on-screen size */
         GLuint con[16];
-        const float rx = (float)W / vw, ry = (float)H / vh;
-        con[0] = fbits(rx); con[1] = fbits(ry); con[2] = fbits(0.5f * rx - 0.5f); con[3] = fbits(0.5f * ry - 0.5f);
+        const float rx = (float)cw / vw, ry = (float)ch / vh;   /* the drawn part over the screen; texel steps below: the whole texture */
+        con[0] = fbits(rx); con[1] = fbits(ry); con[2] = fbits(0.5f * rx - 0.5f + cx); con[3] = fbits(0.5f * ry - 0.5f + cy);   /* + the part's offset (FsrEasuConOffset) */
         con[4] = fbits(1.f / W); con[5] = fbits(1.f / H); con[6] = fbits(1.f / W); con[7] = fbits(-1.f / H);
         con[8] = fbits(-1.f / W); con[9] = fbits(2.f / H); con[10] = fbits(1.f / W); con[11] = fbits(2.f / H);
         con[12] = fbits(0.f); con[13] = fbits(4.f / H); con[14] = 0; con[15] = 0;
@@ -784,7 +798,7 @@ static int up_draw(SDL_Renderer *ren, uint8_t *const data[3], const int linesize
     } else {
         /* NIS: the compute pass, then whatever scaling is left */
         up_nis_config_t cfg;
-        up_nis_config(&cfg, 0.5f, W, H, mw, mh);
+        up_nis_config(&cfg, 0.5f, cx, cy, cw, ch, W, H, mw, mh);
         up_glBindBuffer(GL_UNIFORM_BUFFER, g_up.ubo);
         up_glBufferData(GL_UNIFORM_BUFFER, sizeof(cfg), &cfg, GL_STREAM_DRAW);
         up_glBindBufferBase(GL_UNIFORM_BUFFER, 0, g_up.ubo);

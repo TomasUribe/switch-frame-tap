@@ -34,4 +34,10 @@ namespace ams::mitm::applet {
     /* drop everything queued (a stream ended, or started) */
     void AudioFlush();
 
+    /* v0.7.17: a game's own audout PCM (applet_mitm_audout.cpp) - wanted only
+     * while a stream runs and neither grc:d nor the final output recorder
+     * has had sound for a while; 48 kHz s16, `channels` interleaved */
+    bool AudioOutWanted();
+    void AudioOutFeed(const u8 *pcm, size_t n, u32 channels);
+
 }

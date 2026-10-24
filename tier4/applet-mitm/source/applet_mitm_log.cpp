@@ -172,6 +172,13 @@ namespace ams::mitm::applet {
 
     void LogDefer(bool on) {
         std::scoped_lock lk(g_lock);
+        /* v0.7.16: off - every line goes to the SD card at once again. Held
+         * lines were lost whenever the console hung in a hand-over (Kingdom
+         * Hearts' launcher quitting into the game): the log stopped seconds
+         * before what it was needed for. The hand-over costs the viewer the
+         * SD writes again (~1 s), as in v0.7.13. */
+        constexpr bool DeferAllowed = false;
+        if (on && !DeferAllowed) { return; }
         if (on) {
             if (!g_defer) { g_defer_tick = armGetSystemTick(); }
             g_defer = true;

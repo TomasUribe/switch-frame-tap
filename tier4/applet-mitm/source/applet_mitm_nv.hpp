@@ -148,6 +148,7 @@ namespace ams::mitm::applet {
     extern std::atomic<u64> g_crop_full_pid;   /* v0.7.9: the application whose crop was ever 1920x1080 */
     extern std::atomic<u32> g_queue_crop_wh;   /* v0.7.3: the last present's crop, w << 16 | h (0: none) */
     extern std::atomic<bool> g_queue_crop_origin0;   /* v0.7.13: that crop starts at (0,0) */
+    extern std::atomic<u32> g_queue_crop_c;    /* v0.7.16: the last present's crop when centred, w << 16 | h (0: not) */
     /* v0.7.13: the viewer asked for a keyframe ("SFTK", USB or network), and
      * this network viewer can ask (it has once): keyframes then every 240
      * frames on the network, and on request */
@@ -171,6 +172,7 @@ namespace ams::mitm::applet {
         std::atomic<u64> tick;
         std::atomic<u32> transform;   /* v0.4.1: queueBuffer's transform (bit 0 flip H, bit 1 flip V) */
         std::atomic<u32> crop;        /* v0.7.13: its crop, w << 16 | h - 0: none, or not from (0,0) */
+        std::atomic<u32> crop_c;      /* v0.7.16: a crop in the middle of the surface, w << 16 | h - 0: none */
     };
     constexpr u32 PresentRingSize = 8;
     extern PresentRec g_present_ring[PresentRingSize];
@@ -202,6 +204,8 @@ namespace ams::mitm::applet {
      * never-attach list (sdmc:/config/switch-frame-tap/excluded.txt) - kept
      * current by the app watcher (applet_mitm_service.cpp) */
     extern std::atomic<u64>  g_app_tid;
+    /* v0.7.17: the last program that opened vi:m (a homebrew application) */
+    extern std::atomic<u64>  g_vim_program;
     extern std::atomic<bool> g_app_excluded;
     /* M98: new settings arrived (ReloadConfig): end the session, restart with them */
     extern std::atomic<bool> g_reconfig_request;

@@ -78,6 +78,13 @@ namespace ams::mitm::applet {
          * Library applets a game opens still get the memory back first
          * (PrepareForApplet). */
         constexpr u64 TightMb = 48;
+        /* v0.7.16: with a web applet open, this much more must stay free
+         * beside us. Super Mario 3D All-Stars runs each game with OfflineWeb
+         * (0x17) open the whole time and the pool at ~287 of 500 MB: "a web
+         * applet runs" alone kept the stream off for the whole game. The
+         * browser and the eShop take (nearly) the whole pool, so they still
+         * keep it off; the pool watch stops it if one grows into this. */
+        constexpr u64 WebRoomMb = 96;
         /* v0.7.14: the smallest donor that streams 720p (capture region
          * >= ~22 MB plus the engine buffers) and the usual one */
         constexpr u32 MinDonorMb = 30, FullDonorMb = 42;
@@ -200,6 +207,13 @@ namespace ams::mitm::applet {
         constinit os::ThreadType g_watch_thread;
         constinit u64 g_trigger_ns = 0;
         constinit std::atomic<u64> g_hold_until_ns{0};
+        /* v0.7.17: when the Applet pool last jumped by 16 MB or more without
+         * us (OfflineWeb starting, its menu, going back to the title list:
+         * 287 -> 457 -> 297 within a second, twice over on the way out), and
+         * when our own donor last came or went */
+        constinit std::atomic<u64> g_pool_moved_ns{0};
+        constinit std::atomic<u64> g_donor_change_ns{0};
+        constexpr u64 PoolCalmNs = 2'000'000'000ull;
 
         /* v0.7.14: systemWeb (firmware 22+: the eShop, news pages, logins)
          * asks for its whole memory as it starts - faster than any poll: with
@@ -280,21 +294,38 @@ namespace ams::mitm::applet {
          * went 96 -> 288 MB in its first 250 ms sample and asked for the rest
          * ~0.9 s later. */
         void AppletWatchThread(void *) {
-            for (;;) {
+            u64 checked_mb = 0, base_mb = 0;   /* base_mb: the pool when our memory came (v0.7.17) */
+            bool was_mapped = false;
+            u64 calm_prev_mb = 0;
+            for (u32 tick = 0;; ++tick) {
                 os::SleepThread(TimeSpan::FromMilliSeconds(20));
                 WebHookStep();
+                /* v0.7.17: every 100 ms, mapped or not: is the pool moving? */
+                if ((tick % 5) == 0) {
+                    u64 c = 0, l = 0;
+                    if (R_SUCCEEDED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(c), std::addressof(l), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) {
+                        const u64 m = c >> 20, now = armTicksToNs(armGetSystemTick());
+                        const u64 d = m > calm_prev_mb ? m - calm_prev_mb : calm_prev_mb - m;
+                        if (calm_prev_mb != 0 && d >= 16 && now - g_donor_change_ns.load(std::memory_order_relaxed) >= 1'500'000'000ull) {
+                            g_pool_moved_ns.store(now, std::memory_order_relaxed);
+                        }
+                        calm_prev_mb = m;
+                    }
+                }
                 if (g_applet_needs_memory.load(std::memory_order_relaxed)) {
                     /* the teardown never reached DonorRelease: write the log anyway */
                     if (armTicksToNs(armGetSystemTick()) - g_trigger_ns > 3'000'000'000ull) { LogDefer(false); }
                     continue;
                 }
-                if (!g_mapped) { g_beside_max_pid = 0; continue; }
+                if (!g_mapped) { was_mapped = false; g_beside_max_pid = 0; continue; }
                 u64 cur = 0, lim = 0;
                 if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { continue; }
                 const u64 mb = cur >> 20, donor_mb = g_size >> 20;
                 /* the pool grew 32 MB since the last look: is it a web applet? */
-                static u64 checked_mb = 0;
+                if (!was_mapped) { was_mapped = true; checked_mb = base_mb = mb; }
                 if (mb < checked_mb) { checked_mb = mb; }
+                if (mb < base_mb) { base_mb = mb; }
+                /* v0.7.15: beside the Album or System Settings the margins are small */
                 const u64 free_mb = (lim >> 20) - mb;
                 const Beside &beside = free_mb < TightMb ? BesideNow(free_mb) : BesideOther;
                 const bool tight = free_mb < beside.stop_mb;
@@ -302,7 +333,16 @@ namespace ams::mitm::applet {
                 u64 new_pid = 0;
                 const bool spawned = beside.what != nullptr && NewProcessBeside(g_pid, std::addressof(new_pid));
                 bool web = false;
-                if (mb >= checked_mb + 32 || tight) { checked_mb = mb; web = WebAppletRunning(); }
+                /* v0.7.16: a web applet beside us only matters once it leaves less than WebRoomMb.
+                 * v0.7.17: or once it grows 24 MB past where it was when our
+                 * memory came - Super Mario 3D All-Stars' "-" menu (OfflineWeb,
+                 * 342 -> 384 MB) over Super Mario Sunshine, which draws on
+                 * under it: no stall to stop the stream, and OfflineWeb ran
+                 * out (2003-0008) on the next step */
+                if (mb >= checked_mb + 32 || mb >= base_mb + 24 || tight) {
+                    checked_mb = mb;
+                    web = (free_mb < WebRoomMb || mb >= base_mb + 24) && WebAppletRunning();
+                }
                 const bool trigger = web || tight || spawned;
                 if (trigger) {
                     LogDefer(true);   /* written once the memory is back (DonorRelease) */
@@ -317,7 +357,46 @@ namespace ams::mitm::applet {
         }
     }
 
-    bool AppletHoldActive() { return armTicksToNs(armGetSystemTick()) < g_hold_until_ns.load(std::memory_order_relaxed); }
+    /* v0.7.17: a hold ends early once the Applet pool has stopped growing -
+     * Super Mario 3D All-Stars' OfflineWeb peaks ~1 s after it starts and
+     * settles ~0.5 s later; the full 4-5 s was the longest part of the wait
+     * for the picture after each game started */
+    bool AppletHoldActive() {
+        const u64 now = armTicksToNs(armGetSystemTick());
+        const u64 until = g_hold_until_ns.load(std::memory_order_relaxed);
+        if (now >= until) { return false; }
+        /* counted from the first look at this hold - later, never sooner */
+        static u64 s_until = 0, s_start = 0, s_prev_mb = 0, s_stable_ns = 0;
+        if (until != s_until) { s_until = until; s_start = now; s_prev_mb = 0; s_stable_ns = 0; }
+        constexpr u64 MinHoldNs = 2'000'000'000ull, SettledNs = 750'000'000ull;
+        const u64 start = s_start;
+        if (now - start < MinHoldNs) { return true; }
+        /* v0.7.17: not between two games - the donor launched while
+         * Super Mario 3D All-Stars' title list was being started (back from
+         * Super Mario 64) and the title list never came up; the full hold
+         * kept that apart before */
+        {
+            os::ProcessId app{};
+            if (g_pmdmnt_rc != 0 || R_FAILED(::ams::pm::dmnt::GetApplicationProcessId(std::addressof(app)))) { return true; }
+        }
+        {
+            const u64 moved = g_pool_moved_ns.load(std::memory_order_relaxed);
+            if (moved != 0 && now - moved < PoolCalmNs) { s_stable_ns = 0; return true; }
+        }
+        u64 cur = 0, lim = 0;
+        if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { return true; }
+        const u64 mb = cur >> 20;
+        /* the applet's jumps came and went 2 s ago: that is the settling */
+        const u64 moved = g_pool_moved_ns.load(std::memory_order_relaxed);
+        const bool calm_after_move = moved != 0 && moved + 1'000'000'000ull >= start;
+        if (s_stable_ns == 0 || mb > s_prev_mb + 4) { s_stable_ns = now; }
+        s_prev_mb = mb;
+        if (!calm_after_move && now - s_stable_ns < SettledNs) { return true; }
+        g_hold_until_ns.store(0, std::memory_order_relaxed);
+        LogLine("donor: the Applet pool settled at %llu MB after %llu ms - no more waiting", static_cast<unsigned long long>(mb),
+                static_cast<unsigned long long>((now - start) / 1000000));
+        return false;
+    }
 
     void PrepareForApplet(u32 applet_id) {
         const u64 t0 = armTicksToNs(armGetSystemTick());
@@ -387,6 +466,8 @@ namespace ams::mitm::applet {
 
     bool DonorActive() { return g_mapped; }
 
+    bool WebAppletOpen() { return WebAppletRunning(); }
+
     bool AppletBusy(u64 *out_mb) {
         /* idle (home menu and friends) ~96 MB; the browser 290-494 MB of 500.
          * Launching the donor then took 42 MB from under it (test15: a
@@ -397,12 +478,24 @@ namespace ams::mitm::applet {
         const u64 mb = cur >> 20;
         if (out_mb != nullptr) { *out_mb = mb; }
         const u64 free_mb = (lim >> 20) - mb;
-        return WebAppletRunning() || free_mb < MinDonorMb + BesideNow(free_mb).take_mb;
+        /* v0.7.15: the margin beside the Album or System Settings is smaller */
+        if (free_mb < MinDonorMb + BesideNow(free_mb).take_mb) { return true; }
+        if (!WebAppletRunning()) { return false; }
+        /* v0.7.17: a web applet and a pool that moved in the last 2 s - between
+         * two of OfflineWeb's peaks the pool looks like its quiet level
+         * (287 vs ~300 MB), and the donor taken there left it 2 MB short
+         * of its next peak (2003-0008) */
+        const u64 moved = g_pool_moved_ns.load(std::memory_order_relaxed);
+        if (moved != 0 && armTicksToNs(armGetSystemTick()) - moved < PoolCalmNs) { return true; }
+        /* v0.7.16: a web applet beside the stream needs WebRoomMb more
+         * (Super Mario 3D All-Stars runs every game with OfflineWeb open) */
+        return free_mb < MinDonorMb + TightMb + WebRoomMb;
     }
 
     bool KeyboardHoldsStream() { return !WebAppletRunning() && Running(0x0100000000001008ull); }
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {
+        g_donor_change_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed);   /* its heap comes before the map */
         std::scoped_lock lk(g_lock);
         if (!g_mapped) {
             g_state.store(0);
@@ -453,6 +546,7 @@ namespace ams::mitm::applet {
                 return false;
             }
             g_mapped = true;
+            g_donor_change_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed);
             LogLine("donor: %llu MB from the Applet pool mapped at %p", static_cast<unsigned long long>(g_size >> 20), g_addr);
         }
         *out_addr = reinterpret_cast<uintptr_t>(g_addr);
@@ -499,6 +593,7 @@ namespace ams::mitm::applet {
             if (tries > 0) { LogLine("donor: waited %d ms", tries * 50); }
         }
         TerminateDonor();
+        g_donor_change_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed);
         LogDefer(false);
     }
 

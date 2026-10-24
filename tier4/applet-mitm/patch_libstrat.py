@@ -86,6 +86,36 @@ if MARK2 in src:
 else:
     src = patch_session_hook(src)
 
+# v0.7.16: Atmosphere 1.12.0's b05166d50 ("sf: close request copy handles in
+# mitm ForwardRequest"), for older trees. Before it, every copy handle in a
+# request the module forwards (am, vi) stayed open in the module: a launcher
+# passing its transfer memory to the next game (Kingdom Hearts' collection)
+# left its 3 GB pinned after it quit, and pm waited for that memory forever -
+# the console hung on a black screen. Built against 1.12.0 (v0.7.13's
+# release) it never happened; against 1.11.2 it did.
+F3 = pathlib.Path(sys.argv[1]) / "libraries/libstratosphere/source/sf/hipc/sf_hipc_server_session_manager.cpp"
+src3 = F3.read_text()
+MARK3 = "saved_request.meta.num_copy_handles"
+if MARK3 in src3:
+    print("patch_libstrat: mitm request copy handles already closed (Atmosphere 1.12.0+)")
+else:
+    old3 = "        R_TRY(svc::SendSyncRequest(util::GetReference(m_forward_service)->session));\n"
+    assert src3.count(old3) == 1, "ForwardRequest's SendSyncRequest not found"
+    new3 = (
+        "        {\n"
+        "            ON_SCOPE_EXIT {\n"
+        "                const auto saved_request = hipcParseRequest(const_cast<void *>(m_saved_message.GetPointer()));\n"
+        "                for (u32 i = 0; i < saved_request.meta.num_copy_handles; i++) {\n"
+        "                    os::CloseNativeHandle(saved_request.data.copy_handles[i]);\n"
+        "                }\n"
+        "            };\n"
+        "\n"
+        "            R_TRY(svc::SendSyncRequest(util::GetReference(m_forward_service)->session));\n"
+        "        }\n"
+    )
+    F3.write_text(src3.replace(old3, new3, 1))
+    print("patch_libstrat: mitm request copy handles closed after forwarding (backport of Atmosphere b05166d50)")
+
 # only when something changed: rewriting the header bumps its timestamp, and
 # make then rebuilds the whole of libstratosphere (30+ minutes)
 if src != orig:

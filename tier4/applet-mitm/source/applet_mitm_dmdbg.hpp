@@ -46,6 +46,13 @@ namespace ams::mitm::applet {
      * would detach the cheat engine too. dmnt drops it when the game exits. */
     void DbgDetach(svc::Handle dbg);
 
+    /* v0.7.17: the stream's direct debug handle on the game while a session
+     * holds one (0 otherwise), for the audout reader - it reads under the
+     * lock, and DbgDetach clears it and takes the lock before closing */
+    extern std::atomic<u32> g_app_dbg;
+    extern std::atomic<u64> g_app_dbg_pid;   /* whose it is */
+    extern os::SdkMutex g_app_dbg_lock;
+
     /* Per-piece read timing for the dmnt backend (diagnostic): reset on
      * attach, one summary line per live session. */
     void DmStatsReset();

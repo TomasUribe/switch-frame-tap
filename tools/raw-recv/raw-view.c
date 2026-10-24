@@ -90,6 +90,7 @@
 #endif
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
+#include "sdl_compat.h"        /* v0.7.15: sdl2-compat's SDL_RenderGetScale */
 #ifdef SFT_H264
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
@@ -109,6 +110,8 @@
 #define SFT_FLAG_KEY       4u   /* M85: an IDR access unit (H.264 only) */
 #define SFT_FLAG_AUDIO     8u   /* v0.3: game audio, 16-bit stereo PCM (width = rate, height = channels) */
 #define SFT_FLAG_STATUS   16u   /* v0.7.10: with AUDIO (rate 0, so older viewers drop it): why there is no picture */
+#define SFT_FLAG_CROP     32u   /* v0.7.16: with H264 - block_h_log2 is the part of the picture the game drew (w << 16 | h) */
+#define SFT_FLAG_CROP_MID 64u   /* v0.7.16: with CROP - that part is in the middle of the picture, not at its top left */
 
 #pragma pack(push, 1)
 typedef struct {
@@ -160,6 +163,7 @@ static int g_need_aspect_snap = 0;
 static SDL_Window *g_paint_win = NULL;
 static SDL_Renderer *g_paint_ren = NULL;
 static SDL_Texture *g_paint_tex = NULL;
+static SDL_Rect g_paint_crop;        /* v0.7.16: the crop of the frame on screen, for repaints (w 0: all) */
 static void viewer_repaint(void);
 static void window_geom_capture(SDL_Window *win);
 static void window_geom_apply(SDL_Window *win);
@@ -1567,7 +1571,7 @@ static void viewer_repaint(void)
         if (g_upscaler != UP_FSR || !g_up.active ||
             !clarity_draw(g_paint_ren, NULL, NULL, 0, 0, g_fsr_sharpness / 100.0f, 0))
 #endif
-            SDL_RenderCopy(g_paint_ren, g_paint_tex, NULL, NULL);
+            SDL_RenderCopy(g_paint_ren, g_paint_tex, g_paint_crop.w ? &g_paint_crop : NULL, NULL);
     }
     int lw = 0, lh = 0;
     SDL_RenderGetLogicalSize(g_paint_ren, &lw, &lh);
@@ -1914,6 +1918,8 @@ static SDL_cond *g_f_put = NULL;
 static volatile int g_dec_stop = 0;
 static Uint64 g_t_rx[256];           /* header arrival per frame number */
 static double g_age_ms[256];         /* the console's own age of that frame */
+static uint32_t g_crop_wh[256];      /* v0.7.16: its dynamic-resolution crop (w << 16 | h), 0: all of it */
+static uint8_t g_crop_mid[256];      /* v0.7.16: that crop sits in the middle */
 static float g_kb_pts[256], g_dec_pts[256];   /* v0.7.2 overlay: its size, its decode time */
 static unsigned char g_key_pts[256];          /* and whether it was a keyframe */
 
@@ -1946,6 +1952,8 @@ static int decoder_main(void *arg)
         if (hdr.flags & SFT_FLAG_KEY) s_keyframes++;
         g_t_rx[hdr.kind & 255] = t_hdr;
         g_age_ms[hdr.kind & 255] = (hdr.stride != 0 && hdr.stride < 10000000u) ? hdr.stride / 1000.0 : -1.0;
+        g_crop_wh[hdr.kind & 255] = (hdr.flags & SFT_FLAG_CROP) ? hdr.block_h_log2 : 0;
+        g_crop_mid[hdr.kind & 255] = (hdr.flags & SFT_FLAG_CROP_MID) != 0;
         if (g_dec_reopen) {                    /* v0.7.12: hardware decoding switched in the drawer */
             g_dec_reopen = 0;
             h264_close(a->dec);
@@ -2106,10 +2114,14 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                  * or in the background, the stream turned off): the menu
                  * instead of a frozen frame */
                 const Uint64 nowm = SDL_GetPerformanceCounter();
-                if (!g_menu && (!t_prev_show || (double)(nowm - t_prev_show) / (double)freq > 1.5)) {
+                /* v0.7.16: 8 s, not 1.5 - a loading screen draws nothing for
+                 * a while too (Duke Nukem: ~5 s, Doom 3), and the TV keeps
+                 * the last picture meanwhile; the menu only for a longer gap
+                 * (the HOME menu itself streams at once with home_menu on) */
+                if (!g_menu && (!t_prev_show || (double)(nowm - t_prev_show) / (double)freq > 8.0)) {
                     g_menu = 1;
                     g_menu_state = t_prev_show ? MENU_PAUSED : MENU_CONNECTED;
-                    if (t_prev_show) fprintf(stderr, "\nno new picture for 1.5 s - showing the menu\n");
+                    if (t_prev_show) fprintf(stderr, "\nno new picture for 8 s - showing the menu\n");
                 }
                 if (g_menu && (double)(nowm - t_menu) / (double)freq > 0.2) { menu_draw(ren); t_menu = nowm; }
             }
@@ -2162,8 +2174,21 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
             if (nv12) SDL_UpdateNVTexture(tex, NULL, pd[0], pl[0], pd[1], pl[1]);
             else SDL_UpdateYUVTexture(tex, NULL, pd[0], pl[0], pd[1], pl[1], pd[2], pl[2]);
             SDL_RenderClear(ren);
+            /* v0.7.16: dynamic resolution (Super Mario Galaxy) - the console
+             * sends the frame 1:1 and says which part the game drew; only that
+             * part is stretched over the picture, as the Switch's screen does */
+            {
+                const uint32_t c = g_crop_wh[show->pts & 255];
+                const int cw = (int)(c >> 16) & ~1, ch = (int)(c & 0xFFFF) & ~1;
+                const int ok = c != 0 && cw >= 64 && ch >= 64 && cw <= (int)W && ch <= (int)H && (cw < (int)W || ch < (int)H);
+                const int mid = ok && g_crop_mid[show->pts & 255];   /* Kingdom Hearts: the middle */
+                const int cx = mid ? (((int)W - cw) / 2) & ~1 : 0, cy = mid ? (((int)H - ch) / 2) & ~1 : 0;
+                g_up_crop_w = ok ? cw : 0; g_up_crop_h = ok ? ch : 0;
+                g_up_crop_x = cx; g_up_crop_y = cy;
+                g_paint_crop = (SDL_Rect){ cx, cy, ok ? cw : 0, ok ? ch : 0 };
+            }
             if (!up_draw(ren, pd, pl, (int)W, (int)H, g_upscaler, nv12))   /* v0.7.11: U */
-                SDL_RenderCopy(ren, tex, NULL, NULL);
+                SDL_RenderCopy(ren, tex, g_paint_crop.w ? &g_paint_crop : NULL, NULL);
             if (rec_active()) {                /* v0.5: shown while recording (not in the file); v0.7.12: with the time */
                 ui_rec_badge(ren, (int)W, (int)H);
                 SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);

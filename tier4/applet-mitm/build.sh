@@ -11,10 +11,15 @@ SRC=$REPO/tier4/applet-mitm
 DST=$AMS/stratosphere/applet-mitm
 IMG="${DKP_IMG:-devkitpro/devkita64:latest}"
 UIDGID="$(id -u):$(id -g)"
+# rootless podman (also as "docker", podman-docker): the container's root IS
+# this user, so the files are ours already - a chown to our uid inside would
+# hand them to a sub-uid instead (permission denied on the next run)
+OWN() { docker run --rm -v "$AMS":/ams "$IMG" chown -R "$UIDGID" /ams/stratosphere/applet-mitm >/dev/null 2>&1 || true; }
+if docker --version 2>/dev/null | grep -qi podman; then OWN() { :; }; fi
 
 mkdir -p "$DST"
 # docker builds as root; reclaim ownership before touching the tree
-docker run --rm -v "$AMS":/ams "$IMG" chown -R "$UIDGID" /ams/stratosphere/applet-mitm >/dev/null 2>&1 || true
+OWN
 
 # tier4 libstratosphere patch (idempotent): non-domain mitm sub-object forwarding
 python3 "$SRC/patch_libstrat.py" "$AMS"
@@ -31,7 +36,7 @@ docker run --rm -e MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}" -v "$AMS":/ams -w /ams/s
 rc=$?
 set -e
 
-docker run --rm -v "$AMS":/ams "$IMG" chown -R "$UIDGID" /ams/stratosphere/applet-mitm >/dev/null 2>&1 || true
+OWN
 NSP="$(find "$DST/out" -name '*.nsp' | head -1)"
 [ -n "$NSP" ] && cp "$NSP" "$SRC/applet-mitm$TAG.nsp"
 

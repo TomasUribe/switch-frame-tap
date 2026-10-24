@@ -17,6 +17,7 @@
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_donor.hpp"
 #include "applet_mitm_am.hpp"
+#include "applet_mitm_audout.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_nvdrv.hpp"
@@ -1320,6 +1321,8 @@ namespace ams {
         /* v0.7.10: the game's am, so a browser applet stops the stream first;
          * "noam" in config/arm leaves am alone (escape hatch) */
         if (ArmFileContains("noam")) { mitm::applet::LogLine("am: not wrapped (noam)"); } else { mitm::applet::StartAmMitm(); }
+        /* v0.7.17: a game's audout:u - its own PCM for the stream when nothing else carries its sound (PokeMMO) */
+        if (ArmFileContains("noaudout")) { mitm::applet::LogLine("audout: not wrapped (noaudout)"); } else { mitm::applet::StartAudOutMitm(); }
         /* v0.1.1: after vi:u, and wrapping only the running application's own
          * sessions (ShouldMitm asks pm:dmnt) */
         /* v0.7.1: "nohb" (config homebrew = 0, not in the manager) leaves vi:m

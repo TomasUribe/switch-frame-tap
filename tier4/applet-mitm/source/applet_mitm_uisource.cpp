@@ -76,6 +76,8 @@ namespace ams::mitm::applet {
         constinit s32 g_active = -1;
 
         constinit u32 g_fed = 0, g_switches = 0, g_rescans = 0, g_shaped = 0;
+
+        constinit bool g_ui_idle = false;   /* v0.7.16: the last start found nothing drawing */
         /* test2: per 5 s window, the layer fed and the slots its frames named */
         constinit u32 g_win_fed = 0, g_win_slots[8] = {};
         constinit u64 g_win_layer = 0;
@@ -249,6 +251,8 @@ namespace ams::mitm::applet {
         return true;
     }
 
+    bool UiSourceIdle() { return g_ui_idle; }
+
     bool UiSourceStart(::ams::svc::Handle dbg, u64 pid, u64 base) {
         AMS_UNUSED(pid);
         if (g_work == nullptr) {
@@ -273,6 +277,30 @@ namespace ams::mitm::applet {
                 g_work->msgs[k] = m;
                 if (g_active < 0) { g_active = static_cast<s32>(k); }
             }
+        }
+        /* v0.7.16: is it really drawing? A game's loading pause ends its
+         * session too (Duke Nukem: ~5 s) - the layer found then moved once
+         * and never again, and its old picture was all the viewer got in
+         * place of the loading screen. The HOME menu, there for real, draws
+         * frame after frame: two more moves within 160 ms. */
+        g_ui_idle = false;
+        if (g_active >= 0) {
+            u32 moves = 0;
+            u32 fv = g_work->msgs[g_active].fence_value;
+            for (u32 i = 0; i < 8 && moves < 2; ++i) {
+                os::SleepThread(TimeSpan::FromMilliSeconds(20));
+                Msg m;
+                if (ReadMsg(static_cast<u32>(g_active), std::addressof(m)) && m.fence_value != fv) { fv = m.fence_value; ++moves; }
+            }
+            if (moves < 2) { g_ui_idle = true; }
+        } else {
+            g_ui_idle = true;
+        }
+        if (g_ui_idle) {
+            static u32 said = 0;
+            if (said++ < 3) { LogLine("   ui: nothing of the HOME menu is drawing (a game's loading pause?) - not streaming it"); }
+            g_active = -1;
+            return false;
         }
         LogLine("   ui: vi's shared buffer at %#llx; %u data regions, %u present message(s) (%u shaped), scan %llu ms; %s",
                 static_cast<unsigned long long>(base), g_nregs, g_nmsgs, g_shaped, static_cast<unsigned long long>((NowNs() - t0) / 1000000),

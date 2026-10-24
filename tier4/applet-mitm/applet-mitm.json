@@ -42,7 +42,8 @@
         "lbl",
         "dispdrv",
         "aud:a",
-        "audrec:u"
+        "audrec:u",
+        "audout:u"
     ],
     "service_host": [
         "vi:u",
@@ -53,7 +54,8 @@
         "appletOE",
         "lbl",
         "dispdrv",
-        "vi:s"
+        "vi:s",
+        "audout:u"
     ],
     "kernel_capabilities": [
         {

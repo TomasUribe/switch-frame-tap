@@ -40,6 +40,8 @@ namespace ams::mitm::applet {
      * stream to give the donor's memory back immediately and hold engine
      * re-setup for a few seconds so Album is not racing a 42 MB remount. */
     void PrepareForHomeMenu();
+    /* v0.7.16: a web applet (browser, eShop, manuals, OfflineWeb) is running */
+    bool WebAppletOpen();
     bool AppletHoldActive();
 
     /* sftap commands 10 / 11, from the donor */

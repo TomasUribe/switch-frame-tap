@@ -50,3 +50,11 @@ record as averne's oss-nvjpg documents it (GPL-3.0,
 include/nvjpg/nv/registers.hpp): the offsets describe the hardware; no code
 from oss-nvjpg is in this tree. It runs only in a test install armed with
 "jpgdec".
+
+tier4/applet-mitm/patch_libstrat.py backports Atmosphère commit b05166d50
+(GPL-2.0): mitm ForwardRequest closes the request's copy handles.
+
+tier4/applet-mitm/source/applet_mitm_nv.cpp (FindLibnxNvMaps) and
+applet_mitm_audout.cpp rely on libnx's data layouts (ISC): struct NvMap
+(nvidia/map.h) and AudioOutBuffer plus the audout:u commands
+(services/audout.h). Only the layouts are used; no libnx code is copied.

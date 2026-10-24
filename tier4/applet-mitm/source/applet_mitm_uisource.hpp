@@ -30,6 +30,8 @@ namespace ams::mitm::applet {
     /* with vi attached: find the present messages and start the feeder */
     bool UiSourceStart(::ams::svc::Handle dbg, u64 pid, u64 base);
     void UiSourceStop();
+    /* v0.7.16: the last UiSourceStart found nothing of the HOME menu drawing */
+    bool UiSourceIdle();
 
     /* one line: presents fed, layers followed, rescans */
     void UiSourceLogStats(const char *who);
