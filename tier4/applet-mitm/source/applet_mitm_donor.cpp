@@ -1,4 +1,5 @@
 #include "applet_mitm_donor.hpp"
+#include "applet_mitm_control.hpp"
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_shot.hpp"
@@ -563,6 +564,24 @@ namespace ams::mitm::applet {
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {
         g_donor_change_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed);   /* its heap comes before the map */
+        /* Cap + SwitchU headroom wait outside g_lock (can sleep up to 2 s). */
+        u32 ask_cap = FullDonorMb;
+        {
+            const u64 free_mb = AppletFreeMb();
+            const Beside &beside = BesideNow(free_mb);
+            const u64 room = free_mb > beside.take_mb ? free_mb - beside.take_mb : 0;
+            ask_cap = room >= FullDonorMb ? FullDonorMb : (room >= MinDonorMb ? static_cast<u32>(room) : MinDonorMb);
+        }
+        bool need_headroom = false;
+        {
+            std::scoped_lock peek(g_lock);
+            need_headroom = !g_mapped;
+        }
+        if (need_headroom) {
+            /* Give SwitchU ~2 s to hard-reclaim GPU before we launch the donor
+             * (2nd+ HOME→game remount was racing soft-land refill). */
+            HeadroomAskAndWait(ask_cap, 2000);
+        }
         std::scoped_lock lk(g_lock);
         if (!g_mapped) {
             g_state.store(0);
@@ -589,12 +608,12 @@ namespace ams::mitm::applet {
             {
                 SmUse sm_pm;
                 ::Result rc = ::pmshellInitialize();
-                if (R_FAILED(rc)) { LogLine("donor: pm:shell rc=0x%x", rc); return false; }
+                if (R_FAILED(rc)) { LogLine("donor: pm:shell rc=0x%x", rc); HeadroomClear(); return false; }
                 const NcmProgramLocation loc = { .program_id = DonorProgramId, .storageID = NcmStorageId_None, .pad = {} };
                 u64 pid = 0;
                 rc = ::pmshellLaunchProgram(0, std::addressof(loc), std::addressof(pid));
                 LogLine("donor: launch rc=0x%x pid %llu", rc, static_cast<unsigned long long>(pid));
-                if (R_FAILED(rc)) { ::pmshellExit(); return false; }
+                if (R_FAILED(rc)) { ::pmshellExit(); HeadroomClear(); return false; }
                 g_pmshell_open = true;   /* kept for TerminateDonor */
                 g_pid = pid;
             }
@@ -602,6 +621,7 @@ namespace ams::mitm::applet {
             if (g_state.load() != 1) {
                 LogLine("donor: no memory (%s, rc=0x%x)", g_state.load() == 2 ? "the Applet pool refused every size" : "no answer in 5 s", g_fail_rc);
                 TerminateDonor();
+                HeadroomClear();
                 return false;
             }
             os::AttachTransferMemory(std::addressof(g_tmem), g_size, g_handle, true);
@@ -610,11 +630,13 @@ namespace ams::mitm::applet {
                 LogLine("donor: map %llu MB rc=0x%x", static_cast<unsigned long long>(g_size >> 20), rc.GetValue());
                 os::DestroyTransferMemory(std::addressof(g_tmem));
                 TerminateDonor();
+                HeadroomClear();
                 return false;
             }
             g_mapped = true;
             g_donor_change_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed);
             LogLine("donor: %llu MB from the Applet pool mapped at %p", static_cast<unsigned long long>(g_size >> 20), g_addr);
+            HeadroomClear();
         }
         *out_addr = reinterpret_cast<uintptr_t>(g_addr);
         *out_size = g_size;
