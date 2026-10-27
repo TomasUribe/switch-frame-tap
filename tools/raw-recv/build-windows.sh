@@ -88,6 +88,7 @@ cp "$W/sdl2/x86_64-w64-mingw32/bin/SDL2.dll" "$W/libusb/MinGW64/dll/libusb-1.0.d
 [ ${#FF_DLLS[@]} -gt 0 ] && cp "${FF_DLLS[@]}" "$PKG/"
 cp "$REPO/LICENSE" "$PKG/licenses/switch-frame-tap-GPL-2.0.txt"
 cp "$REPO/third_party/fsr1/license.txt" "$PKG/licenses/AMD-FidelityFX-FSR1-MIT.txt"; cp "$REPO/third_party/nis/licence.txt" "$PKG/licenses/NVIDIA-Image-Scaling-MIT.txt"   # v0.7.11: the upscalers' shaders
+tail -n 41 "$REPO/third_party/stb/stb_truetype.h" > "$PKG/licenses/stb_truetype-MIT-or-public-domain.txt"   # the text renderer
 cp "$W/sdl2/LICENSE.txt" "$PKG/licenses/SDL2-zlib.txt"
 if [ ${#FF_DLLS[@]} -gt 0 ]; then cp "$W/ffmpeg/LICENSE.txt" "$PKG/licenses/FFmpeg-LGPL.txt"; else cp "$MIN/COPYING.LGPLv2.1" "$PKG/licenses/FFmpeg-LGPL-2.1.txt"; fi
 cp /usr/share/doc/fonts-dejavu-core/copyright "$PKG/licenses/DejaVu-fonts.txt"

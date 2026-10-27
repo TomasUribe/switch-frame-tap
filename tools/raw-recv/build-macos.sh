@@ -118,6 +118,7 @@ PLIST
 mkdir -p "$OUT/licenses"
 cp "$REPO/LICENSE" "$OUT/licenses/switch-frame-tap-GPL-2.0.txt"
 cp "$REPO/third_party/fsr1/license.txt" "$OUT/licenses/AMD-FidelityFX-FSR1-MIT.txt"; cp "$REPO/third_party/nis/licence.txt" "$OUT/licenses/NVIDIA-Image-Scaling-MIT.txt"   # v0.7.11: the upscalers' shaders
+tail -n 41 "$REPO/third_party/stb/stb_truetype.h" > "$OUT/licenses/stb_truetype-MIT-or-public-domain.txt"   # the text renderer
 cp "$FF/COPYING.LGPLv2.1" "$OUT/licenses/FFmpeg-LGPL-2.1.txt"
 cp "$SDLP/LICENSE.txt" "$OUT/licenses/SDL2-zlib.txt"
 cp "$USBP/COPYING" "$OUT/licenses/libusb-LGPL-2.1.txt" 2>/dev/null || true

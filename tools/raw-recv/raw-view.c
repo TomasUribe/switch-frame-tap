@@ -165,6 +165,10 @@ static int g_drag_pending = 0, g_dragging = 0;
 static int g_drag_ox, g_drag_oy, g_drag_wx, g_drag_wy;
 static int g_drag_sx, g_drag_sy; /* global mouse at button-down (absolute threshold) */
 static int g_in_size_move = 0;             /* Win32 modal resize loop */
+/* app_events: a redraw asked for while handling events waits until the queue
+ * is empty. Drawing (and waiting for vsync) on every mouse move let a fast
+ * mouse queue up seconds of redraws ahead of a click. */
+static int g_defer_draw = 0, g_draw_pending = 0;
 static int g_need_aspect_snap = 0;
 static SDL_Window *g_paint_win = NULL;
 static SDL_Renderer *g_paint_ren = NULL;
@@ -377,8 +381,8 @@ static void watchdog_stop(void) {}
 
 /* v0.7.14: on KDE Wayland the release's static SDL could fall back to X11
  * (XWayland); its GLX/DRI3 present path is what froze the window on the
- * author's 165 Hz desktop. Only KDE is forced: GNOME and the other Wayland
- * sessions keep SDL's own choice. An explicit SDL_VIDEODRIVER /
+ * author's 165 Hz desktop. Every Wayland session but GNOME is forced (GNOME
+ * keeps SDL's own choice). An explicit SDL_VIDEODRIVER /
  * SFT_VIDEO_DRIVER / --video-driver still wins, and Wayland falls back to
  * SDL's default if it cannot start. */
 static int video_init(void)
@@ -394,8 +398,10 @@ static int video_init(void)
     } else if (!user_env) {
         const char *sess = getenv("XDG_SESSION_TYPE");
         const char *desk = getenv("XDG_CURRENT_DESKTOP");
+        /* not just KDE: niri, sway, Hyprland... run X11 through
+         * xwayland-satellite or similar, which made the UI take seconds per click */
         if (sess && !strcmp(sess, "wayland") && getenv("WAYLAND_DISPLAY") &&
-            desk && strstr(desk, "KDE")) {
+            !(desk && strstr(desk, "GNOME"))) {
             setenv("SDL_VIDEODRIVER", "wayland", 1);
             forced = 1;
         }
@@ -1455,12 +1461,7 @@ static void ren_swap(SDL_Window **winp, SDL_Renderer **renp, SDL_Texture **texp)
     if (*texp) { SDL_DestroyTexture(*texp); *texp = NULL; }
     if (g_font_tex) SDL_DestroyTexture(g_font_tex);
     g_font_tex = NULL; g_font_ren = NULL;
-    if (g_ui_disc) SDL_DestroyTexture(g_ui_disc);
-    g_ui_disc = NULL; g_ui_disc_ren = NULL;
-    if (g_ui_gear) SDL_DestroyTexture(g_ui_gear);
-    g_ui_gear = NULL; g_ui_gear_ren = NULL;
-    if (g_ui_pin) SDL_DestroyTexture(g_ui_pin);
-    g_ui_pin = NULL; g_ui_pin_ren = NULL;
+    ui_icons_free();
     up_reset();
     SDL_DestroyRenderer(*renp);
     *renp = NULL;
@@ -1713,6 +1714,7 @@ static void act_hwdec(int on)
 static void viewer_repaint(void)
 {
     if (!g_paint_ren) return;
+    if (g_defer_draw && !g_in_size_move) { g_draw_pending = 1; return; }
     if (g_menu) { menu_draw(g_paint_ren); return; }
     SDL_SetRenderDrawColor(g_paint_ren, 0, 0, 0, 255);
     SDL_RenderClear(g_paint_ren);
@@ -1753,6 +1755,7 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
         viewer_repaint();
     }
     SDL_Event e;
+    g_defer_draw = 1;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) {
             window_geom_capture(win);
@@ -1910,6 +1913,11 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
             /* resized, uncovered, or hover chrome: draw the last picture again */
             viewer_repaint();
         }
+    }
+    g_defer_draw = 0;
+    if (g_draw_pending) {
+        g_draw_pending = 0;
+        viewer_repaint();
     }
 }
 

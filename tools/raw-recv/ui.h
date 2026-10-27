@@ -260,13 +260,7 @@ static void ui_gear_button(SDL_Renderer *ren, float xr, float y, float d, SDL_Co
     SDL_Color b = bg;
     if (hov) { b = UI_SURF3; b.a = bg.a > 230 ? bg.a : 230; }
     ui_rrect(ren, x, y, d, d, d / 2, b);
-    ui_gear_init(ren);
-    if (g_ui_gear) {
-        SDL_SetTextureColorMod(g_ui_gear, UI_INK.r, UI_INK.g, UI_INK.b);
-        SDL_SetTextureAlphaMod(g_ui_gear, 255);
-        const SDL_FRect g = { x + inset, y + inset, d - inset * 2, d - inset * 2 };
-        SDL_RenderCopyF(ren, g_ui_gear, NULL, &g);
-    }
+    ui_icon(ren, ICON_GEAR, x + inset, y + inset, d - inset * 2, UI_INK);
     if (hov) {
         const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
         const float tw = text_width("Settings", px, 1) + d * 0.48f;
@@ -325,15 +319,8 @@ static void ui_pin_button(SDL_Renderer *ren, float x, float y, float d)
     if (on) b = (SDL_Color){ UI_ACC.r, UI_ACC.g, UI_ACC.b, 220 };
     else if (hov) { b = UI_SURF3; b.a = 230; }
     ui_rrect(ren, x, y, d, d, d / 2, b);
-    ui_pin_init(ren);
-    if (g_ui_pin) {
-        if (on) SDL_SetTextureColorMod(g_ui_pin, 12, 14, 18);
-        else SDL_SetTextureColorMod(g_ui_pin, UI_INK.r, UI_INK.g, UI_INK.b);
-        SDL_SetTextureAlphaMod(g_ui_pin, 255);
-        const float inset = d * 0.18f;
-        const SDL_FRect g = { x + inset, y + inset, d - inset * 2, d - inset * 2 };
-        SDL_RenderCopyF(ren, g_ui_pin, NULL, &g);
-    }
+    const float inset = d * 0.18f;
+    ui_icon(ren, ICON_PIN, x + inset, y + inset, d - inset * 2, on ? (SDL_Color){ 12, 14, 18, 255 } : UI_INK);
     ui_chrome_hit(x, y, d, H_PIN);
 }
 
@@ -905,6 +892,7 @@ static void ui_overlay(SDL_Renderer *ren, int W, int H)
  * stay as light chrome in the corners; the black field is just backdrop. */
 static void menu_draw(SDL_Renderer *ren)
 {
+    if (g_defer_draw && !g_in_size_move) { g_draw_pending = 1; return; }
     text_init(ren);
     int ow = 1280, oh = 720;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
