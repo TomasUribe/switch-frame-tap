@@ -621,11 +621,11 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
         {
             const float h = ui_d(48), gap_y = ui_d(4), tog_y = ui_d(12);
             ui_row(H_FULL, 0, y, h);
-            ui_label(ren, cxi, y, h, "Fullscreen", "F11, double-click, or middle-click", ui_focused(H_FULL, 0), cwi);
+            ui_label(ren, cxi, y, h, "Fullscreen", "F11 / double / middle. FS: Alt-pan, Ctrl-wheel zoom, Ctrl-click reset", ui_focused(H_FULL, 0), cwi);
             ui_toggle(ren, xri, y + tog_y, g_ui_win && (SDL_GetWindowFlags(g_ui_win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0, H_FULL, 1);
             y += h + gap_y;
             ui_row(H_VSYNC, 0, y, h);
-            ui_label(ren, cxi, y, h, "Vsync", g_vsync ? "Smooth, no tearing" : "Off: lowest latency, may tear", ui_focused(H_VSYNC, 0), cwi);
+            ui_label(ren, cxi, y, h, "Vsync", g_vsync ? "Smooth, no tearing (adds input lag)" : "Off: snappier UI + lower latency (may tear)", ui_focused(H_VSYNC, 0), cwi);
             ui_toggle(ren, xri, y + tog_y, g_vsync, H_VSYNC, 1);
             y += h + gap_y;
             ui_row(H_ASPECT, 0, y, h);
@@ -1441,11 +1441,19 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
         g_ui_ptr_inside = 1;
         g_ui_mouse_t = SDL_GetPerformanceCounter();
         g_ui_kbd = 0;
-        if (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP || g_ui_drag == H_PADSL) { ui_slide(g_ui_mx); prefs_save(); }
+        if (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP || g_ui_drag == H_PADSL) { ui_slide(g_ui_mx); prefs_mark_dirty(); }
         else if (g_ui_drag == H_SCROLL) ui_scroll_drag(g_ui_wy);
         return 1;                           /* redraw so hover chrome tracks the pointer */
     }
-    if (e->type == SDL_MOUSEBUTTONUP) { if (g_ui_drag) { g_ui_drag = 0; return 1; } return 0; }
+    if (e->type == SDL_MOUSEBUTTONUP) {
+        if (g_ui_drag) {
+            const int was_slide = (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP || g_ui_drag == H_PADSL);
+            g_ui_drag = 0;
+            if (was_slide) prefs_save();    /* flush slider prefs on release */
+            return 1;
+        }
+        return 0;
+    }
     if (e->type == SDL_MOUSEWHEEL) {
         if (g_ui_open) { g_ui_scroll -= e->wheel.y * (40.f * g_ui_d); return 1; }
         if (g_menu) { g_home_scroll -= e->wheel.y * (40.f * g_ui_d); return 1; }
@@ -1474,7 +1482,7 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_PADMBTN: pui_mouse_cycle(h->arg / 2, h->arg & 1 ? 1 : -1); break;
             case H_PADMODE: g_pad_mstick = h->arg; prefs_save(); break;
             case H_PADINV: g_pad_minvert = !g_pad_minvert; prefs_save(); break;
-            case H_PADSL: g_ui_drag = H_PADSL; g_ui_drag_arg = h->arg; ui_slide(g_ui_mx); prefs_save(); break;
+            case H_PADSL: g_ui_drag = H_PADSL; g_ui_drag_arg = h->arg; ui_slide(g_ui_mx); prefs_mark_dirty(); break;
             case H_PADCHANGE: pad_cycle(); break;
             case H_PADSWAP: pui_swap(); break;
             case H_PADRESET: act_pad_defaults(h->arg); break;
@@ -1503,8 +1511,8 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_HWDEC: act_hwdec(h->arg); break;
             case H_UPS: act_upscaler(ren, h->arg); break;
             case H_HUD: act_hud(h->arg); break;
-            case H_PIC: g_ui_drag = H_PIC; g_ui_drag_arg = h->arg; ui_slide(g_ui_mx); prefs_save(); break;
-            case H_FSR_SHARP: g_ui_drag = H_FSR_SHARP; g_ui_drag_arg = 0; ui_slide(g_ui_mx); prefs_save(); break;
+            case H_PIC: g_ui_drag = H_PIC; g_ui_drag_arg = h->arg; ui_slide(g_ui_mx); prefs_mark_dirty(); break;
+            case H_FSR_SHARP: g_ui_drag = H_FSR_SHARP; g_ui_drag_arg = 0; ui_slide(g_ui_mx); prefs_mark_dirty(); break;
             case H_PIC_RESET: g_pic = pic_default; prefs_save(); break;
             case H_SOUND: act_mute(!h->arg); break;
             case H_REC: act_record(win); break;

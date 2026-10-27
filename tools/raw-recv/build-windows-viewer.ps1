@@ -236,7 +236,13 @@ if (-not $UseMin -and -not (Test-FfReady)) {
 }
 
 $B = Join-Path $Repo "dist\build-windows-local"
-if (Test-Path $B) { Remove-Item -Recurse -Force $B }
+if (Test-Path $B) {
+    try { Remove-Item -Recurse -Force $B }
+    catch {
+        $B = Join-Path $Repo ("dist\build-windows-local-{0}" -f (Get-Date -Format "HHmmss"))
+        Write-Step "Previous build dir locked - using $B"
+    }
+}
 New-Item -ItemType Directory -Force -Path $B | Out-Null
 
 $SdlInc = Join-Path $SdlDir "x86_64-w64-mingw32\include"
@@ -246,12 +252,87 @@ $UsbInc = Join-Path $UsbDir "include"
 $UsbLib = Join-Path $UsbDir "MinGW64\static\libusb-1.0.dll.a"
 $UsbDll = Join-Path $UsbDir "MinGW64\dll\libusb-1.0.dll"
 $Src = Join-Path $Repo "tools\raw-recv\raw-view.c"
+$Svg = Join-Path $Repo "tools\raw-recv\switch-frame-tap.svg"
+$IcoSrc = Join-Path $Repo "tools\raw-recv\switch-frame-tap.ico"
+$Ico = Join-Path $B "switch-frame-tap.ico"
+$Rc = Join-Path $B "raw-view.rc"
 $Exe = Join-Path $B "SwitchFrameTap.exe"
 
+# Same as build-windows.sh: embed the Frame Tap icon + VERSIONINFO in the .exe
+# (Explorer / taskbar / Alt-Tab). Prefer committed .ico; else ImageMagick from SVG.
+if (Test-Path $IcoSrc) {
+    Copy-Item -Force $IcoSrc $Ico
+    Write-Step "Icon: tools\raw-recv\switch-frame-tap.ico"
+} else {
+    $Magick = $null
+    foreach ($c in @(
+        "${env:ProgramFiles}\ImageMagick-*\magick.exe",
+        "${env:ProgramFiles(x86)}\ImageMagick-*\magick.exe"
+    )) {
+        $hit = Get-Item $c -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+        if ($hit) { $Magick = $hit.FullName; break }
+    }
+    if (-not $Magick) {
+        $cmd = Get-Command magick.exe -ErrorAction SilentlyContinue
+        if ($cmd) { $Magick = $cmd.Source }
+    }
+    if (-not $Magick -or -not (Test-Path $Svg)) {
+        throw "Need tools\raw-recv\switch-frame-tap.ico (or ImageMagick magick.exe + switch-frame-tap.svg)"
+    }
+    Write-Step "Icon: generating .ico from SVG via ImageMagick"
+    & $Magick -background none -density 384 $Svg -define "icon:auto-resize=256,64,48,32,16" $Ico
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $Ico)) { throw "ImageMagick failed to write $Ico" }
+}
+
+# VERSIONINFO numbers: 0.7.19-1-g0b0a202-dirty -> 0,7,19,0
+$verNums = @("0", "0", "0", "0")
+$m = [regex]::Match($Version, '^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?')
+if ($m.Success) {
+    for ($i = 1; $i -le 4; $i++) {
+        if ($m.Groups[$i].Success -and $m.Groups[$i].Value) { $verNums[$i - 1] = $m.Groups[$i].Value }
+    }
+}
+$VCsv = ($verNums -join ",")
+$RcText = @"
+1 ICON "switch-frame-tap.ico"
+1 VERSIONINFO
+FILEVERSION $VCsv
+PRODUCTVERSION $VCsv
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "switch-frame-tap"
+      VALUE "FileDescription", "Switch Frame Tap - viewer"
+      VALUE "FileVersion", "$Version"
+      VALUE "ProductName", "Switch Frame Tap"
+      VALUE "ProductVersion", "$Version"
+      VALUE "LegalCopyright", "GPL-2.0 - github.com/TomasUribe/switch-frame-tap"
+      VALUE "OriginalFilename", "SwitchFrameTap.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
+"@
+# Zig's Windows RC path expects forward slashes / a cwd-relative ico name.
+Set-Content -Encoding ascii -Path $Rc -Value $RcText
+
 Write-Step "Compiling Windows viewer ($Version)..."
+# Pass VERSION through a tiny header so PowerShell cannot strip the C string quotes
+# (zig argv -DSFT_VERSION="x" loses quotes under Windows PowerShell).
+$VerH = Join-Path $B "sft_version.h"
+@(
+    "#pragma once"
+    ('#define SFT_VERSION "{0}"' -f $Version)
+) | Set-Content -Encoding ascii -Path $VerH
 $cc = @(
     "cc", "-target", "x86_64-windows-gnu", "-O2", "-Wall", "-Wextra",
     "-DSFT_H264", "-DSFT_MP4",
+    "-include", $VerH,
     "-I", $SdlInc, "-I", $UsbInc
 )
 if ($UseMin) {
@@ -273,34 +354,57 @@ if ($UseMin) {
     Write-Step "FFmpeg: shared DLLs (ref\win\ffmpeg)"
 }
 
-& $Zig @cc $Src $SdlLib $UsbLib @ffLibs "-lshell32" "-lws2_32" "-Wl,--subsystem,windows" "-o" $Exe
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Push-Location $B
+try {
+    & $Zig @cc $Src $Rc $SdlLib $UsbLib @ffLibs "-lshell32" "-lws2_32" "-Wl,--subsystem,windows" "-o" $Exe
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    Pop-Location
+}
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-Copy-Item -Force $Exe $OutDir
-# Soak / desktop shortcut name - same binary as SwitchFrameTap.exe.
-# If -new is locked (viewer still running), leave a fresh sidecar instead of
-# silently keeping an old Oct-era binary that the shortcut used to prefer.
-$NewExe = Join-Path $OutDir "SwitchFrameTap-new.exe"
+$DestExe = Join-Path $OutDir "SwitchFrameTap.exe"
+# Only SwitchFrameTap.exe - if the viewer is open, stop it so we can overwrite.
+function Stop-ViewerLocks {
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessName -like "SwitchFrameTap*" } |
+        ForEach-Object {
+            Write-Step "Stopping $($_.ProcessName) (pid $($_.Id)) so SwitchFrameTap.exe can be overwritten"
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+    Start-Sleep -Milliseconds 400
+}
 try {
-    Copy-Item -Force $Exe $NewExe
+    Copy-Item -Force $Exe $DestExe
 } catch {
-    $sidecar = Join-Path $OutDir "SwitchFrameTap-fresh.exe"
-    Copy-Item -Force $Exe $sidecar
-    Write-Step "SwitchFrameTap-new.exe is locked (viewer open?) - wrote SwitchFrameTap-fresh.exe"
-    Write-Step "Close the viewer, then re-run this build (or launch SwitchFrameTap.exe / -fresh)."
+    Stop-ViewerLocks
+    Copy-Item -Force $Exe $DestExe
 }
 foreach ($dll in @($SdlDll, $UsbDll)) {
     try { Copy-Item -Force $dll $OutDir }
-    catch { Write-Step "Skipped $(Split-Path -Leaf $dll) (locked - viewer open?)" }
+    catch {
+        Stop-ViewerLocks
+        Copy-Item -Force $dll $OutDir
+    }
 }
 if (-not $UseMin) {
     foreach ($pat in @("avcodec-*.dll", "avutil-*.dll", "avformat-*.dll", "swresample-*.dll")) {
         $hit = Get-ChildItem (Join-Path $FfDir "bin") -Filter $pat -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($hit) {
             try { Copy-Item -Force $hit.FullName $OutDir }
-            catch { Write-Step "Skipped $($hit.Name) (locked - viewer open?)" }
+            catch {
+                Stop-ViewerLocks
+                Copy-Item -Force $hit.FullName $OutDir
+            }
         }
+    }
+}
+# Drop old soak sidecars if still sitting next to the real exe.
+foreach ($stale in @("SwitchFrameTap-new.exe", "SwitchFrameTap-fresh.exe", "SwitchFrameTap-reconnect.exe")) {
+    $p = Join-Path $OutDir $stale
+    if (Test-Path $p) {
+        try { Remove-Item -Force $p; Write-Step "Removed stale $stale" }
+        catch { Write-Step "Could not remove $stale (locked?)" }
     }
 }
 $ReadmeSrc = Join-Path $Repo "tools\raw-recv\README-WINDOWS.txt"
@@ -317,4 +421,4 @@ Settings: Esc. Borderless: B (or Settings). Drag the picture to move when border
 Write-Host ""
 Write-Step "Windows viewer ready:"
 Write-Step "  $OutDir"
-Write-Step "Run SwitchFrameTap-new.exe (or SwitchFrameTap.exe) from that folder (DLLs must stay beside it)."
+Write-Step "Run SwitchFrameTap.exe from that folder (DLLs must stay beside it)."

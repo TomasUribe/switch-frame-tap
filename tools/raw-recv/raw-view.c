@@ -52,6 +52,10 @@
  *   ./raw-view --check         # v0.7.14: session, video/audio driver, udev, USB, network
  *   ./raw-view --check --net 192.168.1.23   # also test the console's TCP 9950 stream
  *   ./raw-view --video-driver wayland       # force wayland (or x11) for this run
+ *   ./raw-view --ui-debug      # log drag/focus/chrome hits to viewer.log (viewer.ini ui_debug=1)
+ *   Fullscreen / maximized picture place:
+ *     Alt+drag = pan (clamped in-window), Ctrl+wheel = zoom, Ctrl+click = reset.
+ *     Remembers view= in viewer.ini - fills portrait letterbox bars.
  *
  * Decoding: v0.7.11 decodes on one thread by default (no decoder delay):
  * since v0.6 the stream is P frames at ~2-15 Mbps, a few ms per frame on one
@@ -66,6 +70,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 #include <signal.h>
 #ifdef _WIN32
 /* v0.2: the Windows build (tools/raw-recv/build-windows.sh). libusb's Windows
@@ -170,8 +175,23 @@ static int g_rec_one_file = 0;
 static int g_drag_pending = 0, g_dragging = 0;
 static int g_drag_ox, g_drag_oy, g_drag_wx, g_drag_wy;
 static int g_drag_sx, g_drag_sy; /* global mouse at button-down (absolute threshold) */
+/* ~8 px global motion before a chromeless press becomes a window move (was 3 px -
+ * tiny jitter stole cog/pin clicks and deferred them to mouse-up). */
+enum { CHROMELESS_DRAG_PX2 = 64 };
 static int g_in_size_move = 0;             /* Win32 modal resize loop */
 static int g_need_aspect_snap = 0;
+/* Typed-IP connect runs after a paint so the UI stays responsive (was inline 3 s). */
+static int g_connect_pending = 0;
+static char g_connect_ip[64];
+static Uint32 g_prefs_dirty_ms = 0;        /* slider motion: flush prefs later */
+static int g_ui_debug = 0;                /* --ui-debug / viewer.ini: drag+focus traces */
+static int g_ui_debug_cli = -1;           /* CLI wins over viewer.ini after prefs_load */
+static Uint32 g_ui_last_loop_ms = 0;
+/* Fullscreen/maximized picture place: Alt-pan, Ctrl-wheel zoom, Ctrl-click reset. */
+static float g_view_zoom = 1.f;
+static float g_view_pan_x = 0.f, g_view_pan_y = 0.f;
+static int g_view_panning = 0;
+static int g_view_pan_mx = 0, g_view_pan_my = 0; /* global mouse at last pan sample */
 static SDL_Window *g_paint_win = NULL;
 static SDL_Renderer *g_paint_ren = NULL;
 static SDL_Texture *g_paint_tex = NULL;
@@ -181,6 +201,11 @@ static void window_geom_capture(SDL_Window *win);
 static void window_geom_apply(SDL_Window *win);
 static void apply_always_on_top(SDL_Window *win);
 static void prefs_save(void);
+static void view_video_copy(SDL_Renderer *ren, SDL_Texture *tex, const SDL_Rect *crop);
+static int view_gestures_ok(SDL_Window *win);
+static void view_reset(void);
+static void view_clamp_pan(int ow, int oh, int tw, int th);
+static int view_is_default(void);
 
 static Uint32 video_window_flags(void)
 {
@@ -411,6 +436,9 @@ static int video_init(void)
     const int forced = 0;
 #endif
     SDL_SetHint(SDL_HINT_APP_NAME, "Switch Frame Tap");
+    /* First click that focuses the window also reaches the app (else chromeless
+     * drag/chrome needs a second press). Must be set before SDL_Init. */
+    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
     int rc = SDL_Init(SDL_INIT_VIDEO);
     if (rc != 0 && forced) {
         fprintf(stderr, "video: the requested driver failed (%s) - trying SDL's default\n", SDL_GetError());
@@ -656,6 +684,15 @@ static void prefs_load(void)
         if (sscanf(line, "maximized=%d", &hm) == 1) g_geom_maximized = hm != 0;
         if (sscanf(line, "update_betas=%d", &hm) == 1) g_upd_betas = hm != 0;
         if (sscanf(line, "update_check=%d", &hm) == 1) g_upd_check = hm != 0;
+        if (sscanf(line, "ui_debug=%d", &hm) == 1) g_ui_debug = hm != 0;
+        {
+            float z, px, py, sx, sy;
+            /* view=zoom,pan_x,pan_y  (older builds also wrote stretch sx,sy - ignore) */
+            if (sscanf(line, "view=%f,%f,%f,%f,%f", &z, &px, &py, &sx, &sy) >= 3) {
+                if (z >= 0.1f && z <= 8.f) g_view_zoom = z;
+                g_view_pan_x = px; g_view_pan_y = py;
+            }
+        }
     }
     fclose(f);
 }
@@ -742,9 +779,29 @@ static void prefs_save(void)
     fprintf(f, "one_file_recording=%d\n", g_rec_one_file);
     pad_prefs_save(f);
     fprintf(f, "update_betas=%d\nupdate_check=%d\n", g_upd_betas, g_upd_check);
+    fprintf(f, "ui_debug=%d\n", g_ui_debug);
+    fprintf(f, "view=%.4f,%.1f,%.1f\n", g_view_zoom, g_view_pan_x, g_view_pan_y);
     if (g_geom_valid)
         fprintf(f, "window=%d,%d,%d,%d\nmaximized=%d\n", g_geom_x, g_geom_y, g_geom_w, g_geom_h, g_geom_maximized);
     fclose(f);
+    g_prefs_dirty_ms = 0;
+}
+
+#define ui_dbg(...) do { if (g_ui_debug) { fprintf(stderr, "ui: " __VA_ARGS__); fflush(stderr); } } while (0)
+
+/* Picture/FSR slider drags: mark dirty; flush on release or after ~400 ms idle. */
+static void prefs_mark_dirty(void)
+{
+    g_prefs_dirty_ms = SDL_GetTicks();
+    if (!g_prefs_dirty_ms) g_prefs_dirty_ms = 1;
+}
+
+static void prefs_flush_dirty(void)
+{
+    if (!g_prefs_dirty_ms) return;
+    const Uint32 now = SDL_GetTicks();
+    if ((Uint32)(now - g_prefs_dirty_ms) < 400) return;
+    prefs_save();
 }
 
 #if defined(__linux__)
@@ -1571,6 +1628,10 @@ static void act_ip(void)                      /* type the Switch's address */
 
 static void act_fullscreen(SDL_Window *win)
 {
+    /* Keep the cursor on the same desktop pixel - SetWindowFullscreen / restore
+     * often warps it into the new client (feels like the mouse jumped). */
+    int mx = 0, my = 0;
+    SDL_GetGlobalMouseState(&mx, &my);
     const int fs = (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
     if (!fs) {
         /* Remember the windowed box so leaving fullscreen doesn't leave a
@@ -1592,8 +1653,8 @@ static void act_fullscreen(SDL_Window *win)
             const double a = (double)dm.w / dm.h;
             fprintf(stderr, "\nfullscreen: the screen is %dx%d at %d Hz\n", dm.w, dm.h, dm.refresh_rate);
             if (a > 16.0 / 9.0 * 1.03 || a < 16.0 / 9.0 * 0.97) {
-                char t[112];
-                snprintf(t, sizeof(t), "This screen runs at %dx%d (not 16:9) - pick a 16:9 mode like 3840x2160 for no side bars", dm.w, dm.h);
+                char t[128];
+                snprintf(t, sizeof(t), "%dx%d - Alt-drag pan, Ctrl-wheel zoom, Ctrl-click reset", dm.w, dm.h);
                 hud_toast(t);
             }
         }
@@ -1628,6 +1689,12 @@ static void act_fullscreen(SDL_Window *win)
     }
     /* Redraw so the expand/restore chrome icon matches the new FS state. */
     viewer_repaint();
+    /* Restore after present/layout - Windows may have re-warped during the change. */
+    SDL_PumpEvents();
+    SDL_WarpMouseGlobal(mx, my);
+#ifdef _WIN32
+    SetCursorPos(mx, my);
+#endif
 }
 
 static void act_record(SDL_Window *win)
@@ -1760,6 +1827,100 @@ static void act_hwdec(int on)
 #include "pad.h"               /* v0.7.20: a controller here plays the Switch */
 #include "ui.h"                /* v0.7.12: the home screen and the settings drawer */
 
+static int view_is_default(void)
+{
+    return g_view_zoom > 0.999f && g_view_zoom < 1.001f &&
+           fabsf(g_view_pan_x) < 0.5f && fabsf(g_view_pan_y) < 0.5f;
+}
+
+static void view_fit_size(int ow, int oh, int tw, int th, float *out_w, float *out_h)
+{
+    float fit_w, fit_h;
+    if ((float)ow * (float)th > (float)oh * (float)tw) {
+        fit_h = (float)oh;
+        fit_w = fit_h * (float)tw / (float)th;
+    } else {
+        fit_w = (float)ow;
+        fit_h = fit_w * (float)th / (float)tw;
+    }
+    *out_w = fit_w * g_view_zoom;
+    *out_h = fit_h * g_view_zoom;
+}
+
+/* Keep the picture inside the window: no empty gap on one side while the other overflows. */
+static void view_clamp_pan(int ow, int oh, int tw, int th)
+{
+    if (ow < 1 || oh < 1 || tw < 1 || th < 1) return;
+    float w, h;
+    view_fit_size(ow, oh, tw, th, &w, &h);
+    const float max_x = fabsf((float)ow - w) * 0.5f;
+    const float max_y = fabsf((float)oh - h) * 0.5f;
+    if (g_view_pan_x > max_x) g_view_pan_x = max_x;
+    if (g_view_pan_x < -max_x) g_view_pan_x = -max_x;
+    if (g_view_pan_y > max_y) g_view_pan_y = max_y;
+    if (g_view_pan_y < -max_y) g_view_pan_y = -max_y;
+}
+
+static void view_clamp_pan_ren(SDL_Renderer *ren)
+{
+    if (!ren) return;
+    int ow = 0, oh = 0, tw = 1280, th = 720;
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
+    if (g_paint_tex) {
+        if (g_paint_crop.w > 0 && g_paint_crop.h > 0) {
+            tw = g_paint_crop.w; th = g_paint_crop.h;
+        } else {
+            SDL_QueryTexture(g_paint_tex, NULL, NULL, &tw, &th);
+        }
+    }
+    view_clamp_pan(ow, oh, tw, th);
+}
+
+static void view_reset(void)
+{
+    g_view_zoom = 1.f;
+    g_view_pan_x = g_view_pan_y = 0.f;
+    if (g_view_panning) SDL_CaptureMouse(SDL_FALSE);
+    g_view_panning = 0;
+    prefs_mark_dirty();
+    hud_toast("Picture place reset");
+    ui_dbg("view reset\n");
+}
+
+static int view_gestures_ok(SDL_Window *win)
+{
+    if (!win || g_ip_editing || g_ui_open) return 0;
+    const Uint32 fl = SDL_GetWindowFlags(win);
+    return (fl & (SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED)) != 0;
+}
+
+/* Blit the stream into output pixels with contain-fit + pan/zoom.
+ * Clears logical size for the copy so portrait letterbox bars are paintable. */
+static void view_video_copy(SDL_Renderer *ren, SDL_Texture *tex, const SDL_Rect *crop)
+{
+    if (!ren || !tex) return;
+    int ow = 0, oh = 0, tw = 0, th = 0;
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
+    if (crop && crop->w > 0 && crop->h > 0) { tw = crop->w; th = crop->h; }
+    else SDL_QueryTexture(tex, NULL, NULL, &tw, &th);
+    if (ow < 1 || oh < 1 || tw < 1 || th < 1) return;
+
+    view_clamp_pan(ow, oh, tw, th);
+    float w, h;
+    view_fit_size(ow, oh, tw, th, &w, &h);
+    const float x = ((float)ow - w) * 0.5f + g_view_pan_x;
+    const float y = ((float)oh - h) * 0.5f + g_view_pan_y;
+
+    int lw = 0, lh = 0;
+    SDL_RenderGetLogicalSize(ren, &lw, &lh);
+    SDL_RenderSetLogicalSize(ren, 0, 0);
+    SDL_RenderSetViewport(ren, NULL);
+    SDL_RenderSetScale(ren, 1.f, 1.f);
+    SDL_FRect dst = { x, y, w, h };
+    SDL_RenderCopyF(ren, tex, (crop && crop->w > 0) ? crop : NULL, &dst);
+    if (lw > 0 && lh > 0) SDL_RenderSetLogicalSize(ren, lw, lh);
+}
+
 static void viewer_repaint(void)
 {
     if (!g_paint_ren) return;
@@ -1768,11 +1929,13 @@ static void viewer_repaint(void)
     SDL_RenderClear(g_paint_ren);
     if (g_paint_tex) {
 #ifdef __APPLE__
-        if (g_upscaler != UP_FSR || !g_up.active ||
-            !clarity_draw(g_paint_ren, NULL, NULL, 0, 0, g_fsr_sharpness / 100.0f, 0))
+        if (view_is_default() && g_upscaler == UP_FSR && g_up.active &&
+            clarity_draw(g_paint_ren, NULL, NULL, 0, 0, g_fsr_sharpness / 100.0f, 0)) {
+            /* FSR already painted */
+        } else
 #endif
         if (!zc_repaint(g_paint_ren))   /* a zero-copy frame never reached the texture */
-            SDL_RenderCopy(g_paint_ren, g_paint_tex, g_paint_crop.w ? &g_paint_crop : NULL, NULL);
+            view_video_copy(g_paint_ren, g_paint_tex, g_paint_crop.w ? &g_paint_crop : NULL);
     }
     int lw = 0, lh = 0;
     SDL_RenderGetLogicalSize(g_paint_ren, &lw, &lh);
@@ -1792,12 +1955,52 @@ static int chromeless_can_drag(SDL_Window *win)
     return (fl & (SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED)) == 0;
 }
 
+/* Mouse in renderer output pixels (HiDPI), for live chrome hit-tests. */
+static void mouse_output_xy(SDL_Window *win, SDL_Renderer *ren, float *ox, float *oy)
+{
+    int wx = 0, wy = 0, ww = 1, wh = 1, ow = 1, oh = 1;
+    SDL_GetMouseState(&wx, &wy);
+    if (win) SDL_GetWindowSize(win, &ww, &wh);
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
+    if (ww < 1) ww = 1;
+    if (wh < 1) wh = 1;
+    *ox = (float)wx * (float)ow / (float)ww;
+    *oy = (float)wy * (float)oh / (float)wh;
+}
+
+static void try_pending_connect(void)
+{
+    if (!g_connect_pending) return;
+    g_connect_pending = 0;
+    struct in_addr ia;
+    uint32_t w = 0;
+    if (inet_pton(AF_INET, g_connect_ip, &ia) != 1) {
+        snprintf(g_net_status, sizeof(g_net_status), "\"%s\" is not an IPv4 address", g_connect_ip);
+        return;
+    }
+    finder_stop();
+    /* Short timeout: UI already showed Connecting...; avoid a multi-second freeze. */
+    const uint32_t ip = (uint32_t)ia.s_addr;
+    sock_t sk = connect_any(&ip, 1, NET_PORT, 800, &w);
+    if (sk != SOCK_BAD) use_found(sk, w);
+    else snprintf(g_net_status, sizeof(g_net_status),
+                  "No Switch Frame Tap at %s (is Connection set to Network on the Switch?)", g_connect_ip);
+}
+
 static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
 {
     g_ui_win = win;
     g_paint_win = win;
     g_paint_ren = ren;
     g_paint_tex = tex;
+    if (g_ui_debug) {
+        const Uint32 now = SDL_GetTicks();
+        if (g_ui_last_loop_ms && (Uint32)(now - g_ui_last_loop_ms) >= 80)
+            ui_dbg("loop gap %u ms (pending=%d dragging=%d focused=%d)\n",
+                   (unsigned)(now - g_ui_last_loop_ms), g_drag_pending, g_dragging,
+                   win ? !!(SDL_GetWindowFlags(win) & SDL_WINDOW_INPUT_FOCUS) : -1);
+        g_ui_last_loop_ms = now;
+    }
     if (g_need_aspect_snap) {
         g_need_aspect_snap = 0;
         aspect_constrain_window(win);
@@ -1812,6 +2015,12 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
             g_quit = 1;
             continue;
         }
+        if (g_ui_debug && (e.type == SDL_WINDOWEVENT)) {
+            if (e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
+                ui_dbg("focus gained\n");
+            else if (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+                ui_dbg("focus lost (pending=%d dragging=%d)\n", g_drag_pending, g_dragging);
+        }
         /* v0.7.11 (DiM3NT0R, PR #12): a non-Latin keyboard layout (Cyrillic,
          * Greek...) gives letter keys non-ASCII codes - use the key's place,
          * so R, M, O, V, U and the rest still work */
@@ -1820,7 +2029,36 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
             e.key.keysym.sym = SDLK_a + (e.key.keysym.scancode - SDL_SCANCODE_A);
         /* v0.7.20 (#54): any mouse use brings the buttons and the cursor back */
         if (e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEWHEEL) ui_pointer_active();
-        /* Borderless: drag the picture (or home screen) to move the window. */
+        /* Fullscreen/maximized: Alt-drag pan (clamped). Do not cancel on KEYDOWN -
+         * Alt key-repeat was ending the gesture after a few pixels (many pan starts,
+         * almost no pan ends in viewer.log). */
+        if (g_view_panning) {
+            if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {
+                ui_dbg("view pan end zoom=%.2f pan=%.0f,%.0f\n", g_view_zoom, g_view_pan_x, g_view_pan_y);
+                g_view_panning = 0;
+                SDL_CaptureMouse(SDL_FALSE);
+                view_clamp_pan_ren(ren);
+                prefs_mark_dirty();
+                continue;
+            }
+            if (e.type == SDL_MOUSEMOTION) {
+                int mx, my;
+                SDL_GetGlobalMouseState(&mx, &my);
+                g_view_pan_x += (float)(mx - g_view_pan_mx);
+                g_view_pan_y += (float)(my - g_view_pan_my);
+                g_view_pan_mx = mx;
+                g_view_pan_my = my;
+                view_clamp_pan_ren(ren);
+                continue;
+            }
+            /* Swallow Alt/Ctrl key noise while panning so nothing else sees it. */
+            if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
+                const SDL_Keycode k = e.key.keysym.sym;
+                if (k == SDLK_LALT || k == SDLK_RALT || k == SDLK_LCTRL || k == SDLK_RCTRL)
+                    continue;
+            }
+        }
+        /* Borderless: drag empty client area to move; chrome/settings keep their clicks. */
         if (g_dragging || g_drag_pending) {
             if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {
                 const int was_click = g_drag_pending && !g_dragging;
@@ -1829,16 +2067,29 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
                 if (was_drag) {
                     window_geom_capture(win);
                     prefs_save();
+                    ui_dbg("drag end\n");
                 }
-                /* Click with no drag: if the down missed UI (stale hits), retry as a click
-                 * so the cog / window buttons still fire. */
+                /* Click with no drag: live chrome first, then UI hit list (stale-down recovery). */
                 if (was_click && !g_ip_editing) {
-                    SDL_Event click = e;
-                    click.type = SDL_MOUSEBUTTONDOWN;
-                    click.button.state = SDL_PRESSED;
-                    if (ui_event(win, ren, &click)) {
+                    float ox, oy;
+                    int cid = 0;
+                    mouse_output_xy(win, ren, &ox, &oy);
+                    if (!g_ui_open && ui_chrome_at(ren, ox, oy, &cid)) {
+                        ui_dbg("mouseup -> chrome id=%d\n", cid);
+                        ui_chrome_activate(win, cid);
                         if (g_menu) menu_draw(ren);
                         else viewer_repaint();
+                    } else {
+                        SDL_Event click = e;
+                        click.type = SDL_MOUSEBUTTONDOWN;
+                        click.button.state = SDL_PRESSED;
+                        if (ui_event(win, ren, &click)) {
+                            ui_dbg("mouseup -> ui_event click\n");
+                            if (g_menu) menu_draw(ren);
+                            else viewer_repaint();
+                        } else {
+                            ui_dbg("mouseup click miss (no chrome/ui)\n");
+                        }
                     }
                 }
                 continue;
@@ -1848,13 +2099,18 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
                 SDL_GetGlobalMouseState(&mx, &my);
                 if (g_drag_pending && !g_dragging) {
                     const int dx = mx - g_drag_sx, dy = my - g_drag_sy;
-                    if (dx * dx + dy * dy >= 9) g_dragging = 1;
+                    if (dx * dx + dy * dy >= CHROMELESS_DRAG_PX2) {
+                        g_dragging = 1;
+                        ui_dbg("drag start (moved %d,%d)\n", dx, dy);
+                    }
                 }
                 if (g_dragging) SDL_SetWindowPosition(win, mx - g_drag_ox, my - g_drag_oy);
                 continue;
             }
-            if (e.type == SDL_KEYDOWN || e.type == SDL_MOUSEBUTTONDOWN)
+            if (e.type == SDL_KEYDOWN || e.type == SDL_MOUSEBUTTONDOWN) {
+                ui_dbg("drag cancel (other input)\n");
                 g_dragging = g_drag_pending = 0;
+            }
         }
         /* v0.7.12: the settings drawer and the mouse first.
          * While streaming, the display loop already draws ui_overlay each frame -
@@ -1873,17 +2129,61 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
             pad_mouse_grab(1, "The Switch has the mouse - F10 lets go");
             continue;
         }
-        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT && e.button.clicks == 1 &&
-            chromeless_can_drag(win)) {
-            int mx, my;
-            SDL_GetGlobalMouseState(&mx, &my);
-            SDL_GetWindowPosition(win, &g_drag_wx, &g_drag_wy);
-            g_drag_ox = mx - g_drag_wx;
-            g_drag_oy = my - g_drag_wy;
-            g_drag_sx = mx;
-            g_drag_sy = my;
-            g_drag_pending = 1;
-            g_dragging = 0;
+        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT && e.button.clicks == 1) {
+            const SDL_Keymod mod = SDL_GetModState();
+            if (view_gestures_ok(win) && (mod & (KMOD_CTRL | KMOD_ALT))) {
+                float ox, oy;
+                int cid = 0;
+                mouse_output_xy(win, ren, &ox, &oy);
+                if (g_ui_open || ui_chrome_at(ren, ox, oy, &cid)) {
+                    /* Chrome / settings still win. */
+                } else if (mod & KMOD_CTRL) {
+                    view_reset();
+                    if (g_menu) menu_draw(ren);
+                    else viewer_repaint();
+                    continue;
+                } else if (mod & KMOD_ALT) {
+                    SDL_GetGlobalMouseState(&g_view_pan_mx, &g_view_pan_my);
+                    g_view_panning = 1;
+                    SDL_CaptureMouse(SDL_TRUE);
+                    ui_dbg("view pan start\n");
+                    continue;
+                }
+            }
+            if (chromeless_can_drag(win)) {
+                /* Never start a window-drag gesture on live chrome (pin/gear/caption). */
+                float ox, oy;
+                int cid = 0;
+                mouse_output_xy(win, ren, &ox, &oy);
+                const int focused = !!(SDL_GetWindowFlags(win) & SDL_WINDOW_INPUT_FOCUS);
+                if (!g_ui_open && ui_chrome_at(ren, ox, oy, &cid)) {
+                    ui_dbg("mousedown chrome id=%d focus=%d\n", cid, focused);
+                    ui_chrome_activate(win, cid);
+                    if (g_menu) menu_draw(ren);
+                    else viewer_repaint();
+                    continue;
+                }
+                int mx, my;
+                SDL_GetGlobalMouseState(&mx, &my);
+                SDL_GetWindowPosition(win, &g_drag_wx, &g_drag_wy);
+                g_drag_ox = mx - g_drag_wx;
+                g_drag_oy = my - g_drag_wy;
+                g_drag_sx = mx;
+                g_drag_sy = my;
+                g_drag_pending = 1;
+                g_dragging = 0;
+                ui_dbg("mousedown drag-pending focus=%d at %d,%d\n", focused, mx, my);
+                continue;
+            }
+        }
+        if (e.type == SDL_MOUSEWHEEL && view_gestures_ok(win) && (SDL_GetModState() & KMOD_CTRL)) {
+            g_view_zoom *= (e.wheel.y > 0) ? 1.08f : (e.wheel.y < 0) ? (1.f / 1.08f) : 1.f;
+            if (g_view_zoom < 0.1f) g_view_zoom = 0.1f;
+            if (g_view_zoom > 8.f) g_view_zoom = 8.f;
+            view_clamp_pan_ren(ren);
+            prefs_mark_dirty();
+            ui_dbg("view wheel zoom=%.2f\n", g_view_zoom);
+            continue;
         }
         /* v0.7: typing the Switch's address (I) takes every key */
         if (g_ip_editing) {
@@ -1899,18 +2199,10 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
                 else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
                     g_ip_editing = 0;
                     SDL_StopTextInput();
-                    snprintf(g_net_status, sizeof(g_net_status), "Connecting to %s...", g_ip_edit);
+                    snprintf(g_connect_ip, sizeof(g_connect_ip), "%s", g_ip_edit);
+                    snprintf(g_net_status, sizeof(g_net_status), "Connecting to %s...", g_connect_ip);
+                    g_connect_pending = 1;
                     if (g_menu) menu_draw(ren);
-                    struct in_addr ia;
-                    uint32_t w = 0;
-                    if (inet_pton(AF_INET, g_ip_edit, &ia) != 1) snprintf(g_net_status, sizeof(g_net_status), "\"%s\" is not an IPv4 address", g_ip_edit);
-                    else {
-                        uint32_t ip = ia.s_addr;
-                        finder_stop();
-                        sock_t sk = connect_any(&ip, 1, NET_PORT, 3000, &w);
-                        if (sk != SOCK_BAD) use_found(sk, w);
-                        else snprintf(g_net_status, sizeof(g_net_status), "No Switch Frame Tap at %s (is Connection set to Network on the Switch?)", g_ip_edit);
-                    }
                 }
             }
             if (g_menu) menu_draw(ren);
@@ -1923,7 +2215,8 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
         if (key == SDLK_TAB) { act_conn(g_conn != CONN_NET); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_i && act_ip_possible()) { act_ip(); menu_draw(ren); }
         else if (key == SDLK_F11 || key == SDLK_f ||
-                 (e.type == SDL_MOUSEBUTTONDOWN && (e.button.clicks == 2 || e.button.button == SDL_BUTTON_MIDDLE))) {
+                 (e.type == SDL_MOUSEBUTTONDOWN && (e.button.clicks == 2 || e.button.button == SDL_BUTTON_MIDDLE) &&
+                  !(SDL_GetModState() & (KMOD_CTRL | KMOD_ALT)))) {
             act_fullscreen(win);
             /* Keep chrome painted after FS toggle so the restore icon stays in sync. */
             g_ui_ptr_inside = 1;
@@ -1973,6 +2266,8 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
             viewer_repaint();
         }
     }
+    prefs_flush_dirty();
+    try_pending_connect();
 }
 
 /* v0.2: is the Switch on the bus, and if so why can it not be opened? A
@@ -2464,8 +2759,9 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
             else SDL_UpdateYUVTexture(tex, NULL, pd[0], pl[0], pd[1], pl[1], pd[2], pl[2]);
             SDL_RenderClear(ren);
             frame_crop(show, W, H);
-            if (!up_draw(ren, pd, pl, (int)W, (int)H, g_upscaler, nv12))   /* v0.7.11: U */
-                SDL_RenderCopy(ren, tex, g_paint_crop.w ? &g_paint_crop : NULL, NULL);
+            /* Custom pan/zoom/stretch needs output-space blit; skip GPU upscaler then. */
+            if (!view_is_default() || !up_draw(ren, pd, pl, (int)W, (int)H, g_upscaler, nv12))   /* v0.7.11: U */
+                view_video_copy(ren, tex, g_paint_crop.w ? &g_paint_crop : NULL);
             }
             if (rec_active()) {                /* v0.5: shown while recording (not in the file); v0.7.12: with the time */
                 ui_rec_badge(ren, (int)W, (int)H);
@@ -2764,6 +3060,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--aspect-lock")) g_lock_aspect_cli = 1;
         else if (!strcmp(argv[i], "--chromeless")) g_chromeless_cli = 1;
         else if (!strcmp(argv[i], "--no-chromeless")) g_chromeless_cli = 0;
+        else if (!strcmp(argv[i], "--ui-debug")) g_ui_debug_cli = 1;
         else if (!strcmp(argv[i], "--update-check")) { prefs_load(); return upd_cli(argv, 0); }   /* v0.7.14 */
         else if (!strcmp(argv[i], "--settings")) g_open_settings = 1;   /* tests: the drawer open at start */
         else if (!strcmp(argv[i], "--padmenu")) g_open_settings = 2;    /* tests: ...on the Controller page */
@@ -2782,6 +3079,18 @@ int main(int argc, char **argv)
     /* double-clicked from Explorer: the app mode */
     if (argc == 1) g_app = 1;
     SDL_SetMainReady();
+#endif
+    /* Prefs before the log banner so ui_debug=1 from viewer.ini is visible at start.
+     * CLI --ui-debug wins over the ini. Chromeless/aspect CLI still re-applied after. */
+    if (g_app && !file && !check) {
+        prefs_load();
+        if (g_ui_debug_cli >= 0) g_ui_debug = g_ui_debug_cli;
+        if (g_lock_aspect_cli >= 0) g_lock_aspect = g_lock_aspect_cli;
+        if (g_chromeless_cli >= 0) g_chromeless = g_chromeless_cli;
+    } else if (g_ui_debug_cli >= 0) {
+        g_ui_debug = g_ui_debug_cli;
+    }
+#ifdef _WIN32
     /* a GUI program has no console: the statistics go to a log file,
      * %APPDATA%\switch-frame-tap\viewer\viewer.log */
     if (g_app) {
@@ -2790,6 +3099,8 @@ int main(int argc, char **argv)
             char path[1024];
             snprintf(path, sizeof(path), "%sviewer.log", dir);
             if (freopen(path, "w", stderr)) setvbuf(stderr, NULL, _IONBF, 0);
+            fprintf(stderr, "viewer.log: %s\n", path);
+            if (g_ui_debug) fprintf(stderr, "ui_debug: on (drag/focus/chrome traces; FOCUS_CLICKTHROUGH)\n");
             SDL_free(dir);
         }
     }
@@ -2820,7 +3131,7 @@ int main(int argc, char **argv)
         pad_init();                        /* v0.7.20 */
         SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-        prefs_load();                      /* v0.7: USB or network, the last address; v0.7.11: before the renderer */
+        /* prefs already loaded above for app mode (includes pad_* from viewer.ini) */
         pad_pick();                        /* v0.7.20: the controller the menu names */
         if (!headless && !file) upd_init(argv);   /* v0.7.14: where this viewer is, and (update_check) the start-up check */
         if (g_lock_aspect_cli >= 0) g_lock_aspect = g_lock_aspect_cli;
@@ -3094,7 +3405,7 @@ int main(int argc, char **argv)
             SDL_UpdateTexture(tex, NULL, payload, (int)hdr.stride);
         }
         SDL_RenderClear(ren);
-        SDL_RenderCopy(ren, tex, NULL, NULL);
+        view_video_copy(ren, tex, NULL);
         SDL_RenderPresent(ren);
         shown++;
 
