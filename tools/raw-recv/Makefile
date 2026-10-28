@@ -20,6 +20,17 @@ VIEW_CFLAGS = $(shell pkg-config --cflags $(BASE))
 VIEW_LIBS   = $(shell pkg-config --libs $(BASE))
 endif
 
+# zero-copy VAAPI -> OpenGL (zerocopy.h) where libva is found (Linux);
+# ZEROCOPY=0 builds without it
+ifneq ($(shell uname -s),Darwin)
+ifneq ($(ZEROCOPY),0)
+ifeq ($(H264)$(shell pkg-config --exists libva && echo 1),11)
+VIEW_CFLAGS += -DSFT_ZEROCOPY $(shell pkg-config --cflags libva)
+VIEW_LIBS   += $(shell pkg-config --libs libva)
+endif
+endif
+endif
+
 all: raw-view raw-recv
 
 ifeq ($(shell uname -s),Darwin)
@@ -34,7 +45,7 @@ metal-fsr-test: metal-fsr-test.c raw-view.c upscale.h ui.h hud.h menu.h picture.
 	$(CC) $(CFLAGS) -I$(shell $(METAL_SDL_CONFIG) --prefix)/include $(VIEW_CFLAGS) -o /tmp/frame-tap-metal-fsr-test $< $(CLARITY_OBJ) $(shell $(METAL_SDL_CONFIG) --static-libs) $(VIEW_LIBS) -lm
 endif
 
-raw-view: raw-view.c record.h menu.h hud.h picture.h update.h sdl_compat.h ../../common/sft_version.h upscale.h upscale_shaders.h font_dejavu.h clarity.h $(CLARITY_OBJ)
+raw-view: raw-view.c record.h menu.h hud.h picture.h update.h sdl_compat.h ../../common/sft_version.h upscale.h upscale_shaders.h font_dejavu.h clarity.h zerocopy.h $(CLARITY_OBJ)
 	$(CC) $(CFLAGS) $(VIEW_CFLAGS) -o $@ $< $(CLARITY_OBJ) $(VIEW_LIBS) -lm
 	@echo "raw-view built $(if $(filter 1,$(H264)),WITH,WITHOUT) H.264 (libavcodec)"
 

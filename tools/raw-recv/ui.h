@@ -946,7 +946,7 @@ static void menu_draw(SDL_Renderer *ren)
         l1 = "Is another program using it (another viewer, OBS)? Close it, or plug the cable in again.";
 #else
         head = "The Switch cannot be opened";
-        l1 = "Install the USB rule (99-switch-frame-tap.rules) - see the README.";
+        l1 = "Install the USB rule (70-switch-frame-tap.rules) - see the README.";
 #endif
         snprintf(errline, sizeof(errline), "(%s)", g_menu_err);
         l2 = errline;

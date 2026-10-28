@@ -26,6 +26,8 @@ trap 'rm -rf "$tmp"' EXIT
 echo "switch-frame-tap PC-side checks"
 run "arm-file parser (whole tokens, numbers)" \
     bash -c "g++ -std=c++20 -Itier4/applet-mitm/source tier4/applet-mitm/test/armfile_test.cpp -o $tmp/armfile_test && $tmp/armfile_test"
+run "keyframe spacing over USB / network (usb_keyframe_interval)" \
+    bash -c "g++ -std=c++20 -Wall -Wextra -Werror -Itier4/applet-mitm/source tier4/applet-mitm/test/gop_test.cpp -o $tmp/gop_test && $tmp/gop_test"
 run "version order for the updaters (common/sft_version.h)" \
     bash -c "gcc -std=c99 -Wall common/test/version_test.c -o $tmp/version_test && $tmp/version_test"
 run "early encode collection: pending, ready, once only, cancelled (PR #12)" \
@@ -41,7 +43,9 @@ run "vic_csc: the VIC matrix law, BT.709/601 designs, Run H verifies" python3 to
 run "vic_csc: Run H's 528 values under the law" python3 tools/vic_csc.py verify logs/m82-runH-vic-csc.bin
 run "nvframe_check: layouts, colour, NVENC-read diagnosis, 1080p frame + GOP" python3 tools/nvframe_check.py selftest
 run "nvp_check: IDR + P GOP, drift test" python3 tools/nvp_check.py selftest
+run "udev rules that tag uaccess sort before 73-seat-late (70-, not 99-)" bash tools/test/udev_rules_test.sh
 run "raw-view builds (with H.264)" bash -c "make -s -B -C tools/raw-recv raw-view | grep -q 'WITH H.264'"
+run "zero-copy VAAPI -> OpenGL builds (and off with ZEROCOPY=0); SFT_GUI_TESTS=1: same colours" bash tools/test/zerocopy_test.sh
 run "stream end to end: console packets -> raw-view -> H.264" python3 tools/sft_stream_test.py
 run "recording: console H.264 + audio -> MP4 (every frame decodes, AAC at 440 Hz)" bash tools/raw-recv/mp4_record_test.sh
 run "sft_tool: stats, gaps, decode check, head, drift test, artifact detector" python3 tools/sft_tool.py selftest

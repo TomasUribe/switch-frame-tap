@@ -23,6 +23,7 @@
 #include "applet_mitm_nvdrv.hpp"
 #include "applet_mitm_nvjpg.hpp"
 #include "applet_mitm_armfile.hpp"
+#include "applet_mitm_gop.hpp"
 #include "applet_mitm_clk.hpp"
 #include "applet_mitm_control.hpp"
 #include "applet_mitm_shot.hpp"
@@ -694,6 +695,8 @@ namespace ams {
             mitm::applet::g_hb_docked.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "hbdocked"), std::memory_order_relaxed);
             mitm::applet::g_early_collect = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyoff") ? 0
                                           : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyab") ? 2 : 1;
+            mitm::applet::g_usb_gop.store(mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "usbgop", mitm::applet::keyframe::UsbGopDefault),
+                                          std::memory_order_relaxed);
         }
 
         /* Numeric option out of the arm file: "wait=180" delays the probe so
@@ -1183,6 +1186,7 @@ namespace ams {
         mitm::applet::g_ui_stream_armed = ArmFileContains("homemenu");   /* v0.7.14: the HOME menu streams too */
         g_screen_off.store(ArmFileContains("screenoff"), std::memory_order_relaxed);
         mitm::applet::g_early_collect = ArmFileContains("earlyoff") ? 0 : ArmFileContains("earlyab") ? 2 : 1;
+        mitm::applet::g_usb_gop.store(ArmFileNumber("usbgop", mitm::applet::keyframe::UsbGopDefault), std::memory_order_relaxed);
         mitm::applet::g_nv1080_armed  = ArmFileContains("nv1080");
         mitm::applet::g_nv1080_n      = ArmFileNumber("nv1080", 120);
         mitm::applet::g_cap720_armed  = ArmFileContains("cap720");

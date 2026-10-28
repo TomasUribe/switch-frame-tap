@@ -75,6 +75,9 @@ namespace ams::mitm::applet::armfile {
      *   quality           = high | medium | low     -> nvqp=20 | 24 | 28
      *   qp                = 10..40                   (advanced; beats quality)
      *   keyframe_interval = frames between IDRs      -> nvgop= (default 60)
+     *   usb_keyframe_interval = 0..250               -> usbgop= (live over USB: an IDR every N
+     *                                                  frames + on request, when longer than
+     *                                                  keyframe_interval; default 240, 0 off)
      *   max_resolution    = 1080 | 720               -> cap720 at 720
      *   start_delay       = seconds after boot       -> wait= (default 20)
      *   allow_untested_firmware = 1                  -> anyfw
@@ -157,6 +160,8 @@ namespace ams::mitm::applet::armfile {
         }
         if (IniValue(ini, n, "qp", v, sizeof(v)) && ParseUnsigned(v, &u) && u >= 10 && u <= 40) { qp = u; }
         if (IniValue(ini, n, "keyframe_interval", v, sizeof(v)) && ParseUnsigned(v, &u) && u >= 1 && u <= 250) { gop = u; }
+        int usbgop = -1;               /* not set: the module's default (applet_mitm_gop.hpp) */
+        if (IniValue(ini, n, "usb_keyframe_interval", v, sizeof(v)) && ParseUnsigned(v, &u) && u <= 250) { usbgop = static_cast<int>(u); }
         if (IniValue(ini, n, "max_resolution", v, sizeof(v)) && std::strcmp(v, "720") == 0) { cap720 = true; }
         if (IniValue(ini, n, "start_delay", v, sizeof(v)) && ParseUnsigned(v, &u) && u <= 600) { wait = u; }
         if (IniValue(ini, n, "allow_untested_firmware", v, sizeof(v)) && std::strcmp(v, "1") == 0) { anyfw = true; }
@@ -197,13 +202,15 @@ namespace ams::mitm::applet::armfile {
             if (shotkey == 4) { std::snprintf(custom, sizeof(custom), " shotmask=%u%s", shotmask, shotcap ? " shotcap" : ""); }
             std::snprintf(shotbuf, sizeof(shotbuf), " shot shotkey=%u%s%s", shotkey, custom, shotalbum ? " shotalbum" : "");
         }
+        char usbgopbuf[24] = "";
+        if (usbgop >= 0) { std::snprintf(usbgopbuf, sizeof(usbgopbuf), " usbgop=%d", usbgop); }
         /* one transport: "usb" (the viewer or, with uvc, the webcam) or "net" */
-        const int w = std::snprintf(out, cap, "vic exec dbg %s live nvqp=%u nvgop=%u wait=%u%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        const int w = std::snprintf(out, cap, "vic exec dbg %s live nvqp=%u nvgop=%u wait=%u%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
                                     net ? "net" : "usb", qp, gop, wait, cap720 ? " cap720" : "", anyfw ? " anyfw" : "", shotbuf, audio ? " audio" : "",
                                     uvc ? " uvc" : "", uvcraw ? " uvcraw" : "", nvab ? " nvab" : "", nohb ? " nohb" : "",
                                     nodethome ? " nodethome" : "", screenoff ? " screenoff" : "",
                                     earlyoff ? " earlyoff" : "", earlyab ? " earlyab" : "", homemenu ? " homemenu" : "", overlays ? " overlays" : "",
-                                    hbdocked ? " hbdocked" : "");
+                                    hbdocked ? " hbdocked" : "", usbgopbuf);
         return (w < 0 || static_cast<size_t>(w) >= cap) ? 0 : static_cast<size_t>(w);
     }
 

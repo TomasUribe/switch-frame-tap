@@ -15,7 +15,7 @@ Or make a single-file bundle:
 
 USB needs the udev rule on the host (a Flatpak cannot install it), once:
 
-    sudo cp ../tools/raw-recv/99-switch-frame-tap.rules /etc/udev/rules.d/
+    sudo cp ../tools/raw-recv/70-switch-frame-tap.rules /etc/udev/rules.d/
     sudo udevadm control --reload-rules && sudo udevadm trigger
 
 Known limitation: plug the Switch in after the viewer has started, otherwise

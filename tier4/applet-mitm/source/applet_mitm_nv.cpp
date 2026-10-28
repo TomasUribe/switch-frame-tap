@@ -53,6 +53,7 @@
 #include "applet_mitm_net.hpp"
 #include "applet_mitm_slotmatch.hpp"
 #include "applet_mitm_idlework.hpp"
+#include "applet_mitm_gop.hpp"
 #include "applet_mitm_ovlprobe.hpp"
 #include "applet_mitm_overlay.hpp"
 #include <atomic>
@@ -1903,6 +1904,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<u32> g_queue_fence_n{0};
     constinit bool g_nvab_armed = false;
     constinit std::atomic<u32> g_early_collect{1};
+    constinit std::atomic<u32> g_usb_gop{keyframe::UsbGopDefault};
     /* v0.7.14 ovl2: frames the live stream sent and their read and VIC time,
      * for research that measures its own cost per second (the overlay probe) */
     constinit std::atomic<u32> g_live_frames{0};
@@ -8317,12 +8319,24 @@ namespace ams::mitm::applet {
                  * exp/net-ethernet: wired uses 60 so mid-join / seek recovers
                  * faster without the Wi-Fi stall risk. */
                 if (live && g_viewer_key_request.exchange(false, std::memory_order_relaxed)) { need_idr = true; ++key_requests; }
-                const u32 net_gop = g_net_wired.load(std::memory_order_relaxed) ? 60u : 240u;
-                const u32 gop_now = (g_tx_net && gop != 0 && g_viewer_can_ask.load(std::memory_order_relaxed)) ? net_gop : gop;
+                /* Over USB nothing is lost either, and a viewer that needs a
+                 * keyframe asks for one (SFTK) or gets one from the >500 ms
+                 * gap when it (re)joins. A 720p IDR is ~15-20 P frames' worth
+                 * (Run AG: 207 KB vs 10.5 KB): every 60 frames it was a
+                 * once-a-second spike in encode, transfer and decode time -
+                 * live USB uses usb_keyframe_interval (applet_mitm_gop.hpp) */
+                const bool wired = g_net_wired.load(std::memory_order_relaxed);
+                const u32 gop_now = keyframe::Choose(g_tx_net, live, uvc, gop, g_viewer_can_ask.load(std::memory_order_relaxed), wired,
+                                                     g_usb_gop.load(std::memory_order_relaxed));
                 if (gop_now != gop && !said_long_gop) {
                     said_long_gop = true;
-                    LogLine("   nvstream: network keyframes on demand + every %u frames (%s; setting: %u)",
-                            net_gop, g_net_wired.load(std::memory_order_relaxed) ? "wired" : "wifi", gop);
+                    if (g_tx_net) {
+                        LogLine("   nvstream: network keyframes on demand + every %u frames (%s; setting: %u)",
+                                gop_now, wired ? "wired" : "wifi", gop);
+                    } else {
+                        LogLine("   nvstream: USB keyframes on demand + every %u frames (setting: %u; usb_keyframe_interval = 0 turns this off)",
+                                gop_now, gop);
+                    }
                 }
                 if (gop == 0 || need_idr || pos >= gop_now) { pos = 0; }
                 NvfJob j;

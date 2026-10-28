@@ -1,0 +1,8 @@
+# switch-frame-tap USB gadget (1209:5f1e, pid.codes open range).
+# The number must stay below 73: TAG+="uaccess" is applied by systemd's
+# 73-seat-late.rules, so a rule numbered 99 (v0.7.19 and older) tags the device
+# too late - no ACL for the logged-in user, LIBUSB_ERROR_ACCESS after a replug.
+# An old copy: sudo rm /etc/udev/rules.d/99-switch-frame-tap.rules
+# Install:  sudo cp 70-switch-frame-tap.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="5f1e", MODE="0660", TAG+="uaccess"
