@@ -44,7 +44,8 @@ namespace ams::mitm::applet {
                                 v0.7.7: bit 3 - webcam-any; v0.7.14: bit 4 - this boot streams the HOME menu,
                                 bit 5 - and the system overlays;
                                 SwitchU coexistence: bit 6 - NeedHeadroom (donor about to remount;
-                                SwitchU should reclaim GPU and AckHeadroom) */
+                                SwitchU should reclaim GPU and AckHeadroom).
+                                Requested MB is GetDonorCap (cmd 13), not shot_fails. */
     };
     static_assert(sizeof(StreamStatus) == 64);
 
@@ -62,13 +63,17 @@ namespace ams::mitm::applet {
     void SetExcluded(u64 program_id, bool excluded);
     bool IsExcluded(u64 program_id);
 
-    /* Before DonorObtain: ask SwitchU (via GetStatus NeedHeadroom) to free
-     * applet headroom; wait up to timeout_ms for AckHeadroom or the ready file. */
+    /* Ask SwitchU (GetStatus NeedHeadroom) to free applet headroom; wait up to
+     * timeout_ms for AckHeadroom or the ready file. Does not launch the donor -
+     * caller decides. Clear with HeadroomClear if not remounting. */
     void HeadroomAskAndWait(u32 need_mb, u32 timeout_ms);
     void HeadroomClear();
     bool HeadroomNeeded();
     u32 HeadroomNeedMb();
     void HeadroomAck(u32 free_kb);
+    /* True after SwitchU AckHeadroom at least once this boot - gate for the
+     * 2 s remount wait when 100D is not currently open (stock users never wait). */
+    bool HeadroomEverAcked();
 
 }
 

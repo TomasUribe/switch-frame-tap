@@ -55,9 +55,7 @@ namespace ams::mitm::applet {
                     st.sessions     = g_live_sessions.load(std::memory_order_relaxed);
                     st.shot_enabled = g_shot_enabled.load(std::memory_order_relaxed) ? 1 : 0;
                     st.shots        = g_shot_count.load(std::memory_order_relaxed);
-                    /* While NeedHeadroom is set, surface the requested MB here so
-                     * SwitchU does not need an extra round-trip (GetDonorCap still works). */
-                    st.shot_fails   = HeadroomNeeded() ? HeadroomNeedMb() : g_shot_fail.load(std::memory_order_relaxed);
+                    st.shot_fails   = g_shot_fail.load(std::memory_order_relaxed);
                     st.app_tid      = g_app_tid.load(std::memory_order_relaxed);
                     st.app_excluded = g_app_excluded.load(std::memory_order_relaxed) ? 1 : 0;
                     out.SetValue(st);
@@ -117,7 +115,9 @@ namespace ams::mitm::applet {
                 /* v0.7.14: the most the donor may take (MB) - less than the usual
                  * 42 while the HOME menu streams beside a big applet (Settings) */
                 Result GetDonorCap(sf::Out<u32> out_mb) {
-                    out_mb.SetValue(DonorCapMb());
+                    /* While NeedHeadroom is set, this is the MB we asked SwitchU for
+                     * (not shot_fails - overlay/app show that as screenshot failures). */
+                    out_mb.SetValue(HeadroomNeeded() ? HeadroomNeedMb() : DonorCapMb());
                     R_SUCCEED();
                 }
                 Result AckHeadroom(u32 free_kb) {
@@ -228,6 +228,7 @@ namespace ams::mitm::applet {
         constexpr const char HeadroomReadyFile[] = "sdmc:/config/SwitchU/ft_headroom_ready";
         constinit std::atomic<bool> g_need_headroom{false};
         constinit std::atomic<bool> g_headroom_acked{false};
+        constinit std::atomic<bool> g_headroom_ever_acked{false}; /* SwitchU seen this boot */
         constinit std::atomic<u32> g_need_headroom_mb{0};
         constinit std::atomic<u32> g_headroom_free_kb{0};
 
@@ -273,7 +274,12 @@ namespace ams::mitm::applet {
     void HeadroomAck(u32 free_kb) {
         g_headroom_free_kb.store(free_kb, std::memory_order_relaxed);
         g_headroom_acked.store(true, std::memory_order_release);
+        g_headroom_ever_acked.store(true, std::memory_order_release);
         LogLine("sftap: SwitchU AckHeadroom free=%u KB", free_kb);
+    }
+
+    bool HeadroomEverAcked() {
+        return g_headroom_ever_acked.load(std::memory_order_relaxed);
     }
 
     void HeadroomAskAndWait(u32 need_mb, u32 timeout_ms) {
@@ -296,9 +302,10 @@ namespace ams::mitm::applet {
             waited += step;
         }
         if (waited >= timeout_ms) {
-            LogLine("sftap: NeedHeadroom timed out after %u ms - launching donor anyway", timeout_ms);
+            LogLine("sftap: NeedHeadroom timed out after %u ms (no ACK)", timeout_ms);
         }
-        /* Keep the bit set until remount finishes so late SwitchU polls still reclaim. */
+        /* Keep the bit set until remount finishes / caller HeadroomClear - so late
+         * SwitchU polls still reclaim. Caller must clear if not launching. */
     }
 
 }
