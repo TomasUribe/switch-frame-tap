@@ -1015,9 +1015,10 @@ namespace ams {
                 mitm::applet::LogLine("   *** NEGOTIATED SPEED = %u (%s) *** rc=0x%x", sn,
                                       sn < (sizeof(speed_names) / sizeof(speed_names[0])) ? speed_names[sn] : "?",
                                       srrc);
-                mitm::applet::LogLine("   %s", neg == UsbDeviceSpeed_Super
-                    ? "SuperSpeed: NV12 1080p60 (178 MiB/s) is within reach"
-                    : "High Speed (USB 2.0) - all the stream needs");
+                mitm::applet::LogLine("   %s", neg == UsbDeviceSpeed_Super ? "SuperSpeed: NV12 1080p60 (178 MiB/s) is within reach"
+                                             : neg == UsbDeviceSpeed_High  ? "High Speed (USB 2.0) - all the stream needs"
+                                             : neg == UsbDeviceSpeed_Full  ? "Full Speed (USB 1.1, 12 Mbps) - too slow for the stream (a hub or adapter that is USB 1.1)"
+                                             : "no link yet");
             }
             mitm::applet::LogLine("   %s", best == UsbState_Configured
                 ? "*** HOST CONFIGURED US - we own the bus, expect 1209:5f1e in lsusb ***"
@@ -1450,7 +1451,10 @@ namespace ams::mitm::applet {
                 { "This game's picture was not found", "Restart the game. If it keeps happening, please send the log." },
                 { "Starting the stream...", "" },
                 { "Paused - the keyboard is open", "There is no memory left to stream while it is open. The stream comes back when you close it." },
+                { "This game draws above 1080p", "Switch Frame Tap streams up to 1920x1080." },
+                { "The USB link is too slow (USB 1.1, 12 Mbps)", "Try another USB hub, adapter or cable, or use Network mode." },
             };
+            static_assert(sizeof(text) / sizeof(text[0]) == ViewerReason_UsbSlow + 1, "a text for every reason");
             if (reason >= sizeof(text) / sizeof(text[0])) { return; }
             alignas(0x1000) static u8 hdr_buf[0x1000];
             alignas(0x1000) static u8 body_buf[0x1000];
@@ -1551,6 +1555,15 @@ namespace ams::mitm::applet {
         if (R_FAILED(usbDsEndpoint_GetReportData(::ams::g_usb_ep_in, std::addressof(report)))) { return false; }
         if (R_FAILED(usbDsParseReportData(std::addressof(report), urb, nullptr, std::addressof(transferred)))) { return false; }
         if (transferred != sizeof(h)) { return false; }
+        /* v0.7.20 (#46): at Full Speed a stream's first send timed out and the
+         * viewer reconnected forever - it is told why instead, and no stream
+         * starts (this runs only while waiting for a viewer, not per frame) */
+        if (UsbDeviceSpeed neg = UsbDeviceSpeed_None; R_SUCCEEDED(usbDsGetSpeed(std::addressof(neg))) && neg == UsbDeviceSpeed_Full) {
+            static bool said = false;
+            if (!said) { said = true; LogLine("usb: the viewer is on a Full Speed link (USB 1.1, 12 Mbps) - too slow to stream; it is told so"); }
+            UsbSendStatus(ViewerReason_UsbSlow);
+            return false;
+        }
         if (const u32 r = g_viewer_reason.load(std::memory_order_relaxed); r != ViewerReason_None) { UsbSendStatus(r); }
         return true;
     }

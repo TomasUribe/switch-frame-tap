@@ -117,6 +117,8 @@ namespace ams::mitm::applet {
         ViewerReason_Keyboard    = 11,
         /* v0.7.19: a picture above 1080p (Project Diva at 2560x1440, #48) */
         ViewerReason_TooBig      = 12,
+        /* v0.7.20: a USB link at Full Speed, 12 Mbps (a Fire TV's OTG hub, #46) */
+        ViewerReason_UsbSlow     = 13,
     };
     void SetViewerReason(ViewerReason r);
     /* v0.7.11: USB follows the stream switch (VIC worker thread only) */
