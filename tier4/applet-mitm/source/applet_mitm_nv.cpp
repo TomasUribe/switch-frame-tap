@@ -2071,6 +2071,35 @@ namespace ams::mitm::applet {
                 u64 mb = 0;
                 const bool hold = AppletHoldActive();
                 if (!hold && !AppletBusy(std::addressof(mb))) { break; }
+                /* home_menu + 100D (SwitchU / Album): THEY fill the Applet pool.
+                 * Ask briefly for headroom; if the pool stays full, HeadroomClear
+                 * at once - leaving NeedHeadroom set makes SwitchU reclaim every
+                 * 100 ms (grid icons flash) while we never reach DonorObtain. */
+                if (!hold && g_ui_stream_armed && AlbumOrSwitchUOpen()) {
+                    static u64 s_headroom_ask_ns = 0;
+                    const u64 now_ask = armTicksToNs(armGetSystemTick());
+                    /* At most every 30 s - SoftLand refill needs quiet time */
+                    if (s_headroom_ask_ns == 0 || now_ask - s_headroom_ask_ns >= UINT64_C(30000000000)) {
+                        s_headroom_ask_ns = now_ask;
+                        if (!said_busy) {
+                            LogLine("   engines: Album/SwitchU holds the Applet pool (%llu MB) - asking NeedHeadroom for the donor",
+                                    static_cast<unsigned long long>(mb));
+                            said_busy = true;
+                        } else {
+                            LogLine("   engines: retry NeedHeadroom (Applet pool still %llu MB used)",
+                                    static_cast<unsigned long long>(mb));
+                        }
+                        HeadroomAskAndWait(42, 2500);
+                        if (!AppletBusy(std::addressof(mb))) { break; }
+                        HeadroomClear();
+                        LogLine("   engines: SwitchU ACK but Applet pool still tight (%llu MB used, need ~42 MB free) - not holding NeedHeadroom (avoids icon thrash)",
+                                static_cast<unsigned long long>(mb));
+                    }
+                    VicStage("vb:applet_busy");
+                    SetViewerReason(ViewerReason_NoMemory);
+                    os::SleepThread(TimeSpan::FromMilliSeconds(500));
+                    continue;
+                }
                 if (TakeShotRequest()) {
                     LogLine("shot: an applet holds the Applet pool (%llu MB) - no screenshot now", static_cast<unsigned long long>(mb));
                     NotifyShot(KeyboardHoldsStream() ? "No screenshot while the keyboard is open" : "No screenshot while a manual, the eShop or another applet is open");

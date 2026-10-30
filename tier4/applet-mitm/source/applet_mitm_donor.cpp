@@ -121,15 +121,14 @@ namespace ams::mitm::applet {
             return true;
         }
 
-        bool RealAlbumRunning() {
-            os::ProcessId pid{};
-            if (!Running(0x010000000000100Dull, std::addressof(pid))) { return false; }
-            os::NativeHandle h = os::InvalidNativeHandle;
-            ncm::ProgramLocation loc = {};
-            cfg::OverrideStatus st = {};
-            if (R_FAILED(::ams::pm::dmnt::AtmosphereGetProcessInfo(std::addressof(h), std::addressof(loc), std::addressof(st), pid))) { return false; }
-            os::CloseNativeHandle(h);
-            return !st.IsHbl();
+        /* Any 100D: stock photoViewer, hbmenu, or SwitchU (HBL title replace).
+         * v0.7.15 only counted non-HBL Album so hbmenu's variable size did not
+         * use the tight Album margin. SwitchU coexistence needs that margin -
+         * without it BesideOther (48 MB) never clears AppletBusy while SwitchU
+         * holds ~456 of 467 MB, and NeedHeadroom never runs (DonorObtain is
+         * past the busy wait). */
+        bool AlbumOrSwitchURunning() {
+            return Running(0x010000000000100Dull);
         }
 
         /* the HOME menu's own memory: idle it is part of the 97 MB the Applet
@@ -159,10 +158,10 @@ namespace ams::mitm::applet {
             if (free_mb >= TightMb + FullDonorMb) { s_free.store(~u64(0), std::memory_order_relaxed); return BesideOther; }
             if (s_free.load(std::memory_order_relaxed) != free_mb) {
                 const u64 home_mb = HomeMenuMb();
-                const int kind = RealAlbumRunning() ? 1 : home_mb >= HomeWithSettingsMb ? 2 : 0;
+                const int kind = AlbumOrSwitchURunning() ? 1 : home_mb >= HomeWithSettingsMb ? 2 : 0;
                 if (s_kind.exchange(kind, std::memory_order_relaxed) != kind || s_free.load(std::memory_order_relaxed) == ~u64(0)) {
                     LogLine("donor: %llu MB free in the Applet pool - %s (the HOME menu holds %llu MB)", static_cast<unsigned long long>(free_mb),
-                            kind == 1 ? "the Album is open" : kind == 2 ? "System Settings is open" : "no Album or System Settings",
+                            kind == 1 ? "the Album / SwitchU is open" : kind == 2 ? "System Settings is open" : "no Album or System Settings",
                             static_cast<unsigned long long>(home_mb));
                 }
                 s_free.store(free_mb, std::memory_order_relaxed);
@@ -470,6 +469,8 @@ namespace ams::mitm::applet {
 
     bool WebAppletOpen() { return WebAppletRunning(); }
 
+    bool AlbumOrSwitchUOpen() { return AlbumOrSwitchURunning(); }
+
     bool AppletBusy(u64 *out_mb) {
         /* idle (home menu and friends) ~96 MB; the browser 290-494 MB of 500.
          * Launching the donor then took 42 MB from under it (test15: a
@@ -564,7 +565,7 @@ namespace ams::mitm::applet {
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {
         g_donor_change_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed);   /* its heap comes before the map */
-        /* Cap + SwitchU headroom wait outside g_lock (can sleep up to 2 s). */
+        /* Cap + SwitchU headroom wait outside g_lock (can sleep many seconds). */
         u32 ask_cap = FullDonorMb;
         {
             const u64 free_mb = AppletFreeMb();
@@ -578,13 +579,51 @@ namespace ams::mitm::applet {
             need_headroom = !g_mapped;
         }
         if (need_headroom) {
-            /* Give SwitchU ~2 s to hard-reclaim GPU before we launch the donor
-             * (2nd+ HOME→game remount was racing soft-land refill). */
-            HeadroomAskAndWait(ask_cap, 2000);
+            if (AlbumOrSwitchUOpen()) {
+                /* Boot / first HOME: do not launch on a 2 s timeout while SwitchU
+                 * still fills the Applet pool (soak: "launching donor anyway" with
+                 * 456 MB used). Re-ask until the pool has room or we defer. */
+                constexpr u32 kTotalMs = 15000;
+                constexpr u32 kRoundMs = 2500;
+                u32 elapsed = 0;
+                bool room = false;
+                while (elapsed < kTotalMs) {
+                    HeadroomAskAndWait(ask_cap, kRoundMs);
+                    u64 used_mb = 0;
+                    if (!AppletBusy(std::addressof(used_mb))) { room = true; break; }
+                    HeadroomClear();
+                    LogLine("donor: SwitchU still holds the Applet pool (%llu MB used, need ~%u MB free) - waiting, not launching",
+                            static_cast<unsigned long long>(used_mb), ask_cap);
+                    os::SleepThread(TimeSpan::FromMilliSeconds(500));
+                    elapsed += kRoundMs + 500;
+                }
+                if (!room) {
+                    LogLine("donor: no Applet-pool headroom after %u ms beside SwitchU - deferring donor (engines will retry)",
+                            kTotalMs);
+                    HeadroomClear();
+                    return false;
+                }
+                /* Pool has room - brief re-assert so SwitchU stays light through launch */
+                HeadroomAskAndWait(ask_cap, 500);
+            } else if (HeadroomEverAcked()) {
+                /* SwitchU was present this boot - short ask before remount.
+                 * Stock (never ACK'd): no wait (Tomas #56). */
+                HeadroomAskAndWait(ask_cap, 2000);
+            }
         }
         std::scoped_lock lk(g_lock);
         if (!g_mapped) {
             g_state.store(0);
+            /* Last check: SwitchU may have filled the pool again between wait and lock */
+            if (AlbumOrSwitchUOpen()) {
+                u64 used_mb = 0;
+                if (AppletBusy(std::addressof(used_mb))) {
+                    LogLine("donor: Applet pool filled again beside SwitchU (%llu MB) - deferring launch",
+                            static_cast<unsigned long long>(used_mb));
+                    HeadroomClear();
+                    return false;
+                }
+            }
             /* v0.7.14: beside a big applet (System Settings: the pool at 413
              * of 500 MB without us) the HOME menu streams on a smaller donor,
              * leaving the margin free (test5: 41 MB left 46 - the stream stopped) */
