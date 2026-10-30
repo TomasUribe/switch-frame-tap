@@ -23,6 +23,7 @@
 #include "applet_mitm_nvdrv.hpp"
 #include "applet_mitm_nvjpg.hpp"
 #include "applet_mitm_armfile.hpp"
+#include "applet_mitm_gop.hpp"
 #include "applet_mitm_clk.hpp"
 #include "applet_mitm_control.hpp"
 #include "applet_mitm_shot.hpp"
@@ -550,7 +551,7 @@ namespace ams {
                 /* v0.7.15 (#33): no breadcrumb while a stream runs - its SD
                  * writes every 3 s showed as a latency spike in the viewer
                  * (vbezniskotempo measured it gone without them) */
-                if (mitm::applet::LogQuiet()) { continue; }
+                if (mitm::applet::LogQuiet()) { mitm::applet::LogFlushStale(); continue; }
                 mitm::applet::LogFlushHeld();
                 char b[96];
                 const auto &st = mitm::applet::g_stats;
@@ -700,6 +701,10 @@ namespace ams {
             mitm::applet::g_mid_collect = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "midoff") ? 0
                                         : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "midon") ? 1
                                         : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "midab") ? 2 : mitm::applet::MidCollectDefault;
+            /* v0.7.20: from the next stream session */
+            mitm::applet::g_scale1080.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "scale1080"), std::memory_order_relaxed);
+            mitm::applet::g_usb_gop.store(mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "usbgop", mitm::applet::keyframe::UsbGopDefault),
+                                          std::memory_order_relaxed);
         }
 
         /* Numeric option out of the arm file: "wait=180" delays the probe so
@@ -1021,9 +1026,10 @@ namespace ams {
                 mitm::applet::LogLine("   *** NEGOTIATED SPEED = %u (%s) *** rc=0x%x", sn,
                                       sn < (sizeof(speed_names) / sizeof(speed_names[0])) ? speed_names[sn] : "?",
                                       srrc);
-                mitm::applet::LogLine("   %s", neg == UsbDeviceSpeed_Super
-                    ? "SuperSpeed: NV12 1080p60 (178 MiB/s) is within reach"
-                    : "High Speed (USB 2.0) - all the stream needs");
+                mitm::applet::LogLine("   %s", neg == UsbDeviceSpeed_Super ? "SuperSpeed: NV12 1080p60 (178 MiB/s) is within reach"
+                                             : neg == UsbDeviceSpeed_High  ? "High Speed (USB 2.0) - all the stream needs"
+                                             : neg == UsbDeviceSpeed_Full  ? "Full Speed (USB 1.1, 12 Mbps) - too slow for the stream (a hub or adapter that is USB 1.1)"
+                                             : "no link yet");
             }
             mitm::applet::LogLine("   %s", best == UsbState_Configured
                 ? "*** HOST CONFIGURED US - we own the bus, expect 1209:5f1e in lsusb ***"
@@ -1190,6 +1196,7 @@ namespace ams {
         g_screen_off.store(ArmFileContains("screenoff"), std::memory_order_relaxed);
         mitm::applet::g_early_collect = ArmFileContains("earlyoff") ? 0 : ArmFileContains("earlyab") ? 2 : 1;
         mitm::applet::g_mid_collect   = ArmFileContains("midoff") ? 0 : ArmFileContains("midon") ? 1 : ArmFileContains("midab") ? 2 : mitm::applet::MidCollectDefault;
+        mitm::applet::g_usb_gop.store(ArmFileNumber("usbgop", mitm::applet::keyframe::UsbGopDefault), std::memory_order_relaxed);
         mitm::applet::g_nv1080_armed  = ArmFileContains("nv1080");
         mitm::applet::g_nv1080_n      = ArmFileNumber("nv1080", 120);
         mitm::applet::g_cap720_armed  = ArmFileContains("cap720");
@@ -1339,6 +1346,8 @@ namespace ams {
         if (mitm::applet::g_hb_docked.load()) { mitm::applet::LogLine("am: homebrew from the Homebrew Menu is told the console is docked (homebrew_docked)"); }
         mitm::applet::g_vpad_enabled.store(ArmFileContains("vinput"), std::memory_order_relaxed);
         if (mitm::applet::g_vpad_enabled.load()) { mitm::applet::LogLine("vpad: a controller on the viewer's computer may play the console (viewer_input)"); }
+        mitm::applet::g_scale1080.store(ArmFileContains("scale1080"), std::memory_order_relaxed);
+        if (mitm::applet::g_scale1080.load()) { mitm::applet::LogLine("nvstream: docked pictures between 720p and 1080p are scaled up to 1080p (scale_to_1080)"); }
         if (ArmFileContains("noam")) { mitm::applet::LogLine("am: not wrapped (noam)"); } else { mitm::applet::StartAmMitm(); }
         /* v0.7.17: a game's audout:u - its own PCM for the stream when nothing else carries its sound (PokeMMO) */
         if (ArmFileContains("noaudout")) { mitm::applet::LogLine("audout: not wrapped (noaudout)"); } else { mitm::applet::StartAudOutMitm(); }
@@ -1460,7 +1469,10 @@ namespace ams::mitm::applet {
                 { "This game's picture was not found", "Restart the game. If it keeps happening, please send the log." },
                 { "Starting the stream...", "" },
                 { "Paused - the keyboard is open", "There is no memory left to stream while it is open. The stream comes back when you close it." },
+                { "This game draws above 1080p", "Switch Frame Tap streams up to 1920x1080." },
+                { "The USB link is too slow (USB 1.1, 12 Mbps)", "Try another USB hub, adapter or cable, or use Network mode." },
             };
+            static_assert(sizeof(text) / sizeof(text[0]) == ViewerReason_UsbSlow + 1, "a text for every reason");
             if (reason >= sizeof(text) / sizeof(text[0])) { return; }
             alignas(0x1000) static u8 hdr_buf[0x1000];
             alignas(0x1000) static u8 body_buf[0x1000];
@@ -1562,6 +1574,15 @@ namespace ams::mitm::applet {
         if (R_FAILED(usbDsEndpoint_GetReportData(::ams::g_usb_ep_in, std::addressof(report)))) { return false; }
         if (R_FAILED(usbDsParseReportData(std::addressof(report), urb, nullptr, std::addressof(transferred)))) { return false; }
         if (transferred != sizeof(h)) { return false; }
+        /* v0.7.20 (#46): at Full Speed a stream's first send timed out and the
+         * viewer reconnected forever - it is told why instead, and no stream
+         * starts (this runs only while waiting for a viewer, not per frame) */
+        if (UsbDeviceSpeed neg = UsbDeviceSpeed_None; R_SUCCEEDED(usbDsGetSpeed(std::addressof(neg))) && neg == UsbDeviceSpeed_Full) {
+            static bool said = false;
+            if (!said) { said = true; LogLine("usb: the viewer is on a Full Speed link (USB 1.1, 12 Mbps) - too slow to stream; it is told so"); }
+            UsbSendStatus(ViewerReason_UsbSlow);
+            return false;
+        }
         if (const u32 r = g_viewer_reason.load(std::memory_order_relaxed); r != ViewerReason_None) { UsbSendStatus(r); }
         return true;
     }
@@ -1672,7 +1693,8 @@ namespace ams::mitm::applet {
                 if (m.kind == vm::Kind::Partial) { break; }
                 switch (m.kind) {
                     /* v0.7.13: "SFTK" - the viewer wants a keyframe (a new decoder, a recording) */
-                    case vm::Kind::Key:    g_viewer_key_request.store(true, std::memory_order_relaxed); break;
+                    /* v0.7.20: and it can ask again, so its keyframes may be far apart (usb_keyframe_interval) */
+                    case vm::Kind::Key:    g_viewer_key_request.store(true, std::memory_order_relaxed); g_viewer_can_ask.store(true, std::memory_order_relaxed); break;
                     /* v0.7.16: "SFTC" - this viewer draws crops itself */
                     case vm::Kind::Crop:   g_viewer_crop.store(true, std::memory_order_relaxed); break;
                     /* v0.7.17: "SFTD" - it records: the pictures cropped here, not in the viewer */
@@ -1684,6 +1706,7 @@ namespace ams::mitm::applet {
                         g_viewer_crop.store(false, std::memory_order_relaxed);
                         ViewerLockSize(false);
                         VPadRelease("the viewer closed");
+                        g_viewer_can_ask.store(false, std::memory_order_relaxed);
                         g_out_bye.store(true);
                         break;
                     case vm::Kind::Pad:    VPadFromViewer(vm::ReadPad(p + k)); break;

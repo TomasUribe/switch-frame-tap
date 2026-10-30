@@ -123,7 +123,7 @@ echo "   glibc: up to $(objdump -T "$OUT/switch-frame-tap-viewer" | grep -o 'GLI
 # ---- the package
 P="$OUT/switch-frame-tap-$VER-linux"
 mkdir -p "$P/licenses"
-cp "$OUT/switch-frame-tap-viewer" "$HERE/99-switch-frame-tap.rules" "$HERE/switch-frame-tap.svg" "$P/"
+cp "$OUT/switch-frame-tap-viewer" "$HERE/70-switch-frame-tap.rules" "$HERE/switch-frame-tap.svg" "$P/"
 cp "$REPO/LICENSE" "$P/licenses/switch-frame-tap-GPL-2.0.txt"
 cp "$REPO/third_party/fsr1/license.txt" "$P/licenses/AMD-FidelityFX-FSR1-MIT.txt"; cp "$REPO/third_party/nis/licence.txt" "$P/licenses/NVIDIA-Image-Scaling-MIT.txt"   # v0.7.11: the upscalers' shaders
 cp "$FF/COPYING.LGPLv2.1" "$P/licenses/FFmpeg-LGPL-2.1.txt"
@@ -171,10 +171,14 @@ refresh_menu
 echo "installed: $BIN (and Switch Frame Tap in the applications menu)"
 echo "check:     $BIN --check"
 echo "log:       ${XDG_STATE_HOME:-$HOME/.local/state}/switch-frame-tap/viewer.log"
-if [ ! -f /etc/udev/rules.d/99-switch-frame-tap.rules ]; then
+if [ -f /etc/udev/rules.d/99-switch-frame-tap.rules ]; then
+    echo
+    echo "The USB rule has an old name that is applied too late (LIBUSB_ERROR_ACCESS); once:"
+    echo "  sudo mv /etc/udev/rules.d/99-switch-frame-tap.rules /etc/udev/rules.d/70-switch-frame-tap.rules && sudo udevadm control --reload-rules && sudo udevadm trigger"
+elif [ ! -f /etc/udev/rules.d/70-switch-frame-tap.rules ]; then
     echo
     echo "Once, so the viewer may open the Switch over USB (asks for your password):"
-    echo "  sudo cp \"$D/99-switch-frame-tap.rules\" /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger"
+    echo "  sudo cp \"$D/70-switch-frame-tap.rules\" /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger"
 fi
 SH
 chmod +x "$P/install.sh"

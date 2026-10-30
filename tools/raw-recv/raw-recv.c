@@ -91,7 +91,7 @@ int main(int argc, char **argv)
     libusb_set_auto_detach_kernel_driver(h, 1);
     if (libusb_claim_interface(h, SFT_IFACE) != 0) {
         fprintf(stderr, "cannot claim interface %d - permissions?\n"
-                        "  sudo cp 99-switch-frame-tap.rules /etc/udev/rules.d/\n"
+                        "  sudo cp 70-switch-frame-tap.rules /etc/udev/rules.d/\n"
                         "  sudo udevadm control --reload-rules && sudo udevadm trigger\n", SFT_IFACE);
         libusb_close(h); libusb_exit(ctx);
         return 1;

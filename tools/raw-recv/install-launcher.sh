@@ -26,7 +26,8 @@ fi
 
 make -C "$HERE" raw-view >/dev/null
 grep -q "raw-view built WITH H.264" < <(make -C "$HERE" -B raw-view 2>&1) || { echo "raw-view has no H.264 decoder - install libavcodec-dev (README)"; exit 1; }
-[ -f /etc/udev/rules.d/99-switch-frame-tap.rules ] || echo "note: the udev rule is not installed - the viewer may not be able to open the Switch (README, quick start step 2)"
+if [ -f /etc/udev/rules.d/99-switch-frame-tap.rules ]; then echo "note: the udev rule has the old name 99-switch-frame-tap.rules, applied after uaccess (LIBUSB_ERROR_ACCESS) - sudo mv it to /etc/udev/rules.d/70-switch-frame-tap.rules"; fi
+[ -f /etc/udev/rules.d/70-switch-frame-tap.rules ] || [ -f /etc/udev/rules.d/99-switch-frame-tap.rules ] || echo "note: the udev rule is not installed - the viewer may not be able to open the Switch (README, quick start step 2)"
 
 mkdir -p "$(dirname "$BIN")" "$(dirname "$ICON")" "$(dirname "$APPS")" "$(dirname "$DESK")"
 install -m 755 "$HERE/raw-view" "$BIN"

@@ -53,6 +53,7 @@
 #include "applet_mitm_net.hpp"
 #include "applet_mitm_slotmatch.hpp"
 #include "applet_mitm_idlework.hpp"
+#include "applet_mitm_gop.hpp"
 #include "applet_mitm_ovlprobe.hpp"
 #include "applet_mitm_overlay.hpp"
 #include "applet_mitm_vpad.hpp"
@@ -121,6 +122,7 @@ namespace ams::mitm::applet {
     constinit u32 g_home_fallback_ms = 5000;
     constinit bool g_nv1080_armed  = false;
     constinit bool g_cap720_armed  = false;
+    constinit std::atomic<bool> g_scale1080{false};
     constinit bool g_anyfw_armed   = false;
     constinit u32  g_nv1080_n      = 120;
     constinit bool g_nvp_armed     = false;
@@ -813,7 +815,7 @@ namespace ams::mitm::applet {
          * They differ only for the unscaled 1:1 control. */
         /* rect_x/rect_y (v0.7.17): the sampled part's top-left - a centred crop
          * scaled by the VIC (Kingdom Hearts' zooms, for viewers without SFTC) */
-        struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt, cache_w, rect_w, rect_h; u32 rect_x = 0, rect_y = 0; };
+        struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt, cache_w, rect_w, rect_h; u32 rect_x = 0, rect_y = 0; bool bgra = false; };
 
         /* our own pitch-linear 64x64 buffer, stride 256 px like the destination */
         constexpr SrcDesc SelfSrc { DstW, DstH, DstStridePx, vic::BLK_KIND_PITCH, 0, vic::PIXFMT_A8B8G8R8, vic::CACHE_WIDTH_64Bx4, DstW, DstH };
@@ -1906,6 +1908,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<u32> g_early_collect{1};
     /* v0.7.21 perf: 0 = off, 1 = on, 2 = A/B in 600-frame halves (this test build's default) */
     constinit std::atomic<u32> g_mid_collect{MidCollectDefault};
+    constinit std::atomic<u32> g_usb_gop{keyframe::UsbGopDefault};
     /* v0.7.14 ovl2: frames the live stream sent and their read and VIC time,
      * for research that measures its own cost per second (the overlay probe) */
     constinit std::atomic<u32> g_live_frames{0};
@@ -5824,6 +5827,11 @@ namespace ams::mitm::applet {
             { vic_csc::Bt709[0][0], vic_csc::Bt709[0][1], vic_csc::Bt709[0][2], vic_csc::Bt709[0][3] },
             { vic_csc::Bt709[1][0], vic_csc::Bt709[1][1], vic_csc::Bt709[1][2], vic_csc::Bt709[1][3] },
             { vic_csc::Bt709[2][0], vic_csc::Bt709[2][1], vic_csc::Bt709[2][2], vic_csc::Bt709[2][3] } } };
+        /* the same for a B, G, R, A surface: its R and B land in each other's column */
+        constexpr CscProbe NvfBt709Bgra = { "bt709-bgra", 1, vic_csc::Shift, {
+            { vic_csc::Bt709[0][2], vic_csc::Bt709[0][1], vic_csc::Bt709[0][0], vic_csc::Bt709[0][3] },
+            { vic_csc::Bt709[1][2], vic_csc::Bt709[1][1], vic_csc::Bt709[1][0], vic_csc::Bt709[1][3] },
+            { vic_csc::Bt709[2][2], vic_csc::Bt709[2][1], vic_csc::Bt709[2][0], vic_csc::Bt709[2][3] } } };
 
         /* Handheld, MK8 renders 1280x720 into the top-left of the same
          * 1920x1080 surface (M36/M37). That corner is block-rows 0-5 (128 rows
@@ -6624,14 +6632,18 @@ namespace ams::mitm::applet {
                 /* MK8's A8B8G8R8 surface reads correctly as the VIC's
                  * A8R8G8B8 (M36/M83: R,G,B,A in memory); the same is assumed
                  * for any other format and said in the log */
-                /* v0.1.1b: NvColorFormat A8R8G8B8 (0x100d12120) is B, G, R, A in
-                 * memory - the VIC's A8B8G8R8, the other way round */
+                /* NvColorFormat A8R8G8B8 (0x100d12120) is B, G, R, A in memory.
+                 * v0.7.20 (#50): read as the VIC's A8R8G8B8 like MK8's, with red
+                 * and blue swapped in the colour matrix - the VIC's A8B8G8R8 takes
+                 * alpha from the first byte (ovl2), and RE4, Yo-kai Watch 4,
+                 * Wreckfest and Persona 4 streamed solid red */
                 const bool bgra = g.color_format == 0x100d12120ull;
                 /* v0.7.17: libnx's RGB565 framebuffer (DBI, #42): read as 32-bit, the picture came out garbled */
                 const bool rgb565 = g.color_format == 0x10a881210ull;
                 const bool known_fmt = g.color_format == 0x100532120ull || bgra;
                 src = SrcDesc{ g.width, g.height, g.stride_px, vic::BLK_KIND_GENERIC_16Bx2, g.block_h_log2,
-                               rgb565 ? vic::PIXFMT_B5G6R5 : bgra ? vic::PIXFMT_A8B8G8R8 : vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
+                               rgb565 ? vic::PIXFMT_B5G6R5 : vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
+                src.bgra = bgra;
                 mk8_layout = g.width == 1920 && g.height == 1080 && g.stride_px == 1920 && g.block_h_log2 == 4;
                 size_check_ok = g.width == 1920 && g.height == 1080 && g.stride_px >= 1920 && g.block_h_log2 <= 5;
                 LogLine("   %s: game swapchain %ux%u stride %u px, block height 2^%u, %u slot(s) of %u B, format %#llx%s",
@@ -7226,7 +7238,7 @@ namespace ams::mitm::applet {
                 ON_SCOPE_EXIT { g_strip_flip = 0; g_ovl_slots = nullptr; g_ovl_nslots = 0; };
                 JobCtx vc{ vfd, cmd_handle, vsyncpt, cfg_addr, arena_vic + (cur != 0 ? cur : Lay().off_cur), slot_vic, 0, 0, 0, 0, SelfSrc };
                 vc.out_is_dst_buf = false;
-                g_csc_override = std::addressof(NvfBt709);
+                g_csc_override = src.bgra ? std::addressof(NvfBt709Bgra) : std::addressof(NvfBt709);
                 const bool ok = RunOneJob(stage, VicJob::BlitStrip, true, vc);
                 g_csc_override = nullptr;
                 return ok;
@@ -7572,7 +7584,7 @@ namespace ams::mitm::applet {
                 if (const u32 dyn = NvfSession::DynamicRect(r, s.cap_crop); dyn != 0) { w = dyn >> 16; h = dyn & 0xFFFF; }
             }
             const size_t n = s.CornerFast() ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
-            return WriteShot(g_shot_out, g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.pixfmt == vic::PIXFMT_A8B8G8R8, s.present_flip);
+            return WriteShot(g_shot_out, g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.bgra, s.present_flip);
         }
 
         bool ShotStandalone() {
@@ -7856,8 +7868,12 @@ namespace ams::mitm::applet {
              * more than 1280x720 of it is shown - SMO docked (1600x900, dynamic
              * resolution below that) at 1080p looked no better than 720p at the
              * same bitrate, and cost fps and a frame of latency (Run v0713-smo2) */
-            bool full1080 = uvc ? (uvc_w == 1920 && fits1080)
-                                : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed && fits1080);
+            /* v0.7.20 (#65): scale_to_1080 - such a picture goes up to 1080p
+             * instead, for a big screen; off by default for the reasons above */
+            const bool up1080 = !uvc && g_scale1080.load(std::memory_order_relaxed) && !s.corner &&
+                                s.src.w > 1280 && s.src.h > 720 && s.src.w <= 1920 && s.src.h <= 1080 && !(s.src.w == 1920 && s.src.h == 1080);
+            const bool src1080 = !s.corner && ((s.src.w == 1920 && s.src.h == 1080) || up1080) && !g_cap720_armed;
+            bool full1080 = uvc ? (uvc_w == 1920 && fits1080) : (src1080 && fits1080);
             /* v0.7.18: the viewer records - the size the recording started at,
              * the VIC scaling whatever is drawn to it (as for a webcam): the HOME
              * menu's 720p goes up to 1080p, a 1080p picture down to 720p, and the
@@ -7874,7 +7890,7 @@ namespace ams::mitm::applet {
              * session at 720p */
             {
                 const bool want1080 = uvc ? uvc_w == 1920
-                                          : (lock != 0 ? lock1080 : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed));
+                                          : (lock != 0 ? lock1080 : src1080);
                 if (live && want1080 && !fits1080 && g_donor_mode && DonorCanGrow()) {
                     g_donor_regrow.store(true, std::memory_order_relaxed);
                     return StreamEnd::Regrow;
@@ -7899,7 +7915,8 @@ namespace ams::mitm::applet {
             const bool pipe = full1080;
             s.arena_size = pipe ? L.arena_size_pipe : (gop != 0 ? L.arena_size_p : L.arena_size);   /* same base: past both stream stages */
             LogLine("   nvstream: encoding %ux%u%s%s%s", L.w, L.h, uvc ? " for the webcam" : "",
-                    full1080 ? " (1920x1088 coded, SPS-cropped)" : (s.corner ? " (the handheld picture, 1:1)" : " (the VIC scales the picture)"),
+                    full1080 ? (up1080 ? " (1920x1088 coded, SPS-cropped; the VIC scales the picture up - scale_to_1080)" : " (1920x1088 coded, SPS-cropped)")
+                             : (s.corner ? " (the handheld picture, 1:1)" : " (the VIC scales the picture)"),
                     pipe ? "; pipelined: the next frame is read while this one encodes" : "");
             if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvstream")) { VicStage("ns:open_FAILED"); return g_engine_wedged ? StreamEnd::EngineStall : StreamEnd::Failed; }
             if (live) {
@@ -8371,12 +8388,24 @@ namespace ams::mitm::applet {
                  * exp/net-ethernet: wired uses 60 so mid-join / seek recovers
                  * faster without the Wi-Fi stall risk. */
                 if (live && g_viewer_key_request.exchange(false, std::memory_order_relaxed)) { need_idr = true; ++key_requests; }
-                const u32 net_gop = g_net_wired.load(std::memory_order_relaxed) ? 60u : 240u;
-                const u32 gop_now = (g_tx_net && gop != 0 && g_viewer_can_ask.load(std::memory_order_relaxed)) ? net_gop : gop;
+                /* Over USB nothing is lost either, and a viewer that needs a
+                 * keyframe asks for one (SFTK) or gets one from the >500 ms
+                 * gap when it (re)joins. A 720p IDR is ~15-20 P frames' worth
+                 * (Run AG: 207 KB vs 10.5 KB): every 60 frames it was a
+                 * once-a-second spike in encode, transfer and decode time -
+                 * live USB uses usb_keyframe_interval (applet_mitm_gop.hpp) */
+                const bool wired = g_net_wired.load(std::memory_order_relaxed);
+                const u32 gop_now = keyframe::Choose(g_tx_net, live, uvc, gop, g_viewer_can_ask.load(std::memory_order_relaxed), wired,
+                                                     g_usb_gop.load(std::memory_order_relaxed));
                 if (gop_now != gop && !said_long_gop) {
                     said_long_gop = true;
-                    LogLine("   nvstream: network keyframes on demand + every %u frames (%s; setting: %u)",
-                            net_gop, g_net_wired.load(std::memory_order_relaxed) ? "wired" : "wifi", gop);
+                    if (g_tx_net) {
+                        LogLine("   nvstream: network keyframes on demand + every %u frames (%s; setting: %u)",
+                                gop_now, wired ? "wired" : "wifi", gop);
+                    } else {
+                        LogLine("   nvstream: USB keyframes on demand + every %u frames (setting: %u; usb_keyframe_interval = 0 turns this off)",
+                                gop_now, gop);
+                    }
                 }
                 if (gop == 0 || need_idr || pos >= gop_now) { pos = 0; }
                 NvfJob j;

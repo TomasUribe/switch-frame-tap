@@ -208,6 +208,19 @@ int main() {
     ExpectRelease("viewer_input = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio vinput");
     ExpectRelease("viewer_input = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
     ExpectRelease("homebrew_docked = 1\nviewer_input = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio hbdocked vinput");
+    /* v0.7.20: docked pictures between 720p and 1080p scaled up (#65) */
+    ExpectRelease("scale_to_1080 = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio scale1080");
+    ExpectRelease("scale_to_1080 = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("max_resolution = 720\nscale_to_1080 = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 cap720 audio scale1080");
+    /* usb_keyframe_interval: a token only when set, 0..250 */
+    ExpectRelease("usb_keyframe_interval = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio usbgop=0");
+    ExpectRelease("usb_keyframe_interval = 120\noverlays = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio overlays usbgop=120");
+    ExpectRelease("usb_keyframe_interval = 999\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    {
+        const char *arm = "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio usbgop=0";
+        if (af::Number(arm, std::strlen(arm), "usbgop", 240) != 0) { std::printf("FAIL usbgop=0 not read\n"); ++g_fail; }
+        if (af::Number("vic live", 8, "usbgop", 240) != 240) { std::printf("FAIL usbgop default\n"); ++g_fail; }
+    }
     ExpectContains("vic live nodethome wait=20\n", "nodethome", true);
     ExpectContains("vic live wait=20\n", "nodethome", false);
 

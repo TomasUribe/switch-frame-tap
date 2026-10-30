@@ -120,6 +120,10 @@ namespace ams::mitm::applet {
      * halves. The default of the config key mid_collect (this test build: the A/B). */
     constexpr u32 MidCollectDefault = 2;
     extern std::atomic<u32> g_mid_collect;
+    /* live over USB (not the webcam): an IDR every g_usb_gop frames, and on
+     * request (SFTK), instead of g_nvstream_gop when that is shorter; 0 off.
+     * config.ini usb_keyframe_interval -> usbgop=N (applet_mitm_gop.hpp) */
+    extern std::atomic<u32> g_usb_gop;
     /* v0.7.14 ovl2: the live stream's sent frames and their read/VIC time (ns), running totals */
     extern std::atomic<u32> g_live_frames;
     extern std::atomic<u64> g_live_read_ns, g_live_vic_ns;
@@ -132,6 +136,7 @@ namespace ams::mitm::applet {
     extern u32  g_nv1080_n;
     extern bool g_anyfw_armed;    /* M98: capture on firmware this build was not tested on */
     extern bool g_cap720_armed;   /* M93: stream 1080p content scaled to 720p (the M86-M89 behaviour) */
+    extern std::atomic<bool> g_scale1080;   /* v0.7.20 (#65): docked pictures between 720p and 1080p scaled up to 1080p */
     extern bool g_nvp_armed;      /* M83: IDR + P frames probe */
     extern u32  g_nvp_n;
     extern u32  g_matrix_mode;

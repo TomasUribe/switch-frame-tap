@@ -27,6 +27,7 @@ static float g_home_scroll = 0, g_home_content_h = 0;
 static float g_ui_mx = -1, g_ui_my = -1;   /* the mouse, in UI units (logical / g_ui_k) */
 static float g_ui_wx = -1, g_ui_wy = -1;   /* the mouse, in window pixels (for fixed chrome) */
 static Uint64 g_ui_mouse_t = 0;            /* last pointer activity inside the window */
+static int g_ui_cursor_hidden = 0;         /* v0.7.20: hidden over a still fullscreen picture */
 static int g_ui_ptr_inside = 0;            /* mouse is over the window: show hover chrome */
 static int g_ui_drag = 0, g_ui_drag_arg = 0;
 static float g_ui_k = 1, g_ui_w = 1280;    /* units -> logical, and the width in units, at the last draw */
@@ -975,11 +976,31 @@ static void ui_rec_badge(SDL_Renderer *ren, int W, int H)
     SDL_SetRenderDrawBlendMode(ren, old);
 }
 
+/* v0.7.20 (#54): the buttons over the picture go 3 s after the mouse last
+ * moved, as a video player's do, so they don't cover the game; in fullscreen
+ * the cursor goes with them. Their click targets stay. */
+static int ui_pointer_idle(void)
+{
+    return g_ui_mouse_t != 0 && SDL_GetPerformanceCounter() - g_ui_mouse_t > 3 * SDL_GetPerformanceFrequency();
+}
+
+static void ui_pointer_active(void)
+{
+    g_ui_mouse_t = SDL_GetPerformanceCounter();
+    if (g_ui_cursor_hidden) { SDL_ShowCursor(SDL_ENABLE); g_ui_cursor_hidden = 0; }
+}
+
 /* Hover chrome (Settings + borderless window buttons) and the drawer, over the picture */
 static void ui_overlay(SDL_Renderer *ren, int W, int H)
 {
     g_ui_nhits = 0;
     if (H <= 0) return;
+    {
+        SDL_Window *w = g_paint_win;
+        const int fs = w && (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN);
+        const int hide = fs && !g_ui_open && g_ui_ptr_inside && ui_pointer_idle();
+        if (hide != g_ui_cursor_hidden) { SDL_ShowCursor(hide ? SDL_DISABLE : SDL_ENABLE); g_ui_cursor_hidden = hide; }
+    }
     if (g_ui_open) {
         if (text_init(ren) != 0) return;
         SDL_BlendMode old;
@@ -993,7 +1014,7 @@ static void ui_overlay(SDL_Renderer *ren, int W, int H)
     /* Hits always - paint only when the pointer is over the window. Hits do not
      * need fonts, so chrome stays clickable even if text_init is late/fails. */
     ui_top_chrome_fixed(ren, (SDL_Color){ 21, 24, 30, 200 }, 0);
-    if (!g_ui_ptr_inside || text_init(ren) != 0) return;
+    if (!g_ui_ptr_inside || ui_pointer_idle() || text_init(ren) != 0) return;
     SDL_BlendMode old;
     SDL_GetRenderDrawBlendMode(ren, &old);
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
@@ -1051,7 +1072,7 @@ static void menu_draw(SDL_Renderer *ren)
         l1 = "Is another program using it (another viewer, OBS)? Close it, or plug the cable in again.";
 #else
         head = "The Switch cannot be opened";
-        l1 = "Install the USB rule (99-switch-frame-tap.rules) - see the README.";
+        l1 = "Install the USB rule (70-switch-frame-tap.rules) - see the README.";
 #endif
         snprintf(errline, sizeof(errline), "(%s)", g_menu_err);
         l2 = errline;

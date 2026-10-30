@@ -75,6 +75,9 @@ namespace ams::mitm::applet::armfile {
      *   quality           = high | medium | low     -> nvqp=20 | 24 | 28
      *   qp                = 10..40                   (advanced; beats quality)
      *   keyframe_interval = frames between IDRs      -> nvgop= (default 60)
+     *   usb_keyframe_interval = 0..250               -> usbgop= (live over USB: an IDR every N
+     *                                                  frames + on request, when longer than
+     *                                                  keyframe_interval; default 240, 0 off)
      *   max_resolution    = 1080 | 720               -> cap720 at 720
      *   start_delay       = seconds after boot       -> wait= (default 20)
      *   allow_untested_firmware = 1                  -> anyfw
@@ -107,6 +110,9 @@ namespace ams::mitm::applet::armfile {
      *                                                  Homebrew Menu is told the console is docked - 1080p)
      *   viewer_input      = 1                        -> vinput   (v0.7.20: a controller on the viewer's
      *                                                  computer plays the console - a virtual Pro Controller)
+     *   scale_to_1080     = 1                        -> scale1080 (v0.7.20, #65: a docked picture larger
+     *                                                  than 720p but not 1920x1080 - SMO's 1600x900 - is
+     *                                                  scaled up to 1080p rather than down to 720p)
      *
      * Unknown keys and malformed values are ignored: a bad config file must
      * leave the defaults, never arm something else. */
@@ -153,7 +159,7 @@ namespace ams::mitm::applet::armfile {
     inline size_t BuildReleaseArm(const char *ini, size_t n, char *out, size_t cap) {
         unsigned qp = 20, gop = 60, wait = 20, u = 0;
         unsigned shotkey = 0;
-        bool cap720 = false, anyfw = false, shot = false, audio = true, uvc = false, uvcraw = false, nvab = false, net = false, nohb = false, nodethome = false, shotalbum = false, screenoff = false, earlyoff = false, earlyab = false, midoff = false, midon = false, midab = false, homemenu = false, overlays = false, hbdocked = false, vinput = false;
+        bool cap720 = false, anyfw = false, shot = false, audio = true, uvc = false, uvcraw = false, nvab = false, net = false, nohb = false, nodethome = false, shotalbum = false, screenoff = false, earlyoff = false, earlyab = false, midoff = false, midon = false, midab = false, homemenu = false, overlays = false, hbdocked = false, vinput = false, scale1080 = false;
         char v[32];
         if (IniValue(ini, n, "quality", v, sizeof(v))) {
             if (std::strcmp(v, "medium") == 0) { qp = 24; }
@@ -161,6 +167,8 @@ namespace ams::mitm::applet::armfile {
         }
         if (IniValue(ini, n, "qp", v, sizeof(v)) && ParseUnsigned(v, &u) && u >= 10 && u <= 40) { qp = u; }
         if (IniValue(ini, n, "keyframe_interval", v, sizeof(v)) && ParseUnsigned(v, &u) && u >= 1 && u <= 250) { gop = u; }
+        int usbgop = -1;               /* not set: the module's default (applet_mitm_gop.hpp) */
+        if (IniValue(ini, n, "usb_keyframe_interval", v, sizeof(v)) && ParseUnsigned(v, &u) && u <= 250) { usbgop = static_cast<int>(u); }
         if (IniValue(ini, n, "max_resolution", v, sizeof(v)) && std::strcmp(v, "720") == 0) { cap720 = true; }
         if (IniValue(ini, n, "start_delay", v, sizeof(v)) && ParseUnsigned(v, &u) && u <= 600) { wait = u; }
         if (IniValue(ini, n, "allow_untested_firmware", v, sizeof(v)) && std::strcmp(v, "1") == 0) { anyfw = true; }
@@ -186,6 +194,7 @@ namespace ams::mitm::applet::armfile {
         if (IniValue(ini, n, "overlays", v, sizeof(v)) && std::strcmp(v, "1") == 0) { overlays = true; }
         if (IniValue(ini, n, "homebrew_docked", v, sizeof(v)) && std::strcmp(v, "1") == 0) { hbdocked = true; }
         if (IniValue(ini, n, "viewer_input", v, sizeof(v)) && std::strcmp(v, "1") == 0) { vinput = true; }
+        if (IniValue(ini, n, "scale_to_1080", v, sizeof(v)) && std::strcmp(v, "1") == 0) { scale1080 = true; }
         if (IniValue(ini, n, "early_collect", v, sizeof(v))) {
             if (std::strcmp(v, "0") == 0) { earlyoff = true; }
             else if (std::strcmp(v, "ab") == 0) { earlyab = true; }
@@ -207,13 +216,15 @@ namespace ams::mitm::applet::armfile {
             if (shotkey == 4) { std::snprintf(custom, sizeof(custom), " shotmask=%u%s", shotmask, shotcap ? " shotcap" : ""); }
             std::snprintf(shotbuf, sizeof(shotbuf), " shot shotkey=%u%s%s", shotkey, custom, shotalbum ? " shotalbum" : "");
         }
+        char usbgopbuf[24] = "";
+        if (usbgop >= 0) { std::snprintf(usbgopbuf, sizeof(usbgopbuf), " usbgop=%d", usbgop); }
         /* one transport: "usb" (the viewer or, with uvc, the webcam) or "net" */
-        const int w = std::snprintf(out, cap, "vic exec dbg %s live nvqp=%u nvgop=%u wait=%u%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        const int w = std::snprintf(out, cap, "vic exec dbg %s live nvqp=%u nvgop=%u wait=%u%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
                                     net ? "net" : "usb", qp, gop, wait, cap720 ? " cap720" : "", anyfw ? " anyfw" : "", shotbuf, audio ? " audio" : "",
                                     uvc ? " uvc" : "", uvcraw ? " uvcraw" : "", nvab ? " nvab" : "", nohb ? " nohb" : "",
                                     nodethome ? " nodethome" : "", screenoff ? " screenoff" : "",
                                     earlyoff ? " earlyoff" : "", earlyab ? " earlyab" : "", midoff ? " midoff" : midon ? " midon" : midab ? " midab" : "", homemenu ? " homemenu" : "", overlays ? " overlays" : "",
-                                    hbdocked ? " hbdocked" : "", vinput ? " vinput" : "");
+                                    hbdocked ? " hbdocked" : "", vinput ? " vinput" : "", scale1080 ? " scale1080" : "", usbgopbuf);
         return (w < 0 || static_cast<size_t>(w) >= cap) ? 0 : static_cast<size_t>(w);
     }
 
