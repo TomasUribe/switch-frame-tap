@@ -52,7 +52,16 @@ namespace ams::mitm::applet {
          * the stream's window lines every 20 s) showed as a latency spike in
          * the viewer. Lines wait in g_defer_buf and go out once it stops; a
          * test install (arm file) still writes every line at once. */
-        bool Quiet() { return g_release_mode && g_streaming_now.load(std::memory_order_relaxed); }
+        bool StreamQuiet() { return g_release_mode && g_streaming_now.load(std::memory_order_relaxed); }
+        /* v0.7.20 (#57): and while a game runs. On emuMMC the SD card is the
+         * game's storage, and with no viewer the heartbeat and the memory
+         * lines flushed a write about once a second; players saw stutters
+         * with the stream off. Held lines go out in one write a minute, when
+         * 8 KB are held, or when the game closes. */
+        bool GameQuiet() { return g_release_mode && g_app_pid.load(std::memory_order_relaxed) != 0; }
+        bool Quiet() { return StreamQuiet() || GameQuiet(); }
+        constexpr u64 GameFlushNs = UINT64_C(60000000000);
+        constinit u64 g_held_tick = 0;   /* when the oldest held line came in */
 
         /* room for n more bytes: the oldest whole lines go */
         void DropOldest(size_t n) {
@@ -149,7 +158,11 @@ namespace ams::mitm::applet {
         line[n++] = '\n';
 
         if (Quiet()) {
-            if (g_defer_len + static_cast<size_t>(n) > sizeof(g_defer_buf)) { DropOldest(static_cast<size_t>(n)); }
+            if (g_defer_len + static_cast<size_t>(n) > sizeof(g_defer_buf)) {
+                /* a stream must not wait on the card; a game can take one write */
+                if (StreamQuiet()) { DropOldest(static_cast<size_t>(n)); } else { WriteHeld(); }
+            }
+            if (g_defer_len == 0) { g_held_tick = armGetSystemTick(); }
             std::memcpy(g_defer_buf + g_defer_len, line, static_cast<size_t>(n));
             g_defer_len += static_cast<size_t>(n);
             return;
@@ -187,6 +200,11 @@ namespace ams::mitm::applet {
     }
 
     bool LogQuiet() { return Quiet(); }
+
+    void LogFlushStale() {
+        std::scoped_lock lk(g_lock);
+        if (g_ready && !g_defer && !StreamQuiet() && g_defer_len != 0 && armTicksToNs(armGetSystemTick() - g_held_tick) >= GameFlushNs) { WriteHeld(); }
+    }
 
     void LogWriteHeldNow() {
         std::scoped_lock lk(g_lock);

@@ -41,6 +41,7 @@ namespace ams::mitm::applet {
      * has stopped (the heartbeat calls it) */
     bool LogQuiet();
     void LogFlushHeld();
+    void LogFlushStale();   /* v0.7.20: held while a game runs - written once they are a minute old */
     /* whatever is held, written now - before a fatal */
     void LogWriteHeldNow();
 

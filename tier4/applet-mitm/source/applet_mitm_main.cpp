@@ -549,7 +549,7 @@ namespace ams {
                 /* v0.7.15 (#33): no breadcrumb while a stream runs - its SD
                  * writes every 3 s showed as a latency spike in the viewer
                  * (vbezniskotempo measured it gone without them) */
-                if (mitm::applet::LogQuiet()) { continue; }
+                if (mitm::applet::LogQuiet()) { mitm::applet::LogFlushStale(); continue; }
                 mitm::applet::LogFlushHeld();
                 char b[96];
                 const auto &st = mitm::applet::g_stats;
