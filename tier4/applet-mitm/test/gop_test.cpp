@@ -12,12 +12,12 @@ static void Expect(unsigned got, unsigned want, const char *what) {
 
 int main() {
     //                 net    live   uvc    gop  ask    wired  usbgop
-    Expect(kf::Choose(false, true,  false, 60,  false, false, 240), 240, "USB live: the long interval");
+    Expect(kf::Choose(false, true,  false, 60,  false, false, 240), 60,  "USB live, a viewer that never asked (before v0.7.13): as set");
     Expect(kf::Choose(false, true,  false, 60,  true,  false, 240), 240, "USB live, viewer can ask: the long interval");
     Expect(kf::Choose(false, true,  false, 60,  false, false, 0),   60,  "usb_keyframe_interval = 0: as set");
     Expect(kf::Choose(false, true,  false, 60,  false, false, 30),  60,  "never shorter than the setting");
     Expect(kf::Choose(false, true,  false, 250, false, false, 240), 250, "keyframe_interval longer: as set");
-    Expect(kf::Choose(false, true,  false, 60,  false, false, 999), 250, "at most 250");
+    Expect(kf::Choose(false, true,  false, 60,  true,  false, 999), 250, "at most 250");
     Expect(kf::Choose(false, true,  false, 0,   false, false, 240), 0,   "keyframe_interval 0 (all IDR) stays");
     Expect(kf::Choose(false, true,  true,  60,  false, false, 240), 60,  "the webcam: as set");
     Expect(kf::Choose(false, false, false, 60,  false, false, 240), 60,  "not live (a test run): as set");

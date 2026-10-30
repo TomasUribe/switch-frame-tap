@@ -1688,9 +1688,14 @@ namespace ams::mitm::applet {
             if (std::memcmp(::ams::g_usb_ep_out_buf + k, "SFTU", 4) == 0) { ViewerLockSize(false); }
         }
         /* v0.7.13: "SFTK" - the viewer wants a keyframe (a new decoder, a recording) */
-        if (got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTK", 4) == 0) { g_viewer_key_request.store(true, std::memory_order_relaxed); return false; }
+        /* v0.7.20: and it can ask again, so its keyframes may be far apart (usb_keyframe_interval) */
+        if (got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTK", 4) == 0) {
+            g_viewer_key_request.store(true, std::memory_order_relaxed);
+            g_viewer_can_ask.store(true, std::memory_order_relaxed);
+            return false;
+        }
         const bool bye = got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTQ", 4) == 0;
-        if (bye) { g_viewer_crop.store(false, std::memory_order_relaxed); ViewerLockSize(false); }
+        if (bye) { g_viewer_crop.store(false, std::memory_order_relaxed); ViewerLockSize(false); g_viewer_can_ask.store(false, std::memory_order_relaxed); }
         return bye;
     }
 
