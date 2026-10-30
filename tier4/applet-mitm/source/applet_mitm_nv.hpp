@@ -116,6 +116,10 @@ namespace ams::mitm::applet {
     /* (this one and g_detach_on_home are read while a session runs, and the
      * manager's ReloadConfig rewrites them from another thread: atomics) */
     extern std::atomic<u32> g_early_collect;
+    /* live over USB (not the webcam): an IDR every g_usb_gop frames, and on
+     * request (SFTK), instead of g_nvstream_gop when that is shorter; 0 off.
+     * config.ini usb_keyframe_interval -> usbgop=N (applet_mitm_gop.hpp) */
+    extern std::atomic<u32> g_usb_gop;
     /* v0.7.14 ovl2: the live stream's sent frames and their read/VIC time (ns), running totals */
     extern std::atomic<u32> g_live_frames;
     extern std::atomic<u64> g_live_read_ns, g_live_vic_ns;

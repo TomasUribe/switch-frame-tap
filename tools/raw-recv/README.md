@@ -56,7 +56,7 @@ cc -O2 -Wall -Wextra -o raw-recv raw-recv.c $(pkg-config --cflags --libs libusb-
 ## Permissions (one-time, avoids sudo)
 
 ```
-sudo cp 99-switch-frame-tap.rules /etc/udev/rules.d/
+sudo cp 70-switch-frame-tap.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 

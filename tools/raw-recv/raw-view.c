@@ -28,6 +28,8 @@
  *   ./raw-view --file s.sft --paced --seconds 4 --stats full --shot hud.bmp
  *                              # v0.7.2: the stats overlay at a level (off/fps/graphs/full;
  *                              # O or F3 cycles it), and the last frame saved as BMP (tests)
+ *   ./raw-view --no-zero-copy  # VAAPI frames are copied to memory and uploaded again
+ *                              # (the default on Wayland/EGL draws them straight from the GPU)
  *   ./raw-view --software      # v0.7.11: decode on the CPU, not the GPU's video decoder
  *                              # (viewer.ini hwdec=0 too; the GPU is the default)
  *   ./raw-view --file s.sft --paced --upscaler fsr   # v0.7.11: GPU upscaling (off/fsr/nis;
@@ -497,6 +499,7 @@ static const char *ip_edit_for_menu(void);   /* NULL unless an address is being 
 #include "menu.h"              /* v0.5: the main screen while there is no picture */
 #include "hud.h"               /* v0.7.2: the stats overlay (O / F3) */
 #include "picture.h"           /* v0.7.12: brightness, contrast... (P) */
+#include "zerocopy.h"          /* VAAPI frames drawn without a copy (Linux, EGL) */
 #include "update.h"            /* v0.7.14: the viewer updates itself from GitHub's releases */
 static libusb_device_handle *g_usb = NULL;
 
@@ -1198,7 +1201,12 @@ static int reader_main(void *arg)
         idle_since = 0;
         g_net_got_stream = 1;
         const Uint64 t = SDL_GetPerformanceCounter();
-        if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); continue; }
+        /* after a resync, ask for a keyframe at once: the bytes skipped may
+         * have held a frame, and live USB spaces keyframes 4 s apart
+         * (usb_keyframe_interval) - the picture would stay broken till then */
+        static int resynced = 0;
+        if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); resynced = 1; continue; }
+        if (resynced) { resynced = 0; key_request(); }
         if (hdr.length == 0 || hdr.length > 64u*1024*1024) continue;
         if (hdr.flags & SFT_FLAG_AUDIO) {
             static uint8_t abuf[64 * 1024];
@@ -1356,6 +1364,7 @@ static int h264_open(h264_t *d, int low_latency, int threads, int hw)
                 d->c->hw_device_ctx = av_buffer_ref(d->hwdev);
                 d->c->opaque = d;
                 d->c->get_format = h264_get_format;
+                d->c->extra_hw_frames = 8;   /* the display queue may hold GPU frames (zerocopy.h) */
             }
             break;
         }
@@ -1412,6 +1421,12 @@ static int h264_decode(h264_t *d, uint8_t *buf, int len, int64_t pts)
     rc = avcodec_receive_frame(d->c, d->frm);
     if (rc == AVERROR(EAGAIN)) return 0;
     if (rc < 0) return rc;
+#ifdef SFT_ZEROCOPY
+    if (g_zc_ready && d->frm->format == AV_PIX_FMT_VAAPI) {   /* stays on the GPU; the display imports it */
+        zc_sync(d->frm);
+        return 1;
+    }
+#endif
     if (d->hwfmt != AV_PIX_FMT_NONE && d->frm->format == d->hwfmt) {   /* back from the GPU, as NV12 */
         av_frame_unref(d->swfrm);
         rc = av_hwframe_transfer_data(d->swfrm, d->frm, 0);
@@ -1721,6 +1736,7 @@ static void viewer_repaint(void)
         if (g_upscaler != UP_FSR || !g_up.active ||
             !clarity_draw(g_paint_ren, NULL, NULL, 0, 0, g_fsr_sharpness / 100.0f, 0))
 #endif
+        if (!zc_repaint(g_paint_ren))   /* a zero-copy frame never reached the texture */
             SDL_RenderCopy(g_paint_ren, g_paint_tex, g_paint_crop.w ? &g_paint_crop : NULL, NULL);
     }
     int lw = 0, lh = 0;
@@ -2072,6 +2088,24 @@ static Uint64 g_t_rx[256];           /* header arrival per frame number */
 static double g_age_ms[256];         /* the console's own age of that frame */
 static uint32_t g_crop_wh[256];      /* v0.7.16: its dynamic-resolution crop (w << 16 | h), 0: all of it */
 static uint8_t g_crop_mid[256];      /* v0.7.16: that crop sits in the middle */
+
+/* v0.7.16: dynamic resolution (Super Mario Galaxy) - the console sends the
+ * frame 1:1 and says which part the game drew; only that part is stretched
+ * over the picture, as the Switch's screen does. Sets the crop for the
+ * upscaler and repaints; 1 when this frame has one */
+static int frame_crop(const AVFrame *f, uint32_t W, uint32_t H)
+{
+    const uint32_t c = g_crop_wh[f->pts & 255];
+    const int cw = (int)(c >> 16) & ~1, ch = (int)(c & 0xFFFF) & ~1;
+    const int ok = c != 0 && cw >= 64 && ch >= 64 && cw <= (int)W && ch <= (int)H && (cw < (int)W || ch < (int)H);
+    const int mid = ok && g_crop_mid[f->pts & 255];   /* Kingdom Hearts: the middle */
+    const int cx = mid ? (((int)W - cw) / 2) & ~1 : 0, cy = mid ? (((int)H - ch) / 2) & ~1 : 0;
+    g_up_crop_w = ok ? cw : 0; g_up_crop_h = ok ? ch : 0;
+    g_up_crop_x = cx; g_up_crop_y = cy;
+    g_paint_crop = (SDL_Rect){ cx, cy, ok ? cw : 0, ok ? ch : 0 };
+    return ok;
+}
+
 static float g_kb_pts[256], g_dec_pts[256];   /* v0.7.2 overlay: its size, its decode time */
 static unsigned char g_key_pts[256];          /* and whether it was a keyframe */
 
@@ -2217,6 +2251,13 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     if (!g_fm) { g_fm = SDL_CreateMutex(); g_f_put = SDL_CreateCond(); }
     rec_init(g_rec_dir, g_mp4);
     if (g_mp4) rec_toggle();
+#ifdef SFT_ZEROCOPY
+    if (dec.hwname && !strcmp(dec.hwname, "vaapi")) {
+        g_zc_ready = zc_probe(ren);
+        if (g_zc_ready) fprintf(stderr, "decode: zero-copy (VAAPI -> EGL/OpenGL, no copy to memory)\n");
+        else fprintf(stderr, "decode: zero-copy unavailable - %s\n", zc.why);
+    }
+#endif
     dec_args_t da = { &dec, rec, es };
     g_dec_stop = 0;
     SDL_Thread *dth = SDL_CreateThread(decoder_main, "decoder", &da);
@@ -2311,7 +2352,28 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                 if (tex) SDL_RenderSetLogicalSize(ren, (int)W, (int)H);
                 SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
             }
-            const int nv12 = show->format == AV_PIX_FMT_NV12;   /* v0.7.11: from the GPU decoder */
+            int zc_drawn = 0;
+#ifdef SFT_ZEROCOPY
+            if (show->format == AV_PIX_FMT_VAAPI) {   /* zerocopy.h */
+                if (g_zc_ready && pic_neutral() && (uint32_t)show->width == W && (uint32_t)show->height == H && tex
+                    && !frame_crop(show, W, H)) {    /* a dynamic-resolution crop is drawn from the copy */
+                    SDL_RenderClear(ren);
+                    zc_drawn = zc_draw(ren, show, (int)W, (int)H, g_upscaler);
+                    if (!zc_drawn) { g_zc_ready = 0; fprintf(stderr, "\ndecode: zero-copy off - %s\n", zc.why); }
+                }
+                if (!zc_drawn) {                       /* P settings, a new size, or zero-copy failed: to memory */
+                    AVFrame *m = av_frame_alloc();
+                    if (m && av_hwframe_transfer_data(m, show, 0) == 0) {
+                        av_frame_copy_props(m, show);
+                        av_frame_unref(show);
+                        av_frame_move_ref(show, m);
+                    }
+                    av_frame_free(&m);
+                }
+            }
+            zc.last = zc_drawn;
+#endif
+            const int nv12 = show->format == AV_PIX_FMT_NV12 || show->format == AV_PIX_FMT_VAAPI;   /* v0.7.11: from the GPU decoder */
             if (!tex || (uint32_t)show->width != W || (uint32_t)show->height != H || nv12 != tex_nv12) {
                 if (tex) SDL_DestroyTexture(tex);
                 W = (uint32_t)show->width; H = (uint32_t)show->height; tex_nv12 = nv12;
@@ -2325,27 +2387,17 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                 SDL_RenderSetLogicalSize(ren, (int)W, (int)H);
                 fprintf(stderr, "\nstream: %ux%u H.264%s\n", W, H, nv12 ? " (NV12)" : "");
             }
+            if (!zc_drawn) {
             uint8_t *pd[3] = { show->data[0], show->data[1], show->data[2] };
             int pl[3] = { show->linesize[0], show->linesize[1], show->linesize[2] };
             pic_apply(pd, pl, (int)W, (int)H, nv12);   /* v0.7.12: P - nothing at the defaults */
             if (nv12) SDL_UpdateNVTexture(tex, NULL, pd[0], pl[0], pd[1], pl[1]);
             else SDL_UpdateYUVTexture(tex, NULL, pd[0], pl[0], pd[1], pl[1], pd[2], pl[2]);
             SDL_RenderClear(ren);
-            /* v0.7.16: dynamic resolution (Super Mario Galaxy) - the console
-             * sends the frame 1:1 and says which part the game drew; only that
-             * part is stretched over the picture, as the Switch's screen does */
-            {
-                const uint32_t c = g_crop_wh[show->pts & 255];
-                const int cw = (int)(c >> 16) & ~1, ch = (int)(c & 0xFFFF) & ~1;
-                const int ok = c != 0 && cw >= 64 && ch >= 64 && cw <= (int)W && ch <= (int)H && (cw < (int)W || ch < (int)H);
-                const int mid = ok && g_crop_mid[show->pts & 255];   /* Kingdom Hearts: the middle */
-                const int cx = mid ? (((int)W - cw) / 2) & ~1 : 0, cy = mid ? (((int)H - ch) / 2) & ~1 : 0;
-                g_up_crop_w = ok ? cw : 0; g_up_crop_h = ok ? ch : 0;
-                g_up_crop_x = cx; g_up_crop_y = cy;
-                g_paint_crop = (SDL_Rect){ cx, cy, ok ? cw : 0, ok ? ch : 0 };
-            }
+            frame_crop(show, W, H);
             if (!up_draw(ren, pd, pl, (int)W, (int)H, g_upscaler, nv12))   /* v0.7.11: U */
                 SDL_RenderCopy(ren, tex, g_paint_crop.w ? &g_paint_crop : NULL, NULL);
+            }
             if (rec_active()) {                /* v0.5: shown while recording (not in the file); v0.7.12: with the time */
                 ui_rec_badge(ren, (int)W, (int)H);
                 SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
@@ -2503,7 +2555,12 @@ static int run_check(const char *net_host)
            getenv("WAYLAND_DISPLAY") ? getenv("WAYLAND_DISPLAY") : "-",
            getenv("DISPLAY") ? getenv("DISPLAY") : "-");
 #ifndef _WIN32
-    printf("udev rule: %s\n", access("/etc/udev/rules.d/99-switch-frame-tap.rules", R_OK) == 0 ? "installed" : "missing");
+    /* the rule must sort before 73-seat-late.rules, which applies uaccess:
+     * the 99- name of v0.7.19 and older leaves the Switch root-only */
+    if (access("/etc/udev/rules.d/70-switch-frame-tap.rules", R_OK) == 0) printf("udev rule: installed\n");
+    else if (access("/etc/udev/rules.d/99-switch-frame-tap.rules", R_OK) == 0)
+        printf("udev rule: OLD NAME (99-switch-frame-tap.rules is applied after uaccess - rename it to 70-switch-frame-tap.rules)\n");
+    else printf("udev rule: missing\n");
 #endif
 
     if (video_init() == 0) {
@@ -2625,6 +2682,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--upscaler") && i + 1 < argc) up_set_by_key(argv[++i]);
         else if (!strcmp(argv[i], "--software")) g_hwdec = 0;
         else if (!strcmp(argv[i], "--picture") && i + 1 < argc) pic_parse(argv[++i]);   /* v0.7.12: B,C,S,G,SH as in viewer.ini (tests) */
+        else if (!strcmp(argv[i], "--no-zero-copy")) g_zc = 0;      /* VAAPI frames copied back to memory and uploaded again */
         else if (!strcmp(argv[i], "--hwdec")) g_hwdec = 1;
         else if (!strcmp(argv[i], "--window") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &g_win_w, &g_win_h);
         else if (!strcmp(argv[i], "--mp4") && i + 1 < argc) g_mp4 = argv[++i];
