@@ -1766,6 +1766,8 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
         if (e.type == SDL_KEYDOWN && (e.key.keysym.sym > 0x7f || e.key.keysym.sym == SDLK_UNKNOWN) &&
             e.key.keysym.scancode >= SDL_SCANCODE_A && e.key.keysym.scancode <= SDL_SCANCODE_Z)
             e.key.keysym.sym = SDLK_a + (e.key.keysym.scancode - SDL_SCANCODE_A);
+        /* v0.7.20 (#54): any mouse use brings the buttons and the cursor back */
+        if (e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEWHEEL) ui_pointer_active();
         /* Borderless: drag the picture (or home screen) to move the window. */
         if (g_dragging || g_drag_pending) {
             if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {
