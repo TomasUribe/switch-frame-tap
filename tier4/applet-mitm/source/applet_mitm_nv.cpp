@@ -8011,6 +8011,8 @@ namespace ams::mitm::applet {
             u32 w_u_audio_n = 0, w_u_n = 0;
             u64 lp_cap = 0, lp_vic = 0, lp_col = 0, lp_sub = 0, lp_slp = 0, lp_poll0 = 0;   /* v0.7.21: where one trip round the loop goes */
             u32 lp_n = 0;
+            u64 lt_cap = 0, lt_vic = 0, lt_col = 0, lt_sub = 0, lt_slp = 0, lt_n = 0;   /* the same over the session */
+            const u64 lt_t0 = armTicksToNs(armGetSystemTick());
             u32 w_n = 0, w_sent0 = 0, w_fwait0 = 0, w_ready0 = 0, w_waited0 = 0, w_drop0 = 0;
             u64 w_t0 = armTicksToNs(armGetSystemTick());
             InFlight fl = {};
@@ -8027,6 +8029,11 @@ namespace ams::mitm::applet {
             /* v0.7.12: the console-side age of what was sent, per A/B half */
             u64 ab_age_sum = 0, ab_age_max = 0, ab_cp_sum = 0, ab_enc_sum = 0, ab_read_sum = 0;
             u32 ab_age_n = 0, early_collects = 0;
+            /* v0.7.21: the same over the whole session, [0] the ON halves, [1] the
+             * OFF ones - a release install keeps only the newest 8 KB of a
+             * stream's lines, so the per-half lines of a long run are lost */
+            struct AbTotal { u64 age, cp, enc, read, ns; u32 n, halves, mids; };
+            AbTotal ab_tot[2] = {};
             u64 ec_t0 = armTicksToNs(armGetSystemTick());
             /* v0.7.12: where a frame's console age goes, per log window -
              * present -> copied (queue + GPU fence + the copy), -> submitted
@@ -8274,6 +8281,11 @@ namespace ams::mitm::applet {
                             static_cast<unsigned long long>(ab_cp_sum / abn / 1000), static_cast<unsigned long long>(ab_enc_sum / abn / 1000),
                             static_cast<unsigned long long>(ab_age_max / 1000), static_cast<unsigned long long>(ab_read_sum / abn / 1000), ab_age_n,
                             static_cast<unsigned long long>(ab_fps_x10 / 10), static_cast<unsigned long long>(ab_fps_x10 % 10), early_collects, s.mid_collects);
+                    {
+                        AbTotal &tt = ab_tot[(early && (mid_mode != 2 || mid)) ? 0 : 1];
+                        tt.age += ab_age_sum; tt.cp += ab_cp_sum; tt.enc += ab_enc_sum; tt.read += ab_read_sum; tt.ns += ab_dt;
+                        tt.n += ab_age_n; ++tt.halves; tt.mids += s.mid_collects;
+                    }
                     ab_age_sum = ab_age_max = ab_cp_sum = ab_enc_sum = ab_read_sum = 0; ab_age_n = 0; early_collects = 0; s.mid_collects = 0; ec_t0 = t0;
                 }
                 s.early_poll = early;
@@ -8392,6 +8404,7 @@ namespace ams::mitm::applet {
                 if (!pipe && collect(fl)) { break; }
                 const u64 t3s = armTicksToNs(armGetSystemTick());
                 lp_cap += t1 - t0; lp_vic += t2 - t1; lp_col += t2c - t2; lp_sub += t3s - t2c; ++lp_n;
+                lt_cap += t1 - t0; lt_vic += t2 - t1; lt_col += t2c - t2; lt_sub += t3s - t2c; ++lt_n;
 
                 /* M93/v0.7.1-v0.7.8: has the game switched between a 720p and a
                  * 1080p picture (docked/undocked, ReverseNX)? SizeCheck: a few
@@ -8491,7 +8504,10 @@ namespace ams::mitm::applet {
                  * with the IPC thread that answers the game (M60b) */
                 const u64 tsl0 = armTicksToNs(armGetSystemTick());
                 os::SleepThread(TimeSpan::FromMicroSeconds(500));
-                lp_slp += armTicksToNs(armGetSystemTick()) - tsl0;
+                {
+                    const u64 sl = armTicksToNs(armGetSystemTick()) - tsl0;
+                    lp_slp += sl; lt_slp += sl;
+                }
             }
             /* never leave the channel with a job in flight (M74): collect it,
              * and send it too if the stream is still healthy */
@@ -8540,6 +8556,25 @@ namespace ams::mitm::applet {
             if (audio_bytes != 0) {
                 LogLine("   nvstream: game audio %llu KB in %u packets (%llu ms of sound)", static_cast<unsigned long long>(audio_bytes / 1024), audio_seq,
                         static_cast<unsigned long long>(audio_bytes / 192));
+            }
+            if (lt_n != 0) {
+                const u64 per = (armTicksToNs(armGetSystemTick()) - lt_t0) / lt_n;
+                LogLine("   nvstream loop split, session avg us per trip (%llu trips): get the picture %llu (mid-read polls %llu), VIC %llu, collect %llu, build+submit %llu, sleep %llu; trip %llu",
+                        static_cast<unsigned long long>(lt_n), static_cast<unsigned long long>(lt_cap / lt_n / 1000),
+                        static_cast<unsigned long long>(s.mid_poll_sum / lt_n / 1000), static_cast<unsigned long long>(lt_vic / lt_n / 1000),
+                        static_cast<unsigned long long>(lt_col / lt_n / 1000), static_cast<unsigned long long>(lt_sub / lt_n / 1000),
+                        static_cast<unsigned long long>(lt_slp / lt_n / 1000), static_cast<unsigned long long>(per / 1000));
+            }
+            for (u32 h = 0; h < 2; ++h) {
+                const AbTotal &tt = ab_tot[h];
+                if (tt.halves == 0) { continue; }
+                const u32 tn = tt.n ? tt.n : 1;
+                const u64 tfps = tt.ns ? static_cast<u64>(tt.n) * UINT64_C(10000000000) / tt.ns : 0;
+                LogLine("   A/B session total, %s halves (%u): console age avg %llu us (copied %llu, encoded %llu); read avg %llu us; %u frames, %llu.%llu fps; collected inside a read %u",
+                        h == 0 ? "ON " : "OFF", tt.halves, static_cast<unsigned long long>(tt.age / tn / 1000),
+                        static_cast<unsigned long long>(tt.cp / tn / 1000), static_cast<unsigned long long>(tt.enc / tn / 1000),
+                        static_cast<unsigned long long>(tt.read / tn / 1000), tt.n,
+                        static_cast<unsigned long long>(tfps / 10), static_cast<unsigned long long>(tfps % 10), tt.mids);
             }
             LogLine("   nvstream: %u frames sent in %llu ms -> %llu.%llu fps (game presented %llu.%llu fps, %u presents skipped), %u encodes with errors",
                     sent, static_cast<unsigned long long>(wall / 1000000),
