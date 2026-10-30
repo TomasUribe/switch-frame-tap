@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14   # Apple Silicon
+          - runner: macos-15   # Apple Silicon (macos-14 retires 2026-11-02; build-macos.sh targets macOS 12)
           - runner: macos-15-intel   # Intel
     runs-on: ${{ matrix.runner }}
     steps:

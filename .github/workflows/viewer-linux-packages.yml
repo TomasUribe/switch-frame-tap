@@ -48,9 +48,9 @@ jobs:
           if [ -n "$src" ]; then
             # this branch's packaging scripts, the tag's source
             mkdir -p "$RUNNER_TEMP/pkg"
-            cp tools/raw-recv/build-appimage.sh tools/raw-recv/build-linux-portable.sh "$RUNNER_TEMP/pkg/"
+            cp tools/raw-recv/build-appimage.sh tools/raw-recv/build-linux-portable.sh tools/raw-recv/switch-frame-tap.png "$RUNNER_TEMP/pkg/"
             git checkout --force "$src"
-            cp "$RUNNER_TEMP/pkg/"*.sh tools/raw-recv/
+            cp "$RUNNER_TEMP/pkg/"* tools/raw-recv/
           fi
           v="${{ inputs.version }}"
           [ -n "$v" ] || { [ -n "$src" ] && v="${src#v}"; } || true
