@@ -22,6 +22,9 @@ APP="$REPO/dist/build-appimage/SwitchFrameTap.AppDir"
 rm -rf "$APP"; mkdir -p "$APP/usr/bin" "$APP/usr/share/licenses" "$APP/usr/share/switch-frame-tap"
 cp "$BIN" "$APP/usr/bin/"
 cp "$HERE/switch-frame-tap.svg" "$APP/switch-frame-tap.svg"
+# appimagetool (continuous, 2026-10-29 on) wants a PNG icon and .DirIcon in the AppDir
+cp "$HERE/switch-frame-tap.png" "$APP/switch-frame-tap.png"
+ln -s switch-frame-tap.png "$APP/.DirIcon"
 cp "$HERE/70-switch-frame-tap.rules" "$APP/usr/share/switch-frame-tap/"
 # the portable package's licences (FFmpeg, SDL 2, libusb, the upscalers)
 cp -r "$REPO/dist/build-linux-portable/switch-frame-tap-$VER-linux/licenses/." "$APP/usr/share/licenses/" 2>/dev/null || cp "$REPO/LICENSE" "$APP/usr/share/licenses/switch-frame-tap-GPL-2.0.txt"
