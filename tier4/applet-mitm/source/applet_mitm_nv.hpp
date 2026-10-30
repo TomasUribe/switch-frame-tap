@@ -128,6 +128,7 @@ namespace ams::mitm::applet {
     extern u32  g_nv1080_n;
     extern bool g_anyfw_armed;    /* M98: capture on firmware this build was not tested on */
     extern bool g_cap720_armed;   /* M93: stream 1080p content scaled to 720p (the M86-M89 behaviour) */
+    extern std::atomic<bool> g_scale1080;   /* v0.7.20 (#65): docked pictures between 720p and 1080p scaled up to 1080p */
     extern bool g_nvp_armed;      /* M83: IDR + P frames probe */
     extern u32  g_nvp_n;
     extern u32  g_matrix_mode;

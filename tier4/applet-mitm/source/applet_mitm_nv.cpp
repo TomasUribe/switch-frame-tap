@@ -120,6 +120,7 @@ namespace ams::mitm::applet {
     constinit u32 g_home_fallback_ms = 5000;
     constinit bool g_nv1080_armed  = false;
     constinit bool g_cap720_armed  = false;
+    constinit std::atomic<bool> g_scale1080{false};
     constinit bool g_anyfw_armed   = false;
     constinit u32  g_nv1080_n      = 120;
     constinit bool g_nvp_armed     = false;
@@ -7841,8 +7842,12 @@ namespace ams::mitm::applet {
              * more than 1280x720 of it is shown - SMO docked (1600x900, dynamic
              * resolution below that) at 1080p looked no better than 720p at the
              * same bitrate, and cost fps and a frame of latency (Run v0713-smo2) */
-            bool full1080 = uvc ? (uvc_w == 1920 && fits1080)
-                                : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed && fits1080);
+            /* v0.7.20 (#65): scale_to_1080 - such a picture goes up to 1080p
+             * instead, for a big screen; off by default for the reasons above */
+            const bool up1080 = !uvc && g_scale1080.load(std::memory_order_relaxed) && !s.corner &&
+                                s.src.w > 1280 && s.src.h > 720 && s.src.w <= 1920 && s.src.h <= 1080 && !(s.src.w == 1920 && s.src.h == 1080);
+            const bool src1080 = !s.corner && ((s.src.w == 1920 && s.src.h == 1080) || up1080) && !g_cap720_armed;
+            bool full1080 = uvc ? (uvc_w == 1920 && fits1080) : (src1080 && fits1080);
             /* v0.7.18: the viewer records - the size the recording started at,
              * the VIC scaling whatever is drawn to it (as for a webcam): the HOME
              * menu's 720p goes up to 1080p, a 1080p picture down to 720p, and the
@@ -7859,7 +7864,7 @@ namespace ams::mitm::applet {
              * session at 720p */
             {
                 const bool want1080 = uvc ? uvc_w == 1920
-                                          : (lock != 0 ? lock1080 : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed));
+                                          : (lock != 0 ? lock1080 : src1080);
                 if (live && want1080 && !fits1080 && g_donor_mode && DonorCanGrow()) {
                     g_donor_regrow.store(true, std::memory_order_relaxed);
                     return StreamEnd::Regrow;
@@ -7884,7 +7889,8 @@ namespace ams::mitm::applet {
             const bool pipe = full1080;
             s.arena_size = pipe ? L.arena_size_pipe : (gop != 0 ? L.arena_size_p : L.arena_size);   /* same base: past both stream stages */
             LogLine("   nvstream: encoding %ux%u%s%s%s", L.w, L.h, uvc ? " for the webcam" : "",
-                    full1080 ? " (1920x1088 coded, SPS-cropped)" : (s.corner ? " (the handheld picture, 1:1)" : " (the VIC scales the picture)"),
+                    full1080 ? (up1080 ? " (1920x1088 coded, SPS-cropped; the VIC scales the picture up - scale_to_1080)" : " (1920x1088 coded, SPS-cropped)")
+                             : (s.corner ? " (the handheld picture, 1:1)" : " (the VIC scales the picture)"),
                     pipe ? "; pipelined: the next frame is read while this one encodes" : "");
             if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvstream")) { VicStage("ns:open_FAILED"); return g_engine_wedged ? StreamEnd::EngineStall : StreamEnd::Failed; }
             if (live) {

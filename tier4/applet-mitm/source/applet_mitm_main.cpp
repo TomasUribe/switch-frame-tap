@@ -692,6 +692,8 @@ namespace ams {
             g_screen_off.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "screenoff"), std::memory_order_relaxed);
             /* v0.7.18: homebrew told the console is docked - the next one started */
             mitm::applet::g_hb_docked.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "hbdocked"), std::memory_order_relaxed);
+            /* v0.7.20: from the next stream session */
+            mitm::applet::g_scale1080.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "scale1080"), std::memory_order_relaxed);
             mitm::applet::g_early_collect = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyoff") ? 0
                                           : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyab") ? 2 : 1;
         }
@@ -1330,6 +1332,8 @@ namespace ams {
         /* v0.7.18: before am's mitm: it decides which apps to wrap */
         mitm::applet::g_hb_docked.store(ArmFileContains("hbdocked"), std::memory_order_relaxed);
         if (mitm::applet::g_hb_docked.load()) { mitm::applet::LogLine("am: homebrew from the Homebrew Menu is told the console is docked (homebrew_docked)"); }
+        mitm::applet::g_scale1080.store(ArmFileContains("scale1080"), std::memory_order_relaxed);
+        if (mitm::applet::g_scale1080.load()) { mitm::applet::LogLine("nvstream: docked pictures between 720p and 1080p are scaled up to 1080p (scale_to_1080)"); }
         if (ArmFileContains("noam")) { mitm::applet::LogLine("am: not wrapped (noam)"); } else { mitm::applet::StartAmMitm(); }
         /* v0.7.17: a game's audout:u - its own PCM for the stream when nothing else carries its sound (PokeMMO) */
         if (ArmFileContains("noaudout")) { mitm::applet::LogLine("audout: not wrapped (noaudout)"); } else { mitm::applet::StartAudOutMitm(); }

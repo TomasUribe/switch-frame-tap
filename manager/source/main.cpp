@@ -212,6 +212,7 @@ namespace {
         int quality = 0;        /* index into QualityKeys */
         int keyframe = 1;       /* index into KeyframeFrames */
         bool cap720 = false;
+        bool scale1080 = false;   /* v0.7.20 (#65): docked pictures between 720p and 1080p go up to 1080p */
         int delay = 2;          /* index into DelaySeconds */
         bool any_fw = false;
         bool shot = false;
@@ -266,6 +267,7 @@ namespace {
         if (IniGet(ini, "quality", &v)) { for (int i = 0; i < 3; ++i) { if (v == QualityKeys[i]) { s.quality = i; } } }
         if (IniGet(ini, "keyframe_interval", &v)) { for (int i = 0; i < 4; ++i) { if (std::atoi(v.c_str()) == KeyframeFrames[i]) { s.keyframe = i; } } }
         if (IniGet(ini, "max_resolution", &v)) { s.cap720 = v == "720"; }
+        if (IniGet(ini, "scale_to_1080", &v)) { s.scale1080 = v == "1"; }
         if (IniGet(ini, "start_delay", &v)) { for (int i = 0; i < 5; ++i) { if (std::atoi(v.c_str()) == DelaySeconds[i]) { s.delay = i; } } }
         if (IniGet(ini, "allow_untested_firmware", &v)) { s.any_fw = v == "1"; }
         if (IniGet(ini, "screenshot", &v)) { s.shot = v == "1"; }
@@ -302,6 +304,9 @@ namespace {
             "keyframe_interval = %d\n"
             "# max_resolution: 1080 (native) | 720\n"
             "max_resolution = %s\n"
+            "# scale_to_1080: 1 = a docked picture between 720p and 1080p (Super Mario Odyssey's 1600x900) is scaled up\n"
+            "#                to 1080p instead of down to 720p - more bandwidth and a frame more latency. Next stream.\n"
+            "scale_to_1080 = %d\n"
             "# start_delay: seconds after boot before streaming can start\n"
             "start_delay = %d\n"
             "# allow_untested_firmware: 1 streams on firmware this version was not tested on\n"
@@ -336,7 +341,7 @@ namespace {
             "homebrew_docked = %d\n"
             "# update_betas: 1 = Check for updates in the app also offers betas (pre-releases)\n"
             "update_betas = %d\n",
-            QualityKeys[s.quality], KeyframeFrames[s.keyframe], s.cap720 ? "720" : "1080",
+            QualityKeys[s.quality], KeyframeFrames[s.keyframe], s.cap720 ? "720" : "1080", s.scale1080 ? 1 : 0,
             DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo, custom, s.shot_album ? "album" : "app", s.detach_home ? 1 : 0, s.screen_off ? 1 : 0, s.early.c_str(),
             s.audio ? 1 : 0, ConnKeys[s.conn], s.home_menu ? 1 : 0, s.overlays ? 1 : 0, s.hb_docked ? 1 : 0, s.update_betas ? 1 : 0);
         std::fclose(f);
@@ -742,6 +747,11 @@ namespace {
                     [this](int) { set.cap720 = !set.cap720; Saved(); },
                     "1080p streams what the game renders in docked mode (with ReverseNX-RT in handheld). 720p scales it down: "
                     "less bandwidth, and it runs at stock clocks."));
+                p.rows.push_back(Toggle("Scale other docked sizes up to 1080p", [this] { return set.scale1080; },
+                    [this](int) { set.scale1080 = !set.scale1080; Saved(); },
+                    "Some games draw docked at a size between 720p and 1080p - Super Mario Odyssey at 1600x900. They stream at "
+                    "720p by default; on, they are scaled up to 1080p, which can look better on a big screen but needs more "
+                    "bandwidth and adds a frame of latency. From the next stream."));
                 pages.push_back(std::move(p));
             }
 
