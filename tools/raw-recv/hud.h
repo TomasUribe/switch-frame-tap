@@ -15,7 +15,7 @@ static const char *const hud_mode_name[HUD_MODES] = { "off", "FPS", "graphs", "f
 static int g_hud = HUD_OFF;
 static Uint64 g_hud_toast = 0;          /* when the "Stats overlay: ..." note was set */
 static char g_hud_toast_text[112] = "";  /* v0.7.11: another note instead (vsync, decoder) */
-static int g_vsync = 0;                  /* off by default: lower latency (V toggles; may tear) */
+static int g_vsync = 1;                  /* on by default: smooth, no tear (V toggles; off = lower latency) */
 static const char *g_dec_mode = "";      /* v0.7.11: "1 thread" / "2 threads (slow PC)" */
 
 /* per-frame history: the last HUD_N frames shown, oldest first when read */
