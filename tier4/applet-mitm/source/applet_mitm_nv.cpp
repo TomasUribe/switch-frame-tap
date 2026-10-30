@@ -812,7 +812,7 @@ namespace ams::mitm::applet {
          * They differ only for the unscaled 1:1 control. */
         /* rect_x/rect_y (v0.7.17): the sampled part's top-left - a centred crop
          * scaled by the VIC (Kingdom Hearts' zooms, for viewers without SFTC) */
-        struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt, cache_w, rect_w, rect_h; u32 rect_x = 0, rect_y = 0; };
+        struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt, cache_w, rect_w, rect_h; u32 rect_x = 0, rect_y = 0; bool bgra = false; };
 
         /* our own pitch-linear 64x64 buffer, stride 256 px like the destination */
         constexpr SrcDesc SelfSrc { DstW, DstH, DstStridePx, vic::BLK_KIND_PITCH, 0, vic::PIXFMT_A8B8G8R8, vic::CACHE_WIDTH_64Bx4, DstW, DstH };
@@ -5821,6 +5821,11 @@ namespace ams::mitm::applet {
             { vic_csc::Bt709[0][0], vic_csc::Bt709[0][1], vic_csc::Bt709[0][2], vic_csc::Bt709[0][3] },
             { vic_csc::Bt709[1][0], vic_csc::Bt709[1][1], vic_csc::Bt709[1][2], vic_csc::Bt709[1][3] },
             { vic_csc::Bt709[2][0], vic_csc::Bt709[2][1], vic_csc::Bt709[2][2], vic_csc::Bt709[2][3] } } };
+        /* the same for a B, G, R, A surface: its R and B land in each other's column */
+        constexpr CscProbe NvfBt709Bgra = { "bt709-bgra", 1, vic_csc::Shift, {
+            { vic_csc::Bt709[0][2], vic_csc::Bt709[0][1], vic_csc::Bt709[0][0], vic_csc::Bt709[0][3] },
+            { vic_csc::Bt709[1][2], vic_csc::Bt709[1][1], vic_csc::Bt709[1][0], vic_csc::Bt709[1][3] },
+            { vic_csc::Bt709[2][2], vic_csc::Bt709[2][1], vic_csc::Bt709[2][0], vic_csc::Bt709[2][3] } } };
 
         /* Handheld, MK8 renders 1280x720 into the top-left of the same
          * 1920x1080 surface (M36/M37). That corner is block-rows 0-5 (128 rows
@@ -6621,14 +6626,18 @@ namespace ams::mitm::applet {
                 /* MK8's A8B8G8R8 surface reads correctly as the VIC's
                  * A8R8G8B8 (M36/M83: R,G,B,A in memory); the same is assumed
                  * for any other format and said in the log */
-                /* v0.1.1b: NvColorFormat A8R8G8B8 (0x100d12120) is B, G, R, A in
-                 * memory - the VIC's A8B8G8R8, the other way round */
+                /* NvColorFormat A8R8G8B8 (0x100d12120) is B, G, R, A in memory.
+                 * v0.7.20 (#50): read as the VIC's A8R8G8B8 like MK8's, with red
+                 * and blue swapped in the colour matrix - the VIC's A8B8G8R8 takes
+                 * alpha from the first byte (ovl2), and RE4, Yo-kai Watch 4,
+                 * Wreckfest and Persona 4 streamed solid red */
                 const bool bgra = g.color_format == 0x100d12120ull;
                 /* v0.7.17: libnx's RGB565 framebuffer (DBI, #42): read as 32-bit, the picture came out garbled */
                 const bool rgb565 = g.color_format == 0x10a881210ull;
                 const bool known_fmt = g.color_format == 0x100532120ull || bgra;
                 src = SrcDesc{ g.width, g.height, g.stride_px, vic::BLK_KIND_GENERIC_16Bx2, g.block_h_log2,
-                               rgb565 ? vic::PIXFMT_B5G6R5 : bgra ? vic::PIXFMT_A8B8G8R8 : vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
+                               rgb565 ? vic::PIXFMT_B5G6R5 : vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
+                src.bgra = bgra;
                 mk8_layout = g.width == 1920 && g.height == 1080 && g.stride_px == 1920 && g.block_h_log2 == 4;
                 size_check_ok = g.width == 1920 && g.height == 1080 && g.stride_px >= 1920 && g.block_h_log2 <= 5;
                 LogLine("   %s: game swapchain %ux%u stride %u px, block height 2^%u, %u slot(s) of %u B, format %#llx%s",
@@ -7202,7 +7211,7 @@ namespace ams::mitm::applet {
                 ON_SCOPE_EXIT { g_strip_flip = 0; g_ovl_slots = nullptr; g_ovl_nslots = 0; };
                 JobCtx vc{ vfd, cmd_handle, vsyncpt, cfg_addr, arena_vic + (cur != 0 ? cur : Lay().off_cur), slot_vic, 0, 0, 0, 0, SelfSrc };
                 vc.out_is_dst_buf = false;
-                g_csc_override = std::addressof(NvfBt709);
+                g_csc_override = src.bgra ? std::addressof(NvfBt709Bgra) : std::addressof(NvfBt709);
                 const bool ok = RunOneJob(stage, VicJob::BlitStrip, true, vc);
                 g_csc_override = nullptr;
                 return ok;
@@ -7548,7 +7557,7 @@ namespace ams::mitm::applet {
                 if (const u32 dyn = NvfSession::DynamicRect(r, s.cap_crop); dyn != 0) { w = dyn >> 16; h = dyn & 0xFFFF; }
             }
             const size_t n = s.CornerFast() ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
-            return WriteShot(g_shot_out, g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.pixfmt == vic::PIXFMT_A8B8G8R8, s.present_flip);
+            return WriteShot(g_shot_out, g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.bgra, s.present_flip);
         }
 
         bool ShotStandalone() {
