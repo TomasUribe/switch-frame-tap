@@ -14,7 +14,7 @@ while IFS= read -r f; do
     fi
 done < <(grep -rl --include='*.rules' 'uaccess' tools switch-stream flatpak 2>/dev/null)
 # instructions/scripts must name the 70- rule (the 99- name only as an old copy to move)
-if grep -rn --exclude-dir=.git --exclude-dir=third_party --exclude-dir=test -E '(cp [^ ]*|tee [^ ]*)99-switch-frame-tap\.rules' README.md flatpak tools >/dev/null; then
+if grep -rnI --exclude-dir=.git --exclude-dir=third_party --exclude-dir=test -E '(cp [^ ]*|tee [^ ]*)99-switch-frame-tap\.rules' README.md flatpak tools >/dev/null; then
     echo "FAIL: something still installs 99-switch-frame-tap.rules"; fail=1
 fi
 [ -f tools/raw-recv/70-switch-frame-tap.rules ] || { echo "FAIL: tools/raw-recv/70-switch-frame-tap.rules missing"; fail=1; }
