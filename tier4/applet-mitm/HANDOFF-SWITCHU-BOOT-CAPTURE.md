@@ -14,6 +14,7 @@ SwitchU lite path + NeedHeadroom ACK: see SwitchU `docs/FT_VIEWER_LIGHT_PATH.md`
 | **Wait up to ~15 s** / re-ask until Applet-pool room | In tree (DonorObtain) |
 | SwitchU hard reclaim + lean boot (~190 MB free ACK) | On device (menu) |
 | **Boot 100D attach** when vi shared buffer missing | In tree (`SeedRunningAlbumSurface`) |
+| **Boot seed tear fix** (no binder → content-sync slots) | In tree (`g_album_seed_no_binder` + `PickSeededPresent`) |
 | Commit / PR onto `feat/sftap-switchu-headroom` | Soak / push |
 
 ## DonorObtain policy (100D up)
@@ -36,6 +37,16 @@ live[1]: the Album / hbmenu is in front (pid …)
 ```
 Not: `vi's shared buffer not found` → `live:no_game` while SwitchU is on screen.
 
+Boot glitch (seed without binder history): log showed `game presented 0.0 fps`
+and all frames on the “old latest-present rule” (always slot 0, no fences → tears).
+Opening Sphaira then returning recreates layers through `vi:m`, so real
+`queueBuffer` + fences land and the picture cleans up. After **seedfix**, expect:
+```
+… boot capture without binder history (content-sync slots)
+nvstream: presents taken (M96): … N by seed content-sync
+```
+(not hundreds “by the old latest-present rule” with 0 fence waits).
+
 Headroom (still relevant if lean boot fails):
 ```
 donor: SwitchU still holds … - waiting, not launching
@@ -43,4 +54,10 @@ donor: SwitchU still holds … - waiting, not launching
 
 ## Package
 
-`…/build/switch-frame-tap-0.7.19-plus-busyfix/` — update 0C20 only; keep 0C21 donor.
+`…/build/switch-frame-tap-0.7.19-plus-seedfix3/` — quiet-window seed + never encode
+torn frames (SeedTorn). Keep 0C21.
+
+**SwitchU remount (2026-10-31):** on first FT viewer connect,
+`GpuDevice::remountDisplayForCaptureMitm()` (`__nx_win_exit`/`init` + swapchain).
+Built into `sd_out/switch/SwitchU/bin/menu/` — flash menu ExeFS when FTP up, reboot.
+Expect FT log: `[ft-light] remounting display…` then `captured applet slot` + fence waits.

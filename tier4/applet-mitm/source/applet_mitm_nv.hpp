@@ -53,6 +53,10 @@ namespace ams::mitm::applet {
      * the process whose present was recorded last */
     extern std::atomic<u64> g_applet_target_pid;
     extern std::atomic<u64> g_present_pid;
+    /* Boot seed of 100D before vi:m saw setPreallocatedBuffer/queueBuffer -
+     * Capture must content-sync slots (no present fences yet). Cleared when a
+     * real applet binder parcel arms the surface. */
+    extern std::atomic<bool> g_album_seed_no_binder;
     /* the system tick of the application's last present, recorded or not
      * (a UI session only notes them) - "the game is on screen" */
     extern std::atomic<u64> g_app_present_tick;
