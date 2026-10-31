@@ -12,8 +12,9 @@ SwitchU lite path + NeedHeadroom ACK: see SwitchU `docs/FT_VIEWER_LIGHT_PATH.md`
 | Busy-wait ask + clear bit if pool tight (anti-thrash) | In tree (nv.cpp) |
 | **No donor launch on timeout** while SwitchU holds pool | In tree (DonorObtain) |
 | **Wait up to ~15 s** / re-ask until Applet-pool room | In tree (DonorObtain) |
-| SwitchU hard reclaim + 30 s hold | On device (menu) |
-| Commit / PR onto `feat/sftap-switchu-headroom` | Open if not pushed yet |
+| SwitchU hard reclaim + lean boot (~190 MB free ACK) | On device (menu) |
+| **Boot 100D attach** when vi shared buffer missing | In tree (`SeedRunningAlbumSurface`) |
+| Commit / PR onto `feat/sftap-switchu-headroom` | Soak / push |
 
 ## DonorObtain policy (100D up)
 
@@ -28,11 +29,17 @@ pool stays tight (icon-flash fix).
 
 ## Verify
 
+Boot with SwitchU already HOME (viewer connected):
 ```
-donor: SwitchU still holds the Applet pool (... MB used ...) - waiting, not launching
-donor: no Applet-pool headroom after 15000 ms beside SwitchU - deferring donor
+live-ui: seeded Album/SwitchU from already-running 100D …
+live[1]: the Album / hbmenu is in front (pid …)
 ```
-Success: `donor: … MB from the Applet pool mapped` → `live[1]: the Album / hbmenu`.
+Not: `vi's shared buffer not found` → `live:no_game` while SwitchU is on screen.
+
+Headroom (still relevant if lean boot fails):
+```
+donor: SwitchU still holds … - waiting, not launching
+```
 
 ## Package
 
