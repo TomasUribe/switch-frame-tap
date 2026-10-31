@@ -3364,6 +3364,94 @@ namespace ams::mitm::applet {
             return false;
         }
 
+        /* Fill GameSurface for an already-running Album / SwitchU (100D) when
+         * binder setPreallocatedBuffer was missed (process started before vi:m). */
+        bool DiscoverAlbumSurface(::ams::svc::Handle dbg, GameSurface *out) {
+            /* Soak sizes: SwitchU 1280x720 × 2 slots ≈ 3932160 B each (7864320 total).
+             * Also try stock-ish 720p/1080p contiguous layouts. */
+            static constexpr u64 Wants[] = {
+                7864320ull,                 /* 2 × 3932160 (SwitchU) */
+                2ull * 8847360ull,          /* 2 × 1080p slot */
+                3ull * 8847360ull,          /* 3 × 1080p (FbSwapSize) */
+                3ull * 3932160ull,
+            };
+            u64 base = 0, want = 0;
+            for (const u64 w : Wants) {
+                if (FindSwapchainBySize(dbg, w, std::addressof(base))) { want = w; break; }
+            }
+            if (want == 0) { return false; }
+            GameSurface g = {};
+            if (want == 7864320ull || want == 3ull * 3932160ull) {
+                g.width = 1280; g.height = 720; g.stride_px = 1280;
+                g.buf_size = 3932160u;
+                g.num_slots = (want == 7864320ull) ? 2u : 3u;
+            } else {
+                g.width = 1920; g.height = 1080; g.stride_px = 1920;
+                g.buf_size = 8847360u;
+                g.num_slots = static_cast<u32>(want / 8847360ull);
+            }
+            g.block_h_log2 = 4;
+            g.color_format = 0x100532120ull;   /* A8B8G8R8 - matches SwitchU soak */
+            g.layout = 3;
+            g.pix_format = vic::PIXFMT_A8B8G8R8;
+            for (u32 k = 0; k < g.num_slots && k < 8; ++k) {
+                g.slot_offset[k] = k * g.buf_size;
+                g.slot_nvmap[k] = 1;
+            }
+            g.generation = g_applet_surface.generation + 1;
+            g.armed = true;
+            *out = g;
+            LogLine("   live-ui: discovered Album/SwitchU swapchain %llu B (%ux%u, %u slot(s)) at 0x%010llx",
+                    static_cast<unsigned long long>(want), g.width, g.height, g.num_slots,
+                    static_cast<unsigned long long>(base));
+            return true;
+        }
+
+        /* 100D already up before our vi:m mitm - seed target pid + surface so
+         * the live loop can attach like post-HOME Album/hbmenu (no stock vi
+         * shared buffer; UiSourceFind fails). */
+        bool SeedRunningAlbumSurface() {
+            static bool s_tried = false;
+            static bool s_ok = false;
+            if (s_ok && g_applet_surface.armed && g_applet_target_pid.load(std::memory_order_relaxed) != 0) { return true; }
+            if (s_tried && !s_ok) { return false; }   /* one failed probe per boot until a binder fills it */
+            os::ProcessId ap{};
+            if (R_FAILED(::ams::pm::dmnt::GetProcessId(std::addressof(ap), ncm::ProgramId{UINT64_C(0x010000000000100D)})) || ap.value == 0) {
+                return false;
+            }
+            /* Binder already taught us the geometry - just remember the pid */
+            if (g_applet_surface.armed) {
+                g_applet_target_pid.store(ap.value, std::memory_order_relaxed);
+                s_ok = true;
+                return true;
+            }
+            s_tried = true;
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            if (!DmAttach(ap.value, std::addressof(dbg))) {
+                LogLine("   live-ui: 100D pid %llu up but attach failed - cannot seed Album surface",
+                        static_cast<unsigned long long>(ap.value));
+                return false;
+            }
+            u32 nev = 0;
+            static_cast<void>(DbgResume(dbg, std::addressof(nev)));
+            GameSurface geo = {};
+            const bool found = DiscoverAlbumSurface(dbg, std::addressof(geo));
+            DbgDetach(dbg);
+            if (!found) {
+                LogLine("   live-ui: 100D pid %llu up but no Album/SwitchU swapchain found yet",
+                        static_cast<unsigned long long>(ap.value));
+                s_tried = false;   /* allow retry - buffers may appear shortly after boot */
+                return false;
+            }
+            g_applet_surface = geo;
+            g_applet_target_pid.store(ap.value, std::memory_order_relaxed);
+            g_present_pid.store(ap.value, std::memory_order_relaxed);
+            s_ok = true;
+            LogLine("   live-ui: seeded Album/SwitchU from already-running 100D (pid %llu) - boot capture without binder history",
+                    static_cast<unsigned long long>(ap.value));
+            return true;
+        }
+
         /* v0.7.14: the HOME menu or an applet, read out of vi (applet_mitm_uisource.hpp).
          * false: nothing was streamed (no shared buffer, no memory, no attach) */
         bool RunUiSession(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 &sessions) {
@@ -3379,6 +3467,16 @@ namespace ams::mitm::applet {
             u64 vpid = 0, base = 0;
             GameSurface ug = {};
             if (!UiSourceFind(std::addressof(vpid), std::addressof(base), std::addressof(ug))) {
+                /* SwitchU replaces HOME: no stock vi shared buffer. Seed 100D so
+                 * the live loop attaches via Album/hbmenu instead of live:no_game. */
+                if (SeedRunningAlbumSurface()) {
+                    static bool said_seed = false;
+                    if (!said_seed) {
+                        LogLine("   live-ui: vi shared buffer absent (SwitchU/Album) - using seeded 100D surface");
+                        said_seed = true;
+                    }
+                    return false;   /* not a vi UI session; applet_target path runs next */
+                }
                 static bool said = false;
                 if (!said) { LogLine("   live-ui: vi's shared buffer not found - the HOME menu is not streamed"); said = true; }
                 return false;
@@ -3592,6 +3690,10 @@ namespace ams::mitm::applet {
                 ::ams::os::ProcessId pid{};
                 const u32 q_before = g_queue_count.load(std::memory_order_relaxed);
                 const bool have_app = g_pmdmnt_rc == 0 && R_SUCCEEDED(::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid)));
+                /* Boot SwitchU: 100D was presenting before vi:m existed - seed pid/surface */
+                if (g_ui_stream_armed && (g_applet_target_pid.load(std::memory_order_relaxed) == 0 || !g_applet_surface.armed)) {
+                    static_cast<void>(SeedRunningAlbumSurface());
+                }
                 /* v0.7.14: the Album / hbmenu draws with buffers of its own, like a game */
                 const u64 applet_pid = g_ui_stream_armed ? g_applet_target_pid.load(std::memory_order_relaxed) : 0;
                 if (skip_pid != 0 && have_app && pid.value == skip_pid && g_game_surface.generation != skip_gen) {
@@ -3615,6 +3717,11 @@ namespace ams::mitm::applet {
                     } else if (!have_app || presenter != pid.value) {
                         presenting = false;
                     }
+                } else if (!presenting && applet_pid != 0 && g_applet_surface.armed && !have_app) {
+                    /* Seeded 100D at boot: no binder queueBuffer through our mitm yet */
+                    presenting = true;
+                    applet_target = true;
+                    pid.value = applet_pid;
                 }
                 const bool have_target = have_app || applet_target;
                 /* v0.1.1b: an app on the never-attach list (anti-debug builds
