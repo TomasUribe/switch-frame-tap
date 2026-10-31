@@ -7912,7 +7912,17 @@ namespace ams::mitm::applet {
              * VIC 2.2 + NVENC 5.6 ms, run one after another = 37 fps). It costs
              * about a frame of latency, so 720p (which fits 16.7 ms as it is)
              * keeps the sequential path. */
-            const bool pipe = full1080;
+            /* v0.7.20: a picture larger than 720p streamed at 720p (the VIC
+             * scales it down - Metroid Dread's 1600x900, a docked game with
+             * max_resolution = 720) reads 6-9 MB a frame, 10-40 ms at stock
+             * clocks, and its encode and send (2-4 ms) came after that read
+             * every trip (logs/github-issues/50-beta4-dread). Pipelined like
+             * 1080p, they overlap the next read; early and mid-read collection
+             * send each frame as soon as it is encoded, so the frame of latency
+             * M94 measured before early collection is not paid. */
+            const bool big720 = !uvc && !full1080 && !s.corner && (s.src.w > 1280 || s.src.h > 720) &&
+                                g_ind_size >= NvfArenaBase + Layout720().arena_size_pipe;
+            const bool pipe = full1080 || big720;
             s.arena_size = pipe ? L.arena_size_pipe : (gop != 0 ? L.arena_size_p : L.arena_size);   /* same base: past both stream stages */
             LogLine("   nvstream: encoding %ux%u%s%s%s", L.w, L.h, uvc ? " for the webcam" : "",
                     full1080 ? (up1080 ? " (1920x1088 coded, SPS-cropped; the VIC scales the picture up - scale_to_1080)" : " (1920x1088 coded, SPS-cropped)")

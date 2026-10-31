@@ -117,8 +117,8 @@ namespace ams::mitm::applet {
      * manager's ReloadConfig rewrites them from another thread: atomics) */
     extern std::atomic<u32> g_early_collect;
     /* v0.7.21: also collect the previous frame between the pieces of a long read: 0 off, 1 on, 2 A/B in 600-frame
-     * halves. The default of the config key mid_collect (this test build: the A/B). */
-    constexpr u32 MidCollectDefault = 2;
+     * halves. The default of the config key mid_collect: on (beta4 A/B, RE4 1080p at stock clocks: 28.6 vs 25.9 fps, age 60 vs 96 ms). */
+    constexpr u32 MidCollectDefault = 1;
     extern std::atomic<u32> g_mid_collect;
     /* live over USB (not the webcam): an IDR every g_usb_gop frames, and on
      * request (SFTK), instead of g_nvstream_gop when that is shorter; 0 off.
