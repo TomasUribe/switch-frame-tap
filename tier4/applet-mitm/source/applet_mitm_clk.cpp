@@ -56,6 +56,11 @@ namespace ams::mitm::applet {
         constinit bool    g_mm_open = false;
         constinit bool    g_holding = false;
         constinit Service g_mm_srv  = {};
+        constinit bool    g_emc_ok  = false;   /* the memory_boost request */
+        constinit u32     g_emc_id  = 0;
+        constexpr u32 MmModuleEmc = 2;          /* libnx MmuModuleId_Emc */
+        constexpr u32 EmcBoostHz  = 1600000000u;
+        constexpr u32 PcvModuleEmc = 0x40000039u;
         constinit u32     g_req_id[NumMm]  = {};
         constinit bool    g_req_ok[NumMm]  = {};
 
@@ -87,6 +92,7 @@ namespace ams::mitm::applet {
 
         void ReleaseLocked() {
             if (!g_mm_open) { return; }
+            if (g_emc_ok) { static_cast<void>(MmFinalize(g_emc_id)); g_emc_ok = false; }
             for (size_t i = 0; i < NumMm; ++i) {
                 if (g_req_ok[i]) {
                     const ::Result rc = MmFinalize(g_req_id[i]);
@@ -307,6 +313,36 @@ namespace ams::mitm::applet {
             os::SleepThread(TimeSpan::FromMilliSeconds(50 * (attempt + 1)));
         }
         return 0;
+    }
+
+    constinit std::atomic<bool> g_memory_boost{false};
+
+    void MemoryBoost(bool on) {
+        u32 hz = 0;
+        ::Result rc = 0;
+        {
+            std::scoped_lock lk(g_clk_lock);
+            if (on == g_emc_ok) { return; }
+            if (!on) {
+                rc = MmFinalize(g_emc_id);
+                g_emc_ok = false;
+                LogLine("   memory boost: released rc=0x%x", rc);
+                return;
+            }
+            if (!g_mm_open) {
+                SmUse sm_mm;
+                if (R_FAILED(smGetService(std::addressof(g_mm_srv), "mm:u"))) { LogLine("   memory boost: mm:u unavailable"); return; }
+                g_mm_open = true;
+            }
+            u32 id = 0;
+            rc = MmInitialize(MmModuleEmc, std::addressof(id));
+            if (R_FAILED(rc)) { LogLine("   memory boost: request rc=0x%x", rc); return; }
+            rc = MmSetAndWait(id, EmcBoostHz, -1);
+            g_emc_id = id;
+            g_emc_ok = true;
+        }
+        static_cast<void>(ClockRateOf(PcvModuleEmc, std::addressof(hz)));
+        LogLine("   memory boost: at least %u MHz asked (rc=0x%x) - memory now %u MHz", EmcBoostHz / 1000000, rc, hz / 1000000);
     }
 
     void ClockWatchStop() { g_watch_stop = true; }

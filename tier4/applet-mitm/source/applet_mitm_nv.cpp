@@ -7935,8 +7935,9 @@ namespace ams::mitm::applet {
                 g_live_state.store(LiveState_Streaming, std::memory_order_relaxed);
                 g_streaming_now.store(true, std::memory_order_relaxed);
                 SetViewerReason(ViewerReason_None);
+                if (g_memory_boost.load(std::memory_order_relaxed)) { MemoryBoost(true); }   /* v0.7.20 */
             }
-            ON_SCOPE_EXIT { g_streaming_now.store(false, std::memory_order_relaxed); UsbByeStop(); };
+            ON_SCOPE_EXIT { g_streaming_now.store(false, std::memory_order_relaxed); UsbByeStop(); MemoryBoost(false); };
             /* v0.6: the P setup, and the bitrate experiment's variants of it.
              * grc's P setup (ours since M85) searches motion only from the
              * zero vector and this frame's neighbours - no temporal hint (last

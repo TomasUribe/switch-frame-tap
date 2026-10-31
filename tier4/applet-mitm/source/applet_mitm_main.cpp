@@ -703,6 +703,7 @@ namespace ams {
                                         : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "midab") ? 2 : mitm::applet::MidCollectDefault;
             /* v0.7.20: from the next stream session */
             mitm::applet::g_scale1080.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "scale1080"), std::memory_order_relaxed);
+            mitm::applet::g_memory_boost.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "memboost"), std::memory_order_relaxed);
             mitm::applet::g_usb_gop.store(mitm::applet::armfile::Number(g_arm_buf, g_arm_len, "usbgop", mitm::applet::keyframe::UsbGopDefault),
                                           std::memory_order_relaxed);
         }
@@ -1347,6 +1348,7 @@ namespace ams {
         mitm::applet::g_vpad_enabled.store(ArmFileContains("vinput"), std::memory_order_relaxed);
         if (mitm::applet::g_vpad_enabled.load()) { mitm::applet::LogLine("vpad: a controller on the viewer's computer may play the console (viewer_input)"); }
         mitm::applet::g_scale1080.store(ArmFileContains("scale1080"), std::memory_order_relaxed);
+        mitm::applet::g_memory_boost.store(ArmFileContains("memboost"), std::memory_order_relaxed);
         if (mitm::applet::g_scale1080.load()) { mitm::applet::LogLine("nvstream: docked pictures between 720p and 1080p are scaled up to 1080p (scale_to_1080)"); }
         if (ArmFileContains("noam")) { mitm::applet::LogLine("am: not wrapped (noam)"); } else { mitm::applet::StartAmMitm(); }
         /* v0.7.17: a game's audout:u - its own PCM for the stream when nothing else carries its sound (PokeMMO) */

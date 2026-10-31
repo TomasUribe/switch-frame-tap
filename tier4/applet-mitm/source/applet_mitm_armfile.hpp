@@ -110,6 +110,8 @@ namespace ams::mitm::applet::armfile {
      *                                                  Homebrew Menu is told the console is docked - 1080p)
      *   viewer_input      = 1                        -> vinput   (v0.7.20: a controller on the viewer's
      *                                                  computer plays the console - a virtual Pro Controller)
+     *   memory_boost      = 1                        -> memboost (v0.7.20: memory at 1600 MHz or more
+     *                                                  while a stream runs - the frame copy is faster)
      *   scale_to_1080     = 1                        -> scale1080 (v0.7.20, #65: a docked picture larger
      *                                                  than 720p but not 1920x1080 - SMO's 1600x900 - is
      *                                                  scaled up to 1080p rather than down to 720p)
@@ -159,7 +161,7 @@ namespace ams::mitm::applet::armfile {
     inline size_t BuildReleaseArm(const char *ini, size_t n, char *out, size_t cap) {
         unsigned qp = 20, gop = 60, wait = 20, u = 0;
         unsigned shotkey = 0;
-        bool cap720 = false, anyfw = false, shot = false, audio = true, uvc = false, uvcraw = false, nvab = false, net = false, nohb = false, nodethome = false, shotalbum = false, screenoff = false, earlyoff = false, earlyab = false, midoff = false, midon = false, midab = false, homemenu = false, overlays = false, hbdocked = false, vinput = false, scale1080 = false;
+        bool cap720 = false, anyfw = false, shot = false, audio = true, uvc = false, uvcraw = false, nvab = false, net = false, nohb = false, nodethome = false, shotalbum = false, screenoff = false, earlyoff = false, earlyab = false, midoff = false, midon = false, midab = false, homemenu = false, overlays = false, hbdocked = false, vinput = false, scale1080 = false, memboost = false;
         char v[32];
         if (IniValue(ini, n, "quality", v, sizeof(v))) {
             if (std::strcmp(v, "medium") == 0) { qp = 24; }
@@ -195,6 +197,7 @@ namespace ams::mitm::applet::armfile {
         if (IniValue(ini, n, "homebrew_docked", v, sizeof(v)) && std::strcmp(v, "1") == 0) { hbdocked = true; }
         if (IniValue(ini, n, "viewer_input", v, sizeof(v)) && std::strcmp(v, "1") == 0) { vinput = true; }
         if (IniValue(ini, n, "scale_to_1080", v, sizeof(v)) && std::strcmp(v, "1") == 0) { scale1080 = true; }
+        if (IniValue(ini, n, "memory_boost", v, sizeof(v)) && std::strcmp(v, "1") == 0) { memboost = true; }
         if (IniValue(ini, n, "early_collect", v, sizeof(v))) {
             if (std::strcmp(v, "0") == 0) { earlyoff = true; }
             else if (std::strcmp(v, "ab") == 0) { earlyab = true; }
@@ -219,12 +222,12 @@ namespace ams::mitm::applet::armfile {
         char usbgopbuf[24] = "";
         if (usbgop >= 0) { std::snprintf(usbgopbuf, sizeof(usbgopbuf), " usbgop=%d", usbgop); }
         /* one transport: "usb" (the viewer or, with uvc, the webcam) or "net" */
-        const int w = std::snprintf(out, cap, "vic exec dbg %s live nvqp=%u nvgop=%u wait=%u%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        const int w = std::snprintf(out, cap, "vic exec dbg %s live nvqp=%u nvgop=%u wait=%u%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
                                     net ? "net" : "usb", qp, gop, wait, cap720 ? " cap720" : "", anyfw ? " anyfw" : "", shotbuf, audio ? " audio" : "",
                                     uvc ? " uvc" : "", uvcraw ? " uvcraw" : "", nvab ? " nvab" : "", nohb ? " nohb" : "",
                                     nodethome ? " nodethome" : "", screenoff ? " screenoff" : "",
                                     earlyoff ? " earlyoff" : "", earlyab ? " earlyab" : "", midoff ? " midoff" : midon ? " midon" : midab ? " midab" : "", homemenu ? " homemenu" : "", overlays ? " overlays" : "",
-                                    hbdocked ? " hbdocked" : "", vinput ? " vinput" : "", scale1080 ? " scale1080" : "", usbgopbuf);
+                                    hbdocked ? " hbdocked" : "", vinput ? " vinput" : "", scale1080 ? " scale1080" : "", memboost ? " memboost" : "", usbgopbuf);
         return (w < 0 || static_cast<size_t>(w) >= cap) ? 0 : static_cast<size_t>(w);
     }
 

@@ -211,6 +211,9 @@ int main() {
     /* v0.7.20: docked pictures between 720p and 1080p scaled up (#65) */
     ExpectRelease("scale_to_1080 = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio scale1080");
     ExpectRelease("scale_to_1080 = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    /* v0.7.20: memory boost while streaming */
+    ExpectRelease("memory_boost = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio memboost");
+    ExpectRelease("memory_boost = 1\nusb_keyframe_interval = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio memboost usbgop=0");
     ExpectRelease("max_resolution = 720\nscale_to_1080 = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 cap720 audio scale1080");
     /* usb_keyframe_interval: a token only when set, 0..250 */
     ExpectRelease("usb_keyframe_interval = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio usbgop=0");

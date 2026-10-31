@@ -31,6 +31,7 @@
  * engine.
  */
 #pragma once
+#include <atomic>
 #include <stratosphere.hpp>
 
 namespace ams::mitm::applet {
@@ -42,6 +43,14 @@ namespace ams::mitm::applet {
     constexpr u32 PcvModule_NVENC = 0x40000030;
     constexpr u32 PcvModule_NVJPG = 0x40000031;
     constexpr u32 PcvModule_NVDEC = 0x40000032;
+
+    /* v0.7.20: config memory_boost - while a stream runs, an mm:u request for
+     * the memory (EMC) of at least 1600 MHz, Nintendo's docked rate, as the
+     * system's own video decoder makes; pcv keeps the highest request, so an
+     * overclock that runs it faster is untouched. The frame copy is limited by
+     * memory, not the CPU (v0712-test3-boost). Released when the stream ends. */
+    extern std::atomic<bool> g_memory_boost;
+    void MemoryBoost(bool on);
 
     /* The clock clkrst reports for one module. False if it could not be read. */
     bool ClockRateOf(u32 pcv_module, u32 *out_hz);
