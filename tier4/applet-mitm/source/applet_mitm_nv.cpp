@@ -1899,6 +1899,7 @@ namespace ams::mitm::applet {
 
     constinit std::atomic<u32> g_queue_count{0};
     constinit std::atomic<s32> g_queue_slot{-1};
+    constinit std::atomic<bool> g_album_seed_no_binder{false};
     constinit std::atomic<u64> g_queue_tick{0};
     constinit std::atomic<u32> g_queue_fence_n{0};
     constinit bool g_nvab_armed = false;
@@ -1989,7 +1990,11 @@ namespace ams::mitm::applet {
     }
 
     void CaptureGameSurface(const NvGraphicBufferRaw *gb, s32 slot_arg) { CaptureInto(g_game_surface, "game", gb, slot_arg); }
-    void CaptureAppletSurface(const NvGraphicBufferRaw *gb, s32 slot_arg) { CaptureInto(g_applet_surface, "applet", gb, slot_arg); }
+    void CaptureAppletSurface(const NvGraphicBufferRaw *gb, s32 slot_arg) {
+        CaptureInto(g_applet_surface, "applet", gb, slot_arg);
+        /* Real binder geometry + upcoming queueBuffers - stop seed content-sync */
+        g_album_seed_no_binder.store(false, std::memory_order_relaxed);
+    }
 
     namespace {
 
@@ -2071,6 +2076,35 @@ namespace ams::mitm::applet {
                 u64 mb = 0;
                 const bool hold = AppletHoldActive();
                 if (!hold && !AppletBusy(std::addressof(mb))) { break; }
+                /* home_menu + 100D (SwitchU / Album): THEY fill the Applet pool.
+                 * Ask briefly for headroom; if the pool stays full, HeadroomClear
+                 * at once - leaving NeedHeadroom set makes SwitchU reclaim every
+                 * 100 ms (grid icons flash) while we never reach DonorObtain. */
+                if (!hold && g_ui_stream_armed && AlbumOrSwitchUOpen()) {
+                    static u64 s_headroom_ask_ns = 0;
+                    const u64 now_ask = armTicksToNs(armGetSystemTick());
+                    /* At most every 30 s - SoftLand refill needs quiet time */
+                    if (s_headroom_ask_ns == 0 || now_ask - s_headroom_ask_ns >= UINT64_C(30000000000)) {
+                        s_headroom_ask_ns = now_ask;
+                        if (!said_busy) {
+                            LogLine("   engines: Album/SwitchU holds the Applet pool (%llu MB) - asking NeedHeadroom for the donor",
+                                    static_cast<unsigned long long>(mb));
+                            said_busy = true;
+                        } else {
+                            LogLine("   engines: retry NeedHeadroom (Applet pool still %llu MB used)",
+                                    static_cast<unsigned long long>(mb));
+                        }
+                        HeadroomAskAndWait(42, 2500);
+                        if (!AppletBusy(std::addressof(mb))) { break; }
+                        HeadroomClear();
+                        LogLine("   engines: SwitchU ACK but Applet pool still tight (%llu MB used, need ~42 MB free) - not holding NeedHeadroom (avoids icon thrash)",
+                                static_cast<unsigned long long>(mb));
+                    }
+                    VicStage("vb:applet_busy");
+                    SetViewerReason(ViewerReason_NoMemory);
+                    os::SleepThread(TimeSpan::FromMilliSeconds(500));
+                    continue;
+                }
                 if (TakeShotRequest()) {
                     LogLine("shot: an applet holds the Applet pool (%llu MB) - no screenshot now", static_cast<unsigned long long>(mb));
                     NotifyShot(KeyboardHoldsStream() ? "No screenshot while the keyboard is open" : "No screenshot while a manual, the eShop or another applet is open");
@@ -3195,6 +3229,11 @@ namespace ams::mitm::applet {
          * game with another layout is reported and skipped. */
         bool FindSwapchainBySize(::ams::svc::Handle dbg, u64 want, u64 *out) {
             u64 addr = 0, best = 0, best_size = ~UINT64_C(0);
+            /* Prefer the exact-size region the display also maps (device_count
+             * >= 2) when several match - a boot seed of SwitchU once took the
+             * first 7.8 MB device block and tore without binder fences. */
+            u64 exact = 0;
+            u32 exact_devc = 0, exact_n = 0;
             /* v0.7.14: runs of adjacent device-mapped regions. Pokemon Violet
              * keeps its buffers in one 280 MB object; after the stream dropped
              * on a loading screen the re-attach found no region that size or
@@ -3214,7 +3253,13 @@ namespace ams::mitm::applet {
                 if (!DbgQuery(dbg, std::addressof(mi), std::addressof(pi), addr) || mi.size == 0) { break; }
                 const u32  attr = static_cast<u32>(mi.attribute);
                 const bool dev  = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
-                if (dev && mi.size == want) { *out = mi.base_address; return true; }
+                if (dev && mi.size == want) {
+                    ++exact_n;
+                    if (exact == 0 || mi.device_count > exact_devc) {
+                        exact = mi.base_address;
+                        exact_devc = mi.device_count;
+                    }
+                }
                 /* v0.1.1b: some homebrew keeps its framebuffers inside a larger
                  * device-mapped block (Run AE: two 1280x720 slots at +0xF0000
                  * and +0x4B0000 of one allocation) - the smallest such block
@@ -3231,6 +3276,15 @@ namespace ams::mitm::applet {
                 addr = next;
             }
             end_run();
+            if (exact != 0) {
+                if (exact_n > 1) {
+                    LogLine("   swapchain: %u regions of exactly %llu B - using 0x%010llx (device mappings %u)",
+                            exact_n, static_cast<unsigned long long>(want),
+                            static_cast<unsigned long long>(exact), exact_devc);
+                }
+                *out = exact;
+                return true;
+            }
             if (run_exact != 0) {
                 LogLine("   swapchain: %llu B in %u adjacent device-mapped regions at 0x%010llx", static_cast<unsigned long long>(want), exact_parts,
                         static_cast<unsigned long long>(run_exact));
@@ -3335,6 +3389,95 @@ namespace ams::mitm::applet {
             return false;
         }
 
+        /* Fill GameSurface for an already-running Album / SwitchU (100D) when
+         * binder setPreallocatedBuffer was missed (process started before vi:m). */
+        bool DiscoverAlbumSurface(::ams::svc::Handle dbg, GameSurface *out) {
+            /* Soak sizes: SwitchU 1280x720 × 2 slots ≈ 3932160 B each (7864320 total).
+             * Also try stock-ish 720p/1080p contiguous layouts. */
+            static constexpr u64 Wants[] = {
+                7864320ull,                 /* 2 × 3932160 (SwitchU) */
+                2ull * 8847360ull,          /* 2 × 1080p slot */
+                3ull * 8847360ull,          /* 3 × 1080p (FbSwapSize) */
+                3ull * 3932160ull,
+            };
+            u64 base = 0, want = 0;
+            for (const u64 w : Wants) {
+                if (FindSwapchainBySize(dbg, w, std::addressof(base))) { want = w; break; }
+            }
+            if (want == 0) { return false; }
+            GameSurface g = {};
+            if (want == 7864320ull || want == 3ull * 3932160ull) {
+                g.width = 1280; g.height = 720; g.stride_px = 1280;
+                g.buf_size = 3932160u;
+                g.num_slots = (want == 7864320ull) ? 2u : 3u;
+            } else {
+                g.width = 1920; g.height = 1080; g.stride_px = 1920;
+                g.buf_size = 8847360u;
+                g.num_slots = static_cast<u32>(want / 8847360ull);
+            }
+            g.block_h_log2 = 4;
+            g.color_format = 0x100532120ull;   /* A8B8G8R8 - matches SwitchU soak */
+            g.layout = 3;
+            g.pix_format = vic::PIXFMT_A8B8G8R8;
+            for (u32 k = 0; k < g.num_slots && k < 8; ++k) {
+                g.slot_offset[k] = k * g.buf_size;
+                g.slot_nvmap[k] = 1;
+            }
+            g.generation = g_applet_surface.generation + 1;
+            g.armed = true;
+            *out = g;
+            LogLine("   live-ui: discovered Album/SwitchU swapchain %llu B (%ux%u, %u slot(s)) at 0x%010llx",
+                    static_cast<unsigned long long>(want), g.width, g.height, g.num_slots,
+                    static_cast<unsigned long long>(base));
+            return true;
+        }
+
+        /* 100D already up before our vi:m mitm - seed target pid + surface so
+         * the live loop can attach like post-HOME Album/hbmenu (no stock vi
+         * shared buffer; UiSourceFind fails). */
+        bool SeedRunningAlbumSurface() {
+            static bool s_tried = false;
+            static bool s_ok = false;
+            if (s_ok && g_applet_surface.armed && g_applet_target_pid.load(std::memory_order_relaxed) != 0) { return true; }
+            if (s_tried && !s_ok) { return false; }   /* one failed probe per boot until a binder fills it */
+            os::ProcessId ap{};
+            if (R_FAILED(::ams::pm::dmnt::GetProcessId(std::addressof(ap), ncm::ProgramId{UINT64_C(0x010000000000100D)})) || ap.value == 0) {
+                return false;
+            }
+            /* Binder already taught us the geometry - just remember the pid */
+            if (g_applet_surface.armed) {
+                g_applet_target_pid.store(ap.value, std::memory_order_relaxed);
+                s_ok = true;
+                return true;
+            }
+            s_tried = true;
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            if (!DmAttach(ap.value, std::addressof(dbg))) {
+                LogLine("   live-ui: 100D pid %llu up but attach failed - cannot seed Album surface",
+                        static_cast<unsigned long long>(ap.value));
+                return false;
+            }
+            u32 nev = 0;
+            static_cast<void>(DbgResume(dbg, std::addressof(nev)));
+            GameSurface geo = {};
+            const bool found = DiscoverAlbumSurface(dbg, std::addressof(geo));
+            DbgDetach(dbg);
+            if (!found) {
+                LogLine("   live-ui: 100D pid %llu up but no Album/SwitchU swapchain found yet",
+                        static_cast<unsigned long long>(ap.value));
+                s_tried = false;   /* allow retry - buffers may appear shortly after boot */
+                return false;
+            }
+            g_applet_surface = geo;
+            g_applet_target_pid.store(ap.value, std::memory_order_relaxed);
+            g_present_pid.store(ap.value, std::memory_order_relaxed);
+            g_album_seed_no_binder.store(true, std::memory_order_relaxed);
+            s_ok = true;
+            LogLine("   live-ui: seeded Album/SwitchU from already-running 100D (pid %llu) - boot capture without binder history (content-sync slots)",
+                    static_cast<unsigned long long>(ap.value));
+            return true;
+        }
+
         /* v0.7.14: the HOME menu or an applet, read out of vi (applet_mitm_uisource.hpp).
          * false: nothing was streamed (no shared buffer, no memory, no attach) */
         bool RunUiSession(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 &sessions) {
@@ -3350,6 +3493,43 @@ namespace ams::mitm::applet {
             u64 vpid = 0, base = 0;
             GameSurface ug = {};
             if (!UiSourceFind(std::addressof(vpid), std::addressof(base), std::addressof(ug))) {
+                /* SwitchU replaces HOME: no stock vi shared buffer. Give cold-boot
+                 * SwitchU ~3.5s to remount through vi:m (binders) before seeding
+                 * content-sync slots — binders → fence path (~60fps); seed → ~14fps. */
+                if (!g_applet_surface.armed) {
+                    static bool said_wait = false;
+                    if (!said_wait) {
+                        LogLine("   live-ui: waiting up to 3.5s for 100D binders (SwitchU remount)");
+                        said_wait = true;
+                    }
+                    /* Ask SwitchU to remount (fresh managed layer → binder handshake). */
+                    constexpr const char NeedRemount[] = "sdmc:/config/switch-frame-tap/need_capture_remount";
+                    static_cast<void>(fs::CreateDirectory("sdmc:/config/switch-frame-tap"));
+                    static_cast<void>(fs::DeleteFile(NeedRemount));
+                    static_cast<void>(fs::CreateFile(NeedRemount, 0));
+                    for (u32 w = 0; w < 70 && !g_applet_surface.armed; ++w) {
+                        os::SleepThread(TimeSpan::FromMilliSeconds(50));
+                    }
+                    static_cast<void>(fs::DeleteFile(NeedRemount));
+                }
+                if (g_applet_surface.armed) {
+                    static bool said_binder = false;
+                    if (!said_binder) {
+                        LogLine("   live-ui: vi shared buffer absent (SwitchU/Album) - using binder-taught 100D surface");
+                        said_binder = true;
+                    }
+                    return false;
+                }
+                /* SwitchU replaces HOME: no stock vi shared buffer. Seed 100D so
+                 * the live loop attaches via Album/hbmenu instead of live:no_game. */
+                if (SeedRunningAlbumSurface()) {
+                    static bool said_seed = false;
+                    if (!said_seed) {
+                        LogLine("   live-ui: vi shared buffer absent (SwitchU/Album) - using seeded 100D surface");
+                        said_seed = true;
+                    }
+                    return false;   /* not a vi UI session; applet_target path runs next */
+                }
                 static bool said = false;
                 if (!said) { LogLine("   live-ui: vi's shared buffer not found - the HOME menu is not streamed"); said = true; }
                 return false;
@@ -3563,6 +3743,26 @@ namespace ams::mitm::applet {
                 ::ams::os::ProcessId pid{};
                 const u32 q_before = g_queue_count.load(std::memory_order_relaxed);
                 const bool have_app = g_pmdmnt_rc == 0 && R_SUCCEEDED(::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid)));
+                /* Boot SwitchU: 100D was presenting before vi:m existed - prefer
+                 * binder remount over seed content-sync (wait briefly first). */
+                if (g_ui_stream_armed && (g_applet_target_pid.load(std::memory_order_relaxed) == 0 || !g_applet_surface.armed)) {
+                    if (!g_applet_surface.armed) {
+                        constexpr const char NeedRemount[] = "sdmc:/config/switch-frame-tap/need_capture_remount";
+                        static_cast<void>(fs::CreateDirectory("sdmc:/config/switch-frame-tap"));
+                        static_cast<void>(fs::DeleteFile(NeedRemount));
+                        static_cast<void>(fs::CreateFile(NeedRemount, 0));
+                        LogLine("   live: waiting up to 3.5s for 100D binders (SwitchU remount)");
+                        for (u32 w = 0; w < 70 && !g_applet_surface.armed; ++w) {
+                            os::SleepThread(TimeSpan::FromMilliSeconds(50));
+                        }
+                        static_cast<void>(fs::DeleteFile(NeedRemount));
+                    }
+                    if (!g_applet_surface.armed) {
+                        static_cast<void>(SeedRunningAlbumSurface());
+                    } else if (g_applet_target_pid.load(std::memory_order_relaxed) == 0) {
+                        static_cast<void>(SeedRunningAlbumSurface()); /* pid only; surface armed */
+                    }
+                }
                 /* v0.7.14: the Album / hbmenu draws with buffers of its own, like a game */
                 const u64 applet_pid = g_ui_stream_armed ? g_applet_target_pid.load(std::memory_order_relaxed) : 0;
                 if (skip_pid != 0 && have_app && pid.value == skip_pid && g_game_surface.generation != skip_gen) {
@@ -3586,6 +3786,11 @@ namespace ams::mitm::applet {
                     } else if (!have_app || presenter != pid.value) {
                         presenting = false;
                     }
+                } else if (!presenting && applet_pid != 0 && g_applet_surface.armed && !have_app) {
+                    /* Seeded 100D at boot: no binder queueBuffer through our mitm yet */
+                    presenting = true;
+                    applet_target = true;
+                    pid.value = applet_pid;
                 }
                 const bool have_target = have_app || applet_target;
                 /* v0.1.1b: an app on the never-attach list (anti-debug builds
@@ -6547,6 +6752,57 @@ namespace ams::mitm::applet {
                 return h;
             }
 
+            /* Boot seed: no queueBuffer / fences through our mitm. Tear-free
+             * without them: wait until BOTH slots are quiet after a write, then
+             * read the slot that changed (completed back = new front). Never
+             * encode a copy that fails SeedTorn (GPU can reclaim mid-read). */
+            s32 seed_last_slot = 0;
+            u32 pick_seeded = 0;
+            u32 seed_reread = 0;
+            u32 seed_dropped = 0;
+
+            s32 PickSeededPresent(::ams::svc::Handle dbg, u64 slot_base) {
+                if (nslots < 2) { return 0; }
+                bool v0 = false, v1 = false;
+                u32 a0 = this->SampleSig(dbg, this->SlotAddr(slot_base, 0), std::addressof(v0));
+                u32 a1 = this->SampleSig(dbg, this->SlotAddr(slot_base, 1), std::addressof(v1));
+                s32 last_changed = seed_last_slot;
+                bool saw_change = false;
+                u32 quiet = 0;
+                for (u32 spins = 0; spins < 80; ++spins) {
+                    if (early_poll) { idle_work.Poll(); }
+                    if (!g_album_seed_no_binder.load(std::memory_order_relaxed) &&
+                        g_queue_count.load(std::memory_order_acquire) != seen) {
+                        return -1;
+                    }
+                    os::SleepThread(TimeSpan::FromMilliSeconds(1));
+                    bool nv0 = false, nv1 = false;
+                    const u32 b0 = this->SampleSig(dbg, this->SlotAddr(slot_base, 0), std::addressof(nv0));
+                    const u32 b1 = this->SampleSig(dbg, this->SlotAddr(slot_base, 1), std::addressof(nv1));
+                    const bool c0 = (b0 != a0);
+                    const bool c1 = (b1 != a1);
+                    a0 = b0; a1 = b1;
+                    if (c0 || c1) {
+                        saw_change = true;
+                        quiet = 0;
+                        if (c0) { last_changed = 0; }
+                        if (c1) { last_changed = 1; }
+                        continue;
+                    }
+                    ++quiet;
+                    if (saw_change && quiet >= 2) {
+                        /* Both stable after a GPU write - last_changed is done */
+                        seed_last_slot = last_changed;
+                        return last_changed;
+                    }
+                    if (!saw_change && spins >= 3) {
+                        /* Static UI */
+                        return seed_last_slot;
+                    }
+                }
+                return seed_last_slot;
+            }
+
             /* once the present of `slot` (present number `count`) is
              * finished, before it is read: a sample for the slot matcher
              * (applet_mitm_slotmatch.hpp) until it has matched every slot */
@@ -6917,6 +7173,30 @@ namespace ams::mitm::applet {
                 }
                 break;
                 }
+                /* Seeded Album/SwitchU at boot: no binder presents - content-sync.
+                 * Never encode a torn copy (viewer keeps last good frame). */
+                if (g_album_seed_no_binder.load(std::memory_order_relaxed) && nslots >= 2) {
+                    for (;;) {
+                        if (!g_album_seed_no_binder.load(std::memory_order_relaxed) &&
+                            g_queue_count.load(std::memory_order_acquire) != seen) {
+                            break;   /* binders - fence path below */
+                        }
+                        const s32 picked = this->PickSeededPresent(dbg, slot_base);
+                        if (picked < 0) { break; }
+                        present_tick = armGetSystemTick();
+                        this->Calibrate(dbg, seen, picked);
+                        if (!this->ReadSlot(dbg, this->SlotAddr(slot_base, picked), read_ns, sig)) { return false; }
+                        if (!this->SeedTorn(dbg)) {
+                            ++pick_seeded;
+                            seed_last_slot = picked;
+                            return true;
+                        }
+                        ++seed_reread;
+                        ++seed_dropped;
+                        /* Align toward a blanking-sized gap after repeated tears */
+                        os::SleepThread(TimeSpan::FromMilliSeconds((seed_dropped % 8u) == 0u ? 16 : 2));
+                    }
+                }
                 ++pick_legacy;
                 /* M89: slot and fence as ONE snapshot, taken before the wait.
                  * M88 waited on the fence and only then read the slot; a
@@ -6961,6 +7241,20 @@ namespace ams::mitm::applet {
                                            : ((static_cast<u64>(last_read_bytes) / 8 * k + 1024) & ~UINT64_C(63));
                     alignas(64) u8 b[64];
                     if (!DbgRead(dbg, b, last_read + off, sizeof(b))) { return false; }
+                    if (std::memcmp(b, g_ind_buf + off, sizeof(b)) != 0) { return true; }
+                }
+                return false;
+            }
+
+            /* Seed path: denser than ChangedSinceRead - catch mid-copy reclaim
+             * that only touched the middle of a 720p slot. */
+            bool SeedTorn(::ams::svc::Handle dbg) const {
+                if (last_read == 0 || last_read_bytes < 64 || g_ind_buf == nullptr) { return true; }
+                for (u32 k = 0; k < 24; ++k) {
+                    const u64 off = ((static_cast<u64>(last_read_bytes) / 24 * k + 1536) & ~UINT64_C(63));
+                    if (off + 64 > last_read_bytes) { continue; }
+                    alignas(64) u8 b[64];
+                    if (!DbgRead(dbg, b, last_read + off, sizeof(b))) { return true; }
                     if (std::memcmp(b, g_ind_buf + off, sizeof(b)) != 0) { return true; }
                 }
                 return false;
@@ -8497,8 +8791,8 @@ namespace ams::mitm::applet {
             LogLine("   nvstream: present fences: %u waited, avg %llu us, max %llu us, %u timed out (250 ms), %u presents without a readable fence; %u read(s) redone (the slot may have been reused while it was read)",
                     s.fence_waits, static_cast<unsigned long long>(s.fence_waits ? s.fence_wait_sum / s.fence_waits / 1000 : 0),
                     static_cast<unsigned long long>(s.fence_wait_max / 1000), s.fence_timeouts, s.fence_unknown, s.reread);
-            LogLine("   nvstream: presents taken (M96): %u already drawn, %u waited for (the oldest not yet drawn), %u by the old latest-present rule",
-                    s.pick_ready, s.pick_waited, s.pick_legacy);
+            LogLine("   nvstream: presents taken (M96): %u already drawn, %u waited for (the oldest not yet drawn), %u by the old latest-present rule, %u by seed content-sync (%u re-read, %u torn dropped)",
+                    s.pick_ready, s.pick_waited, s.pick_legacy, s.pick_seeded, s.seed_reread, s.seed_dropped);
             LogLine("   nvstream: per-stage max us: read %llu  VIC %llu  NVENC %llu  USB wait %llu  copy %llu; %u frame(s) over 50 ms of work; %u USB wait(s) over 500 ms (IDR forced after each)",
                     static_cast<unsigned long long>(m_read / 1000), static_cast<unsigned long long>(m_vic / 1000),
                     static_cast<unsigned long long>(m_enc / 1000), static_cast<unsigned long long>(m_usbw / 1000),
