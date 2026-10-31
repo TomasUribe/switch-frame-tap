@@ -3,6 +3,7 @@
 #include "applet_mitm_dmdbg.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_sm.hpp"
+#include "applet_mitm_nv.hpp"
 
 namespace ams::mitm::applet {
 
@@ -73,8 +74,15 @@ namespace ams::mitm::applet {
 
     }
 
+    /* v0.7.20 (#57): a game's audio out goes through here only while a viewer
+     * is connected - every buffer it appends is one more IPC hop through this
+     * process, and with no viewer nothing is taken from it (a real game's
+     * sound comes from grc:d anyway). Homebrew always: its sound may have no
+     * other source. A viewer that connects later gets grc:d's sound. */
     bool AudOutMgrMitm::ShouldMitm(const sm::MitmProcessInfo &client_info) {
-        return g_audio_enabled.load(std::memory_order_relaxed) && ncm::IsApplicationId(client_info.program_id);
+        if (!g_audio_enabled.load(std::memory_order_relaxed) || !ncm::IsApplicationId(client_info.program_id)) { return false; }
+        const u32 st = g_live_state.load(std::memory_order_relaxed);
+        return client_info.override_status.IsHbl() || st == LiveState_WaitGame || st == LiveState_Streaming;
     }
 
     Result AudOutMgrMitm::Open(u32 cmd, sf::Out<AudOutInfo> &out_info, sf::Out<sf::SharedPointer<IAudOutObjMitm>> &out, const void *name_in, size_t name_in_size, void *name_out, size_t name_out_size, const AudOutParam &param, u64 aruid, sf::CopyHandle &process) {
