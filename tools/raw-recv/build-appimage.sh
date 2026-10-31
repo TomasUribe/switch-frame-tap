@@ -54,6 +54,8 @@ Keywords=Switch;Nintendo;stream;viewer;game;
 X-AppImage-Version=$VER
 DESK
 
+# appimagetool (2026-10-29 on) also refuses files others cannot read (a 0640 licence)
+chmod -R a+rX "$APP"
 OUT="$REPO/dist/switch-frame-tap-$VER-linux-x86_64.AppImage"
 rm -f "$OUT"
 ARCH=x86_64 "$TOOL" --no-appstream "$APP" "$OUT" > "$REPO/dist/build-appimage/appimagetool.log" 2>&1 || { tail -20 "$REPO/dist/build-appimage/appimagetool.log"; exit 1; }
