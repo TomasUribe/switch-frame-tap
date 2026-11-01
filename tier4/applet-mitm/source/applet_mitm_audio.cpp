@@ -271,7 +271,14 @@ namespace ams::mitm::applet {
                  * minute and set Mario Kart's record volume from 0 to full;
                  * logs/v0716-pr38test2) or when it blocks recording, which the
                  * recorder hears as silence too. */
-                if (!hb || g_app_tid.load(std::memory_order_relaxed) == 0) { continue; }
+                /* v0.7.20 (#20): a retail game too, but only while it streams -
+                 * Super Mario Odyssey gave grc:d no sound on firmware 23.0.1
+                 * even with the dvr-patches. Raising its record volume (below)
+                 * is what makes a game that blocks recording audible here, as
+                 * it did for PokeMMO; "only while it draws" keeps the
+                 * suspended-game case above out. */
+                if (g_app_tid.load(std::memory_order_relaxed) == 0) { continue; }
+                if (!hb && !g_audio_active.load(std::memory_order_relaxed)) { continue; }
                 {
                     const u64 lp = g_app_present_tick.load(std::memory_order_relaxed);
                     if (lp == 0 || now - armTicksToNs(lp) > UINT64_C(1000000000)) { continue; }
