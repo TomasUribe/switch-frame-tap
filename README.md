@@ -33,6 +33,9 @@ the viewer on your PC, start a game.
   on top of the game.
 - **Updates from the apps**: the Switch app, the PC viewers and the Android
   app check GitHub and update themselves.
+- **Play from the viewer** (opt-in): a controller, the keyboard or the mouse on
+  the PC - or a gamepad on Android - plays the Switch as one more Pro
+  Controller, with remapping in the viewer's Controller menu.
 - **Record to MP4** with one key, and take **native-resolution screenshots**.
 - **Webcam mode**: the Switch shows up as a USB camera in OBS, Discord, Zoom
   or any camera app.
@@ -446,8 +449,9 @@ update being installed, and the overlay over a game - captured on the console.*
 (L and R change pages): **Home** (what the stream is doing and its frame rate,
 streaming on/off, start with the console), **Stream** (the connection - USB
 viewer, webcam or network - game audio, sound in no-record games, screen off),
-**Picture** (quality, keyframes, maximum resolution), **Screenshots**, **Beta**
-(the HOME menu and the overlays in the stream), **Extras** (below), **Setup**
+**Picture** (quality, keyframes, maximum resolution, scaling other docked sizes
+up to 1080p, faster memory while streaming), **Screenshots**, **Beta** (the HOME
+menu and the overlays in the stream, controls from the viewer), **Extras** (below), **Setup**
 (the setup check, start delay), **Updates** (below) and **About**. Changes apply
 at once - a running stream restarts with them. Settings live in
 `sdmc:/config/switch-frame-tap/config.ini`.
@@ -620,6 +624,28 @@ stream reads frames that way - such as TiCo's protected builds: turn **Stream
 this app** off in the overlay while one is running and restart it; the
 sysmodule then never touches it (no stream, no screenshots). The manager's
 **Apps never streamed** clears the list.
+
+### Play from the viewer
+
+With **Controls from the viewer** on (the Switch app's Beta page, or
+`viewer_input = 1` in config.ini; off by default, v0.7.20), the viewer sends
+what you press to the console, which plays it as one more Pro Controller -
+in games and on the HOME menu. On the PC: any controller SDL knows, the
+keyboard (Ryujinx's default layout) and, experimentally, the mouse as the
+right stick; the gamepad icon at the top left (or **G**) opens the Controller
+menu with remapping for all three. On Android: a gamepad, with the same menu
+behind the gamepad icon. Nothing is sent while the option is off.
+
+### Faster streams in heavy scenes
+
+At stock clocks a 1080p frame takes 15-28 ms to copy out of the game, and the
+copy is limited by the memory clock, not the CPU. **Faster memory while
+streaming** (Picture page, `memory_boost = 1`, off by default) keeps the memory
+at 1600 MHz - the docked rate - or more while a stream runs and lets it go
+afterwards; an overclock that already runs it faster is untouched. Games that
+draw a size between 720p and 1080p (Super Mario Odyssey's 1600x900) stream at
+720p by default; **Scale other docked sizes up to 1080p** (`scale_to_1080 = 1`)
+sends them at 1080p, at the cost of bandwidth and about a frame of latency.
 
 ### Screenshots
 
