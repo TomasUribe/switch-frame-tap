@@ -45,6 +45,15 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.20" date="2026-11-01">
+      <description>
+        <ul>
+          <li>Play the Switch from the viewer with a controller, the keyboard or the mouse (off by default), with a Controller menu for remapping.</li>
+          <li>The buttons over the picture fade out after 3 s without mouse movement; Alt-drag, Ctrl-wheel and Ctrl-click move and zoom the picture in fullscreen.</li>
+          <li>Faster streams in heavy scenes, and fixes for red pictures, stutters and missing sound in some games.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.19" date="2026-10-25">
       <description>
         <ul>
