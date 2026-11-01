@@ -81,6 +81,19 @@ namespace ams::mitm::applet {
                     os::SleepThread(TimeSpan::FromMilliSeconds(300));
                     continue;
                 }
+                /* v0.7.20 (#57, #67): grc:d is begun only once a viewer has
+                 * connected this boot. Begin starts grc's remote recorder
+                 * (its IpcRemoteVideoServer), which then works through every
+                 * game; players with no viewer saw stutters that went away
+                 * with the module off. There is no end, so once begun it is
+                 * read as before. */
+                if (!g_begin_called) {
+                    const u32 st = g_live_state.load(std::memory_order_relaxed);
+                    if (st != LiveState_WaitGame && st != LiveState_Streaming) {
+                        os::SleepThread(TimeSpan::FromMilliSeconds(300));
+                        continue;
+                    }
+                }
                 if (!open) {
                     SmUse sm_grc;
                     const ::Result rc = smGetService(&srv, "grc:d");
@@ -113,6 +126,7 @@ namespace ams::mitm::applet {
                     os::SleepThread(TimeSpan::FromMilliSeconds(200));
                     continue;
                 }
+                g_begin_called = true;   /* begun - here or earlier this boot - so it is drained from now on */
                 if (g_audio_state.load(std::memory_order_relaxed) != 1) {
                     g_audio_state.store(1, std::memory_order_relaxed);
                     LogLine("audio: game audio flowing (%u B chunks)", n);
