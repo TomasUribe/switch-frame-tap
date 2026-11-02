@@ -279,7 +279,7 @@ namespace ams::mitm::applet {
         return true;
     }
 
-    bool WriteShot(u8 *out, const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra, u32 flip) {
+    bool WriteShot(u8 *out, const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra, u32 flip, u32 x0, u32 y0) {
         if (w == 0 || h == 0 || w > 1920 || h > 1088) { ++g_shot_fail; LogLine("shot: %ux%u is not a size this writes", w, h); return false; }
         if (out == nullptr) { ++g_shot_fail; LogLine("shot: no capture memory for the PNG"); return false; }
         const u64 t0 = armTicksToNs(armGetSystemTick());
@@ -312,7 +312,7 @@ namespace ams::mitm::applet {
                 return true;
             },
             [&](uint32_t y, uint8_t *rgb) {
-                png::DeswizzleRowRgb(src, src_size, (flip & 2) ? h - 1 - y : y, w, stride_bytes, bh_log2, rgb, bgra);
+                png::DeswizzleRowRgb(src, src_size, y0 + ((flip & 2) ? h - 1 - y : y), w, stride_bytes, bh_log2, rgb, bgra, x0);
                 if (flip & 1) { png::MirrorRowRgb(rgb, w); }
             }) && flush();
         static_cast<void>(fs::FlushFile(f));

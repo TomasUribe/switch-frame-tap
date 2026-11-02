@@ -127,6 +127,20 @@ namespace ams::mitm::applet {
         return static_cast<u32>(cw) << 16 | static_cast<u32>(chh);
     }
 
+    /* v0.7.20: a crop that starts elsewhere than (0,0) and is not centred -
+     * Final Fantasy XII handheld presents its 1280x720 picture at (0,360) of
+     * a 1920x1080 surface (jmk8899, GBAtemp: a small picture in the stream);
+     * out: x << 16 | y, returns w << 16 | h (0: not such a crop) */
+    static u32 OffsetCrop(const s32 crop[4], u32 *xy) {
+        *xy = 0;
+        const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
+        const s32 sw = static_cast<s32>(g_game_surface.width), sh = static_cast<s32>(g_game_surface.height);
+        if (cw <= 0 || chh <= 0 || sw <= 0 || sh <= 0 || crop[0] < 0 || crop[1] < 0) { return 0; }
+        if ((crop[0] == 0 && crop[1] == 0) || CenteredCrop(crop) != 0 || crop[2] > sw || crop[3] > sh) { return 0; }
+        *xy = static_cast<u32>(crop[0]) << 16 | static_cast<u32>(crop[1]);
+        return static_cast<u32>(cw) << 16 | static_cast<u32>(chh);
+    }
+
     void RecordPresent(s32 qs, bool have_fence, u32 fn, const u64 fv[4], u32 xf, const s32 crop[4]) {
         static constinit os::SdkMutex s_record_lock;   /* the vi server threads and the UI feeder */
         std::scoped_lock lk(s_record_lock);
@@ -136,6 +150,12 @@ namespace ams::mitm::applet {
             g_queue_crop_wh.store((cw > 0 && chh > 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
             g_queue_crop_origin0.store(crop[0] == 0 && crop[1] == 0, std::memory_order_relaxed);
             g_queue_crop_c.store(CenteredCrop(crop), std::memory_order_relaxed);
+            {
+                u32 xy = 0;
+                const u32 owh = OffsetCrop(crop, std::addressof(xy));
+                g_queue_crop_o.store(xy, std::memory_order_relaxed);
+                g_queue_crop_ow.store(owh, std::memory_order_relaxed);
+            }
             /* v0.7.9: this game's crop follows its mode (it has shown a
              * whole 1920x1080 picture) - the size check trusts it */
             if (cw >= 1920 && chh >= 1080) { g_crop_full_pid.store(g_app_pid.load(std::memory_order_relaxed), std::memory_order_relaxed); }
@@ -170,6 +190,10 @@ namespace ams::mitm::applet {
                 const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
                 r.crop.store((cw > 0 && chh > 0 && crop[0] == 0 && crop[1] == 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
                 r.crop_c.store(CenteredCrop(crop), std::memory_order_relaxed);
+                u32 xy = 0;
+                const u32 owh = OffsetCrop(crop, std::addressof(xy));
+                r.crop_o.store(xy, std::memory_order_relaxed);
+                r.crop_ow.store(owh, std::memory_order_relaxed);
             }
             r.seq.fetch_add(1, std::memory_order_release);
         }

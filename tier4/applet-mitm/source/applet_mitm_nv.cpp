@@ -1924,6 +1924,8 @@ namespace ams::mitm::applet {
     constinit std::atomic<u32> g_queue_crop_wh{0};
     constinit std::atomic<bool> g_queue_crop_origin0{true};
     constinit std::atomic<u32> g_queue_crop_c{0};
+    constinit std::atomic<u32> g_queue_crop_o{0};
+    constinit std::atomic<u32> g_queue_crop_ow{0};
     constinit std::atomic<bool> g_viewer_key_request{false};
     constinit std::atomic<bool> g_viewer_can_ask{false};
     constinit std::atomic<bool> g_viewer_crop{false};
@@ -6310,7 +6312,8 @@ namespace ams::mitm::applet {
             u32 buf_bytes = static_cast<u32>(FbSlotSize);
             bool mk8_layout = true;        /* MK8's layout: the corner can be read alone (CornerBlockRows) */
             bool size_check_ok = true;     /* v0.7.8: any 1920x1080 surface - the 720p/1080p check runs */
-            bool CornerFast() const { return corner && mk8_layout; }
+            /* v0.7.20: not with a crop elsewhere - it may lie below the corner's rows (FF XII) */
+            bool CornerFast() const { return corner && mk8_layout && cap_crop_ow == 0; }
 
             /* One nvmap object per slot (GameSurface::separate, Smash
              * Ultimate): every slot_off is 0, and slot_base + slot_off read
@@ -6808,7 +6811,7 @@ namespace ams::mitm::applet {
                 return 1;
             }
 
-            struct PresentSnap { u32 count; s32 slot; u32 fence_n; u64 fence[4]; u64 tick; u32 transform; u32 crop; u32 crop_c; };
+            struct PresentSnap { u32 count; s32 slot; u32 fence_n; u64 fence[4]; u64 tick; u32 transform; u32 crop; u32 crop_c; u32 crop_o; u32 crop_ow; };
 
             /* present c from the ring; false if it was overwritten (8+ behind) */
             static bool ReadPresent(u32 c, PresentSnap *out) {
@@ -6824,6 +6827,8 @@ namespace ams::mitm::applet {
                     out->transform = r.transform.load(std::memory_order_relaxed);
                     out->crop    = r.crop.load(std::memory_order_relaxed);
                     out->crop_c  = r.crop_c.load(std::memory_order_relaxed);
+                    out->crop_o  = r.crop_o.load(std::memory_order_relaxed);
+                    out->crop_ow = r.crop_ow.load(std::memory_order_relaxed);
                     std::atomic_thread_fence(std::memory_order_acquire);
                     if (r.seq.load(std::memory_order_relaxed) == s1) { return out->count == c; }
                 }
@@ -6922,6 +6927,8 @@ namespace ams::mitm::applet {
                         present_flip = pick.transform & 3;
                         cap_crop = pick.crop;
                         cap_crop_c = pick.crop_c;
+                        cap_crop_o = pick.crop_o;
+                        cap_crop_ow = pick.crop_ow;
                         const s32 slot = pick.slot;
                         this->Calibrate(dbg, pick.count, slot);
                         if (!this->ReadSlot(dbg, this->SlotAddr(slot_base, slot), read_ns, sig)) { return false; }
@@ -6962,6 +6969,8 @@ namespace ams::mitm::applet {
                     present_flip = g_queue_transform.load(std::memory_order_relaxed) & 3;
                     cap_crop = g_queue_crop_origin0.load(std::memory_order_relaxed) ? g_queue_crop_wh.load(std::memory_order_relaxed) : 0;
                     cap_crop_c = g_queue_crop_c.load(std::memory_order_relaxed);
+                    cap_crop_o = g_queue_crop_o.load(std::memory_order_relaxed);
+                    cap_crop_ow = g_queue_crop_ow.load(std::memory_order_relaxed);
                     std::atomic_thread_fence(std::memory_order_acquire);
                     if (g_queue_seq.load(std::memory_order_relaxed) == s1) { break; }
                 }
@@ -7104,6 +7113,9 @@ namespace ams::mitm::applet {
             u32 crop_used = 0;
             u32 cap_crop = 0;          /* v0.7.13: the captured present's crop (PresentRec::crop) */
             u32 cap_crop_c = 0;        /* v0.7.16: ... when it sits in the middle (PresentRec::crop_c) */
+            u32 cap_crop_o = 0;        /* v0.7.20: ... when it sits elsewhere: x << 16 | y (PresentRec::crop_o) */
+            u32 cap_crop_ow = 0;       /*          and its w << 16 | h, 0: not */
+            u32 offset_frames = 0;
             u32 last_read_bytes = 0;   /* v0.7.13: how much of the slot ReadSlot copied */
             /* crop: the captured present's (cap_crop) */
             static u32 PresentRect(const SrcDesc &d, u32 crop) {
@@ -7194,6 +7206,24 @@ namespace ams::mitm::applet {
                 dyn_center = true;
             }
 
+            /* v0.7.20: the game presents a part that starts elsewhere than the
+             * top-left corner and is not centred - Final Fantasy XII handheld:
+             * its 1280x720 at (0,360) of a 1920x1080 surface. The VIC samples
+             * just that part, whatever the viewer can crop (the stream's crop
+             * flags only say "from the corner" or "in the middle"). */
+            void CropOffset(SrcDesc &d) {
+                if (dyn_out != 0 || cap_crop_ow == 0) { return; }
+                const u32 x = cap_crop_o >> 16, y = cap_crop_o & 0xFFFF, w = cap_crop_ow >> 16, h = cap_crop_ow & 0xFFFF;
+                if (w < 320 || h < 180 || x + w > d.w || y + h > d.h) { return; }
+                if (offset_frames++ == 0) {
+                    LogLine("   nvf: the game presents %ux%u at (%u,%u) of its %ux%u picture - the VIC converts that part", w, h, x, y, d.w, d.h);
+                }
+                d.rect_x = x;
+                d.rect_y = y;
+                d.rect_w = w;
+                d.rect_h = h;
+            }
+
             void CropDynamic(SrcDesc &d, const OutDesc &out) {
                 dyn_out = 0;
                 const u32 use = DynamicRect(d, cap_crop);
@@ -7229,6 +7259,7 @@ namespace ams::mitm::applet {
                 if (!size_check_ok) { CropToPresent(g_strip_src); }
                 else { CropDynamic(g_strip_src, g_strip_out); }   /* v0.7.15 */
                 CropCentered(g_strip_src, g_strip_out);             /* v0.7.16 */
+                CropOffset(g_strip_src);                            /* v0.7.20 */
                 g_strip_flip = present_flip;
                 /* v0.7.14: the overlays showing now, over the game (not on a
                  * flipped present: the output flip would mirror them) */
@@ -7583,8 +7614,13 @@ namespace ams::mitm::applet {
                 r.rect_w = w; r.rect_h = h;
                 if (const u32 dyn = NvfSession::DynamicRect(r, s.cap_crop); dyn != 0) { w = dyn >> 16; h = dyn & 0xFFFF; }
             }
+            /* v0.7.20: a part presented elsewhere (FF XII handheld) - just that part */
+            u32 x0 = 0, y0 = 0;
+            if (const u32 ow = s.cap_crop_ow; ow != 0 && (s.cap_crop_o >> 16) + (ow >> 16) <= s.src.w && (s.cap_crop_o & 0xFFFF) + (ow & 0xFFFF) <= s.src.h) {
+                x0 = s.cap_crop_o >> 16; y0 = s.cap_crop_o & 0xFFFF; w = ow >> 16; h = ow & 0xFFFF;
+            }
             const size_t n = s.CornerFast() ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
-            return WriteShot(g_shot_out, g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.bgra, s.present_flip);
+            return WriteShot(g_shot_out, g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.bgra, s.present_flip, x0, y0);
         }
 
         bool ShotStandalone() {

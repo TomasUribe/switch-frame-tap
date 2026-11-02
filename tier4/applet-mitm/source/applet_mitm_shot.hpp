@@ -43,6 +43,6 @@ namespace ams::mitm::applet {
     /* v0.7.13: out (ShotOutBufSize) is the PNG's write buffer - the end of the
      * capture region, not 128 KB of the System group held for the boot */
     constexpr size_t ShotOutBufSize = 128 * 1024;
-    bool WriteShot(u8 *out, const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra = false, u32 flip = 0);
+    bool WriteShot(u8 *out, const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra = false, u32 flip = 0, u32 x0 = 0, u32 y0 = 0);
 
 }
