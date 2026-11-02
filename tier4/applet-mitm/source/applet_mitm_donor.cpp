@@ -346,6 +346,29 @@ namespace ams::mitm::applet {
                 }
                 const bool trigger = web || tight || spawned;
                 if (trigger) {
+                    /* SwitchU Theme Shop / heavy overlays grow 100D in-place.
+                     * Prefer NeedHeadroom reclaim over tearing the stream down
+                     * when the pool went tight with no new process / web applet. */
+                    if (tight && !web && !spawned && AlbumOrSwitchURunning()) {
+                        static u64 s_swu_headroom_ns = 0;
+                        const u64 now_hr = armTicksToNs(armGetSystemTick());
+                        if (s_swu_headroom_ns == 0 || now_hr - s_swu_headroom_ns >= UINT64_C(5000000000)) {
+                            s_swu_headroom_ns = now_hr;
+                            const u32 ask = donor_mb > 0 ? static_cast<u32>(donor_mb + 8) : 42;
+                            LogLine("donor: Applet pool tight beside SwitchU (%llu MB free) - asking NeedHeadroom %u MB before teardown",
+                                    static_cast<unsigned long long>(free_mb), ask);
+                            HeadroomAskAndWait(ask, 1500);
+                            HeadroomClear();
+                            const u64 free_after = AppletFreeMb();
+                            if (free_after >= beside.stop_mb) {
+                                LogLine("donor: SwitchU reclaimed - pool has %llu MB free, keeping the stream",
+                                        static_cast<unsigned long long>(free_after));
+                                continue;
+                            }
+                            LogLine("donor: still tight after NeedHeadroom (%llu MB free) - stopping the stream",
+                                    static_cast<unsigned long long>(free_after));
+                        }
+                    }
                     LogDefer(true);   /* written once the memory is back (DonorRelease) */
                     g_trigger_ns = armTicksToNs(armGetSystemTick());
                     g_applet_needs_memory.store(true, std::memory_order_relaxed);
@@ -539,19 +562,30 @@ namespace ams::mitm::applet {
          * session again (what #38 fixed); the pool watch catches an applet that
          * really needs the memory (g_applet_needs_memory, above). */
         static u64 s_asked_ns = 0;
-        static bool s_hold = false, s_album = false;
+        static bool s_hold = false, s_album_now = false, s_album_was = false, s_album_inited = false;
         const u64 now = armTicksToNs(armGetSystemTick());
         if (now - s_asked_ns >= UINT64_C(100000000)) {
             s_asked_ns = now;
             s_hold = AppletHoldActive();
-            /* Stock Album / SwitchU replace qlaunch as 010000000000100D (HBL too). */
-            s_album = Running(0x010000000000100Dull);
+            /* Stock Album / SwitchU replace qlaunch as 010000000000100D (HBL too).
+             * Edge only: 100D *appearing* means we went HOME. Level-triggering
+             * freezes SwitchU capture on Theme Shop / overlay present hitches
+             * (100D was already up the whole time). */
+            const bool album = Running(0x010000000000100Dull);
+            if (!s_album_inited) {
+                s_album_was = album;
+                s_album_now = album;
+                s_album_inited = true;
+            } else {
+                s_album_was = s_album_now;
+                s_album_now = album;
+            }
         }
         if (s_hold) {
             if (out_reason != nullptr) { *out_reason = "applet hold active"; }
             return true;
         }
-        if (s_album) {
+        if (s_album_now && !s_album_was) {
             if (out_reason != nullptr) { *out_reason = "Album/SwitchU 100D up"; }
             return true;
         }
