@@ -6640,10 +6640,11 @@ namespace ams::mitm::applet {
                  * and blue swapped in the colour matrix - the VIC's A8B8G8R8 takes
                  * alpha from the first byte (ovl2), and RE4, Yo-kai Watch 4,
                  * Wreckfest and Persona 4 streamed solid red */
-                const bool bgra = g.color_format == 0x100d12120ull;
+                /* v0.7.20.1: and X8R8G8B8 (0x10ad12120), the same bytes with no alpha */
+                const bool bgra = g.color_format == 0x100d12120ull || g.color_format == 0x10ad12120ull;
                 /* v0.7.17: libnx's RGB565 framebuffer (DBI, #42): read as 32-bit, the picture came out garbled */
                 const bool rgb565 = g.color_format == 0x10a881210ull;
-                const bool known_fmt = g.color_format == 0x100532120ull || bgra;
+                const bool known_fmt = g.color_format == 0x100532120ull || g.color_format == 0x10a532120ull /* X8B8G8R8: the homebrew menu */ || bgra;
                 src = SrcDesc{ g.width, g.height, g.stride_px, vic::BLK_KIND_GENERIC_16Bx2, g.block_h_log2,
                                rgb565 ? vic::PIXFMT_B5G6R5 : vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
                 src.bgra = bgra;
