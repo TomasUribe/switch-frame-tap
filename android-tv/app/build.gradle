@@ -10,7 +10,7 @@ android {
         // Since 0.7.14 the app carries Switch Frame Tap's version; release builds
         // pass it (.github/workflows/viewer-android.yml): -PsftVersion=0.7.14 -PsftVersionCode=714009
         versionCode(project.hasProperty('sftVersionCode') ? project.property('sftVersionCode').toInteger() : 714000)
-        versionName(project.hasProperty('sftVersion') ? project.property('sftVersion') : '0.7.20')
+        versionName(project.hasProperty('sftVersion') ? project.property('sftVersion') : '0.7.21')
     }
     // The release key comes from the environment (CI secrets); without it the
     // release build is signed with the debug key so it still installs.
