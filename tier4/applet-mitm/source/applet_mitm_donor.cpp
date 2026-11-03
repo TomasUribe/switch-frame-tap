@@ -681,11 +681,10 @@ namespace ams::mitm::applet {
                 }
                 /* Pool has room - brief re-assert so SwitchU stays light through launch */
                 HeadroomAskAndWait(ask_cap, 500);
-            } else if (HeadroomEverAcked()) {
-                /* SwitchU was present this boot - short ask before remount.
-                 * Stock (never ACK'd): no wait (Tomas #56). */
-                HeadroomAskAndWait(ask_cap, 2000);
             }
+            /* Without SwitchU's menu running nobody answers: only the menu acks
+             * (SwitchU FrameTapStatus.cpp), so no wait - a 2 s ask here timed out
+             * on every return to a game (logs/v0721-switchu-test1). */
         }
         std::scoped_lock lk(g_lock);
         if (!g_mapped) {

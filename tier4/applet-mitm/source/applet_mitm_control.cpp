@@ -228,7 +228,6 @@ namespace ams::mitm::applet {
         constexpr const char HeadroomReadyFile[] = "sdmc:/config/SwitchU/ft_headroom_ready";
         constinit std::atomic<bool> g_need_headroom{false};
         constinit std::atomic<bool> g_headroom_acked{false};
-        constinit std::atomic<bool> g_headroom_ever_acked{false}; /* SwitchU seen this boot */
         constinit std::atomic<u32> g_need_headroom_mb{0};
         constinit std::atomic<u32> g_headroom_free_kb{0};
 
@@ -274,12 +273,7 @@ namespace ams::mitm::applet {
     void HeadroomAck(u32 free_kb) {
         g_headroom_free_kb.store(free_kb, std::memory_order_relaxed);
         g_headroom_acked.store(true, std::memory_order_release);
-        g_headroom_ever_acked.store(true, std::memory_order_release);
         LogLine("sftap: SwitchU AckHeadroom free=%u KB", free_kb);
-    }
-
-    bool HeadroomEverAcked() {
-        return g_headroom_ever_acked.load(std::memory_order_relaxed);
     }
 
     void HeadroomAskAndWait(u32 need_mb, u32 timeout_ms) {

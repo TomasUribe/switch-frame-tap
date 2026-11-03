@@ -71,9 +71,6 @@ namespace ams::mitm::applet {
     bool HeadroomNeeded();
     u32 HeadroomNeedMb();
     void HeadroomAck(u32 free_kb);
-    /* True after SwitchU AckHeadroom at least once this boot - gate for the
-     * 2 s remount wait when 100D is not currently open (stock users never wait). */
-    bool HeadroomEverAcked();
 
 }
 
