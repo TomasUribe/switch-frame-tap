@@ -45,6 +45,14 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.21" date="2026-11-03">
+      <description>
+        <ul>
+          <li>SwitchU support: with SwitchU as the HOME menu, its menu streams from boot and HOME and back work while streaming.</li>
+          <li>Final Fantasy XII in handheld streams full size, and games that draw in X8R8G8B8 get the right colours.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.20" date="2026-11-01">
       <description>
         <ul>
