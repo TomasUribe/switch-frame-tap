@@ -93,6 +93,11 @@ The full guide, with every option, is in [Install](#install).
 - **The HOME menu and the overlays** (volume bar, quick settings, power menu,
   Tesla / Ultrahand) stream only if you turn them on, on the app's **Beta**
   page; with them off it streams exactly as before.
+- **[SwitchU](https://github.com/PoloNX/SwitchU)** (a replacement HOME menu,
+  v1.4.0 or later) works with **Stream the HOME menu** on since v0.7.21: its
+  menu streams from boot, and the two hand the memory back and forth when you
+  go HOME and back (thanks to bshurikan). Its menu shows in the viewer a few
+  seconds after it shows on the console.
 - **It is experimental homebrew**, tested on a few consoles and games. Read
   [Limitations](#limitations) before installing it.
 
