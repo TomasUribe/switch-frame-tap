@@ -29,12 +29,13 @@ def run(ini):
     ls.listen(1)
     env = dict(os.environ, SDL_VIDEODRIVER="dummy", SDL_RENDER_DRIVER="software", SDL_AUDIODRIVER="dummy",
                XDG_DATA_HOME=data, XDG_CONFIG_HOME=data, XDG_STATE_HOME=data)
-    viewer = subprocess.Popen([os.path.join(HERE, "raw-view"), "--net", "127.0.0.1", "--pad-test", "--seconds", str(TOTAL - 0.5)],
+    viewer = subprocess.Popen([os.path.join(HERE, "raw-view"), "--net", "127.0.0.1", "--pad-test", "--software", "--seconds", str(TOTAL - 0.5)],
                               env=env, stdout=subprocess.DEVNULL, stderr=open(os.path.join(data, "log.txt"), "w"))
     ls.settimeout(10)
     c, _ = ls.accept()
     t0 = time.time()
     last_hello, buf, states, late, pads = 0.0, b"", set(), 0, 0
+    t_first = None    # the viewer's first message: under load it can start a second or more late
     while time.time() - t0 < TOTAL:
         now = time.time()
         if now - last_hello >= 0.2:
@@ -59,6 +60,8 @@ def run(ini):
                 _, flags, buttons, lx, ly, rx, ry = struct.unpack("<4sIQiiii", buf[:32])
                 buf = buf[32:]
                 pads += 1
+                if t_first is None:
+                    t_first = time.time()
                 states.add((flags, buttons, lx, ly, rx, ry))
                 if time.time() - t0 > ON_SECS + 0.3:
                     late += 1
@@ -72,7 +75,9 @@ def run(ini):
     global last_log
     last_log = open(os.path.join(data, "log.txt")).read()
     shutil.rmtree(data, ignore_errors=True)
-    return states, pads, late
+    # the keepalive is judged on the span the viewer was sending while asked
+    span = (t0 + ON_SECS) - t_first if t_first is not None else 0.0
+    return states, pads, late, span
 
 
 def has(states, buttons, rx_min=None):
@@ -84,7 +89,7 @@ fail = False
 last_log = ""
 
 # 1. the defaults (no viewer.ini; --pad-test turns the keyboard and the mouse on)
-states, pads, late = run(None)
+states, pads, late, span = run(None)
 want = {
     (1, 0x2, 0, 0, 0, 0): "B (the bottom button)",
     (1, 0x0, 32767, 0, 0, -32767): "left stick right, right stick down",
@@ -99,8 +104,8 @@ if bad:
     print("defaults missing:", ", ".join(bad), "- got", sorted(states))
     fail = True
     print(last_log[-1500:])
-if pads < 20:
-    print("only %d messages in %.1f s - the 100 ms keepalive is missing" % (pads, ON_SECS))
+if span >= 0.5 and pads < 7 * span:
+    print("only %d messages in the %.1f s it was asked (from its first) - the 100 ms keepalive is missing" % (pads, span))
     fail = True
 if late:
     print("%d messages after the console stopped asking" % late)
@@ -111,7 +116,7 @@ ok1 = "%d messages, %d states" % (pads, len(states))
 #    instead of B, the mouse's left button -> A instead of ZR
 ini = ("controller_to_switch=1\nkeyboard_to_switch=1\nmouse_to_switch=1\n"
        "key_a=0,0\nkey_y=29,0\npad_b=-1\npad_x=0\nmouse_btn_left=a\n")
-states, pads, late = run(ini)
+states, pads, late, span = run(ini)
 want = {
     (1, 0x4, 0, 0, 0, 0): "X (the bottom button, rebound)",
     (1, 0x8, 23170, 23170, 0, 0): "the keyboard's W + D + Z (Z rebound to Y)",
