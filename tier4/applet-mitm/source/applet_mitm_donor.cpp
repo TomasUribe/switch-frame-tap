@@ -158,11 +158,15 @@ namespace ams::mitm::applet {
             }
             return s_installed;
         }
-        /* SwitchU's menu is one libnx module (its bin/menu holds only main and
-         * main.npdm); Nintendo's Album loads rtld, main and sdk. The real Album,
-         * opened from SwitchU, never answers NeedHeadroom: taken for the menu,
-         * it sat out 3 s of asks each time it opened (logs/v0721-beta3-test2).
-         * hbmenu (hbl) is one module too, so not hbl either. Once per pid. */
+        /* SwitchU's menu: one big libnx module (bin/menu holds main and
+         * main.npdm, 10.7 MB of code) in 100D with the hbl flag - pm sets it
+         * for every 100D started without R held (default hbl_config), the
+         * menu's external code too. hbmenu is hbloader's 44 KB (the NRO it
+         * loads is module code, another memory type); the real Album (R held)
+         * has no hbl flag. Neither answers NeedHeadroom: taken for the menu,
+         * the Album sat out 3 s of asks each time (logs/v0721-beta3-test2).
+         * The hbl flag alone took the menu for hbmenu and the menu was not
+         * streamed at boot (logs/v0721-beta4-test1). Once per pid. */
         bool IsSwitchUMenu(os::ProcessId pid) {
             static constinit std::atomic<u64> s_known{0};   /* pid << 1 | menu */
             const u64 known = s_known.load(std::memory_order_relaxed);
@@ -172,22 +176,25 @@ namespace ams::mitm::applet {
             cfg::OverrideStatus st = {};
             if (R_FAILED(::ams::pm::dmnt::AtmosphereGetProcessInfo(std::addressof(h), std::addressof(loc), std::addressof(st), pid))) { return true; }
             u32 modules = 0;
-            u64 addr = 0;
+            u64 addr = 0, biggest = 0;
             for (u32 guard = 0; guard < 4096; ++guard) {
                 ::MemoryInfo mi = {};
                 u32 pi = 0;
                 if (R_FAILED(::svcQueryProcessMemory(&mi, &pi, h, addr)) || mi.size == 0) { break; }
-                if ((mi.type & MemState_Type) == MemType_CodeStatic && mi.perm == Perm_Rx) { ++modules; }
+                if ((mi.type & MemState_Type) == MemType_CodeStatic && mi.perm == Perm_Rx) {
+                    ++modules;
+                    if (mi.size > biggest) { biggest = mi.size; }
+                }
                 const u64 next = mi.addr + mi.size;
                 if (next <= addr) { break; }
                 addr = next;
             }
             os::CloseNativeHandle(h);
             if (modules == 0) { return true; }   /* not looked at: as before, and again next time */
-            const bool menu = modules <= 2 && !st.IsHbl();
+            const bool menu = st.IsHbl() && modules <= 2 && biggest >= (1ull << 20);
             s_known.store(pid.value << 1 | (menu ? 1 : 0), std::memory_order_relaxed);
-            LogLine("donor: 100D (pid %llu) is %s - %u code module(s)", static_cast<unsigned long long>(pid.value),
-                    menu ? "SwitchU's menu" : st.IsHbl() ? "hbmenu" : "the Album", modules);
+            LogLine("donor: 100D (pid %llu) is %s - %u code module(s), the biggest %llu KB, hbl flag %u", static_cast<unsigned long long>(pid.value),
+                    menu ? "SwitchU's menu" : st.IsHbl() ? "hbmenu" : "the Album", modules, static_cast<unsigned long long>(biggest >> 10), st.IsHbl() ? 1u : 0u);
             return menu;
         }
         bool SwitchURunning() {
