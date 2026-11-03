@@ -23,7 +23,7 @@ namespace ams::mitm::applet {
      * memory in use. */
     bool AppletBusy(u64 *out_mb = nullptr);
     /* Album title 010000000000100D is up - stock photoViewer, hbmenu, or SwitchU. */
-    bool AlbumOrSwitchUOpen();
+    bool SwitchUOpen();   /* PR #56: SwitchU installed and running in the Album's place */
     /* v0.7.15: what the viewer is told while AppletBusy holds the stream:
      * the keyboard has its own message (beside System Settings it always
      * pauses the stream) */

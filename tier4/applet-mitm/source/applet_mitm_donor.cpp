@@ -121,14 +121,50 @@ namespace ams::mitm::applet {
             return true;
         }
 
-        /* Any 100D: stock photoViewer, hbmenu, or SwitchU (HBL title replace).
-         * v0.7.15 only counted non-HBL Album so hbmenu's variable size did not
-         * use the tight Album margin. SwitchU coexistence needs that margin -
-         * without it BesideOther (48 MB) never clears AppletBusy while SwitchU
-         * holds ~456 of 467 MB, and NeedHeadroom never runs (DonorObtain is
-         * past the busy wait). */
+        /* v0.7.15: the real Album - not homebrew in its place, whose size
+         * varies (hbmenu, and the homebrew it starts needs the memory) */
+        bool Album100DIsHbl(bool *is_hbl) {
+            os::ProcessId pid{};
+            if (!Running(0x010000000000100Dull, std::addressof(pid))) { return false; }
+            os::NativeHandle h = os::InvalidNativeHandle;
+            ncm::ProgramLocation loc = {};
+            cfg::OverrideStatus st = {};
+            if (R_FAILED(::ams::pm::dmnt::AtmosphereGetProcessInfo(std::addressof(h), std::addressof(loc), std::addressof(st), pid))) { return false; }
+            os::CloseNativeHandle(h);
+            *is_hbl = st.IsHbl();
+            return true;
+        }
+        bool RealAlbumRunning() {
+            bool hbl = false;
+            return Album100DIsHbl(std::addressof(hbl)) && !hbl;
+        }
+
+        /* PR #56: SwitchU, a HOME menu that runs as hbl in the Album's place -
+         * only when it is installed (sdmc:/config/SwitchU, looked at every 10 s).
+         * Everyone else keeps v0.7.20's Album handling: no NeedHeadroom waits,
+         * no tight margin beside hbmenu, no boot seeding. */
+        bool SwitchUInstalled() {
+            static u64 s_checked_ns = 0;
+            static bool s_installed = false;
+            const u64 now = armTicksToNs(armGetSystemTick());
+            if (s_checked_ns == 0 || now - s_checked_ns >= UINT64_C(10000000000)) {
+                s_checked_ns = now;
+                fs::DirectoryEntryType t;
+                s_installed = R_SUCCEEDED(fs::GetEntryType(std::addressof(t), "sdmc:/config/SwitchU")) && t == fs::DirectoryEntryType_Directory;
+            }
+            return s_installed;
+        }
+        bool SwitchURunning() {
+            bool hbl = false;
+            return SwitchUInstalled() && Album100DIsHbl(std::addressof(hbl)) && hbl;
+        }
+
+        /* SwitchU coexistence needs the tight Album margin - without it
+         * BesideOther (48 MB) never clears AppletBusy while SwitchU holds ~456
+         * of 467 MB, and NeedHeadroom never runs (DonorObtain is past the busy
+         * wait) */
         bool AlbumOrSwitchURunning() {
-            return Running(0x010000000000100Dull);
+            return RealAlbumRunning() || SwitchURunning();
         }
 
         /* the HOME menu's own memory: idle it is part of the 97 MB the Applet
@@ -349,7 +385,7 @@ namespace ams::mitm::applet {
                     /* SwitchU Theme Shop / heavy overlays grow 100D in-place.
                      * Prefer NeedHeadroom reclaim over tearing the stream down
                      * when the pool went tight with no new process / web applet. */
-                    if (tight && !web && !spawned && AlbumOrSwitchURunning()) {
+                    if (tight && !web && !spawned && SwitchURunning()) {
                         static u64 s_swu_headroom_ns = 0;
                         const u64 now_hr = armTicksToNs(armGetSystemTick());
                         if (s_swu_headroom_ns == 0 || now_hr - s_swu_headroom_ns >= UINT64_C(5000000000)) {
@@ -492,7 +528,7 @@ namespace ams::mitm::applet {
 
     bool WebAppletOpen() { return WebAppletRunning(); }
 
-    bool AlbumOrSwitchUOpen() { return AlbumOrSwitchURunning(); }
+    bool SwitchUOpen() { return SwitchURunning(); }
 
     bool AppletBusy(u64 *out_mb) {
         /* idle (home menu and friends) ~96 MB; the browser 290-494 MB of 500.
@@ -562,7 +598,7 @@ namespace ams::mitm::applet {
          * session again (what #38 fixed); the pool watch catches an applet that
          * really needs the memory (g_applet_needs_memory, above). */
         static u64 s_asked_ns = 0;
-        static bool s_hold = false, s_album_now = false, s_album_was = false, s_album_inited = false;
+        static bool s_hold = false, s_album_now = false, s_album_was = false, s_album_inited = false, s_swu = false;
         const u64 now = armTicksToNs(armGetSystemTick());
         if (now - s_asked_ns >= UINT64_C(100000000)) {
             s_asked_ns = now;
@@ -572,6 +608,7 @@ namespace ams::mitm::applet {
              * freezes SwitchU capture on Theme Shop / overlay present hitches
              * (100D was already up the whole time). */
             const bool album = Running(0x010000000000100Dull);
+            s_swu = album && SwitchURunning();
             if (!s_album_inited) {
                 s_album_was = album;
                 s_album_now = album;
@@ -585,7 +622,8 @@ namespace ams::mitm::applet {
             if (out_reason != nullptr) { *out_reason = "applet hold active"; }
             return true;
         }
-        if (s_album_now && !s_album_was) {
+        /* the edge for SwitchU (always up); the Album being up, as before, for everyone else */
+        if (s_swu ? (s_album_now && !s_album_was) : s_album_now) {
             if (out_reason != nullptr) { *out_reason = "Album/SwitchU 100D up"; }
             return true;
         }
@@ -613,7 +651,7 @@ namespace ams::mitm::applet {
             need_headroom = !g_mapped;
         }
         if (need_headroom) {
-            if (AlbumOrSwitchUOpen()) {
+            if (SwitchUOpen()) {
                 /* Boot / first HOME: do not launch on a 2 s timeout while SwitchU
                  * still fills the Applet pool (soak: "launching donor anyway" with
                  * 456 MB used). Re-ask until the pool has room or we defer. */
@@ -649,7 +687,7 @@ namespace ams::mitm::applet {
         if (!g_mapped) {
             g_state.store(0);
             /* Last check: SwitchU may have filled the pool again between wait and lock */
-            if (AlbumOrSwitchUOpen()) {
+            if (SwitchUOpen()) {
                 u64 used_mb = 0;
                 if (AppletBusy(std::addressof(used_mb))) {
                     LogLine("donor: Applet pool filled again beside SwitchU (%llu MB) - deferring launch",

@@ -2088,7 +2088,7 @@ namespace ams::mitm::applet {
                  * Ask briefly for headroom; if the pool stays full, HeadroomClear
                  * at once - leaving NeedHeadroom set makes SwitchU reclaim every
                  * 100 ms (grid icons flash) while we never reach DonorObtain. */
-                if (!hold && g_ui_stream_armed && AlbumOrSwitchUOpen()) {
+                if (!hold && g_ui_stream_armed && SwitchUOpen()) {
                     static u64 s_headroom_ask_ns = 0;
                     const u64 now_ask = armTicksToNs(armGetSystemTick());
                     /* At most every 30 s - SoftLand refill needs quiet time */
@@ -3503,8 +3503,10 @@ namespace ams::mitm::applet {
             if (!UiSourceFind(std::addressof(vpid), std::addressof(base), std::addressof(ug))) {
                 /* SwitchU replaces HOME: no stock vi shared buffer. Give cold-boot
                  * SwitchU ~3.5s to remount through vi:m (binders) before seeding
-                 * content-sync slots — binders → fence path (~60fps); seed → ~14fps. */
-                if (!g_applet_surface.armed) {
+                 * content-sync slots — binders → fence path (~60fps); seed → ~14fps.
+                 * Only with SwitchU: without it this is v0.7.20's "not found". */
+                const bool swu = SwitchUOpen();
+                if (swu && !g_applet_surface.armed) {
                     static bool said_wait = false;
                     if (!said_wait) {
                         LogLine("   live-ui: waiting up to 3.5s for 100D binders (SwitchU remount)");
@@ -3520,7 +3522,7 @@ namespace ams::mitm::applet {
                     }
                     static_cast<void>(fs::DeleteFile(NeedRemount));
                 }
-                if (g_applet_surface.armed) {
+                if (swu && g_applet_surface.armed) {
                     static bool said_binder = false;
                     if (!said_binder) {
                         LogLine("   live-ui: vi shared buffer absent (SwitchU/Album) - using binder-taught 100D surface");
@@ -3530,7 +3532,7 @@ namespace ams::mitm::applet {
                 }
                 /* SwitchU replaces HOME: no stock vi shared buffer. Seed 100D so
                  * the live loop attaches via Album/hbmenu instead of live:no_game. */
-                if (SeedRunningAlbumSurface()) {
+                if (swu && SeedRunningAlbumSurface()) {
                     static bool said_seed = false;
                     if (!said_seed) {
                         LogLine("   live-ui: vi shared buffer absent (SwitchU/Album) - using seeded 100D surface");
@@ -3753,7 +3755,7 @@ namespace ams::mitm::applet {
                 const bool have_app = g_pmdmnt_rc == 0 && R_SUCCEEDED(::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid)));
                 /* Boot SwitchU: 100D was presenting before vi:m existed - prefer
                  * binder remount over seed content-sync (wait briefly first). */
-                if (g_ui_stream_armed && (g_applet_target_pid.load(std::memory_order_relaxed) == 0 || !g_applet_surface.armed)) {
+                if (g_ui_stream_armed && SwitchUOpen() && (g_applet_target_pid.load(std::memory_order_relaxed) == 0 || !g_applet_surface.armed)) {
                     if (!g_applet_surface.armed) {
                         constexpr const char NeedRemount[] = "sdmc:/config/switch-frame-tap/need_capture_remount";
                         static_cast<void>(fs::CreateDirectory("sdmc:/config/switch-frame-tap"));
@@ -3794,7 +3796,7 @@ namespace ams::mitm::applet {
                     } else if (!have_app || presenter != pid.value) {
                         presenting = false;
                     }
-                } else if (!presenting && applet_pid != 0 && g_applet_surface.armed && !have_app) {
+                } else if (!presenting && applet_pid != 0 && g_applet_surface.armed && !have_app && g_album_seed_no_binder.load(std::memory_order_relaxed)) {
                     /* Seeded 100D at boot: no binder queueBuffer through our mitm yet */
                     presenting = true;
                     applet_target = true;
