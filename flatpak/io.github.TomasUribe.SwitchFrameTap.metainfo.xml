@@ -45,6 +45,13 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.21.1" date="2026-11-03">
+      <description>
+        <ul>
+          <li>SwitchU: a game started from its menu streams from its first frame.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.21" date="2026-11-03">
       <description>
         <ul>
