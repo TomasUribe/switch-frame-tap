@@ -665,10 +665,12 @@ namespace ams::mitm::applet {
             os::ProcessId album_pid{};
             const bool album = Running(0x010000000000100Dull, std::addressof(album_pid));
             s_swu = album && SwitchURunning();
-            /* streaming SwitchU's menu itself: its pauses are not HOME - the edge
-             * came from a state last looked at in the game's session, and ended
-             * the menu's stream 0.3 s after it started (logs/v0721-beta3-test2) */
-            s_swu_self = s_swu && album_pid.value == g_live_pid.load(std::memory_order_relaxed);
+            /* with SwitchU, streaming the 100D itself (its menu, or the real
+             * Album, which streams like a game there - no vi shared buffer):
+             * its pauses are not HOME. The edge came from a state last looked
+             * at in the game's session and ended the menu's stream 0.3 s after
+             * it started (logs/v0721-beta3-test2). */
+            s_swu_self = album && SwitchUInstalled() && album_pid.value == g_live_pid.load(std::memory_order_relaxed);
             if (!s_album_inited) {
                 s_album_was = album;
                 s_album_now = album;
@@ -683,7 +685,7 @@ namespace ams::mitm::applet {
             return true;
         }
         /* the edge for SwitchU (always up); the Album being up, as before, for everyone else */
-        if (s_swu ? (s_album_now && !s_album_was && !s_swu_self) : s_album_now) {
+        if (!s_swu_self && (s_swu ? (s_album_now && !s_album_was) : s_album_now)) {
             if (out_reason != nullptr) { *out_reason = "Album/SwitchU 100D up"; }
             return true;
         }
