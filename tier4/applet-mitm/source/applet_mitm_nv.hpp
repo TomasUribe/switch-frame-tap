@@ -53,6 +53,8 @@ namespace ams::mitm::applet {
      * the process whose present was recorded last */
     extern std::atomic<u64> g_applet_target_pid;
     extern std::atomic<u64> g_present_pid;
+    /* the process a live session is attached to (0 between sessions) */
+    extern std::atomic<u64> g_live_pid;
     /* Boot seed of 100D before vi:m saw setPreallocatedBuffer/queueBuffer -
      * Capture must content-sync slots (no present fences yet). Cleared when a
      * real applet binder parcel arms the surface. */

@@ -158,9 +158,41 @@ namespace ams::mitm::applet {
             }
             return s_installed;
         }
-        /* with SwitchU active, 100D is its menu (the stock Album cannot run then) */
+        /* SwitchU's menu is one libnx module (its bin/menu holds only main and
+         * main.npdm); Nintendo's Album loads rtld, main and sdk. The real Album,
+         * opened from SwitchU, never answers NeedHeadroom: taken for the menu,
+         * it sat out 3 s of asks each time it opened (logs/v0721-beta3-test2).
+         * hbmenu (hbl) is one module too, so not hbl either. Once per pid. */
+        bool IsSwitchUMenu(os::ProcessId pid) {
+            static constinit std::atomic<u64> s_known{0};   /* pid << 1 | menu */
+            const u64 known = s_known.load(std::memory_order_relaxed);
+            if (known != 0 && (known >> 1) == pid.value) { return (known & 1) != 0; }
+            os::NativeHandle h = os::InvalidNativeHandle;
+            ncm::ProgramLocation loc = {};
+            cfg::OverrideStatus st = {};
+            if (R_FAILED(::ams::pm::dmnt::AtmosphereGetProcessInfo(std::addressof(h), std::addressof(loc), std::addressof(st), pid))) { return true; }
+            u32 modules = 0;
+            u64 addr = 0;
+            for (u32 guard = 0; guard < 4096; ++guard) {
+                ::MemoryInfo mi = {};
+                u32 pi = 0;
+                if (R_FAILED(::svcQueryProcessMemory(&mi, &pi, h, addr)) || mi.size == 0) { break; }
+                if ((mi.type & MemState_Type) == MemType_CodeStatic && mi.perm == Perm_Rx) { ++modules; }
+                const u64 next = mi.addr + mi.size;
+                if (next <= addr) { break; }
+                addr = next;
+            }
+            os::CloseNativeHandle(h);
+            if (modules == 0) { return true; }   /* not looked at: as before, and again next time */
+            const bool menu = modules <= 2 && !st.IsHbl();
+            s_known.store(pid.value << 1 | (menu ? 1 : 0), std::memory_order_relaxed);
+            LogLine("donor: 100D (pid %llu) is %s - %u code module(s)", static_cast<unsigned long long>(pid.value),
+                    menu ? "SwitchU's menu" : st.IsHbl() ? "hbmenu" : "the Album", modules);
+            return menu;
+        }
         bool SwitchURunning() {
-            return SwitchUInstalled() && Running(0x010000000000100Dull);
+            os::ProcessId pid{};
+            return SwitchUInstalled() && Running(0x010000000000100Dull, std::addressof(pid)) && IsSwitchUMenu(pid);
         }
 
         /* SwitchU coexistence needs the tight Album margin - without it
@@ -434,6 +466,25 @@ namespace ams::mitm::applet {
         if (until != s_until) { s_until = until; s_start = now; s_prev_mb = 0; s_stable_ns = 0; }
         constexpr u64 MinHoldNs = 2'000'000'000ull, SettledNs = 750'000'000ull;
         const u64 start = s_start;
+        /* SwitchU: its menu closed for the game (resume) - nothing starts in the
+         * Applet pool. The game drawing again with no 100D and the pool near
+         * idle ends the hold: its 2 s were most of the 2.8 s before a resumed
+         * game streamed again (logs/v0721-beta3-test2). The Album or another
+         * applet opened from the menu runs as 100D or fills the pool, and the
+         * game does not draw meanwhile - those wait as before. */
+        if (SwitchUInstalled() && now - start >= 300'000'000ull && !Running(0x010000000000100Dull)) {
+            constexpr u64 IdlePoolMb = 100;   /* SwitchU's daemon and the rest: 42 MB with nothing open */
+            const u64 lp = armTicksToNs(g_app_present_tick.load(std::memory_order_relaxed));
+            u64 cur = 0, lim = 0;
+            if (lp > start && now - lp < 200'000'000ull &&
+                R_SUCCEEDED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax)) &&
+                (cur >> 20) < IdlePoolMb) {
+                g_hold_until_ns.store(0, std::memory_order_relaxed);
+                LogLine("donor: the game is back (SwitchU's menu closed, the Applet pool at %llu MB) - no more waiting after %llu ms",
+                        static_cast<unsigned long long>(cur >> 20), static_cast<unsigned long long>((now - start) / 1000000));
+                return false;
+            }
+        }
         if (now - start < MinHoldNs) { return true; }
         /* v0.7.17: not between two games - the donor launched while
          * Super Mario 3D All-Stars' title list was being started (back from
@@ -602,7 +653,7 @@ namespace ams::mitm::applet {
          * session again (what #38 fixed); the pool watch catches an applet that
          * really needs the memory (g_applet_needs_memory, above). */
         static u64 s_asked_ns = 0;
-        static bool s_hold = false, s_album_now = false, s_album_was = false, s_album_inited = false, s_swu = false;
+        static bool s_hold = false, s_album_now = false, s_album_was = false, s_album_inited = false, s_swu = false, s_swu_self = false;
         const u64 now = armTicksToNs(armGetSystemTick());
         if (now - s_asked_ns >= UINT64_C(100000000)) {
             s_asked_ns = now;
@@ -611,8 +662,13 @@ namespace ams::mitm::applet {
              * Edge only: 100D *appearing* means we went HOME. Level-triggering
              * freezes SwitchU capture on Theme Shop / overlay present hitches
              * (100D was already up the whole time). */
-            const bool album = Running(0x010000000000100Dull);
+            os::ProcessId album_pid{};
+            const bool album = Running(0x010000000000100Dull, std::addressof(album_pid));
             s_swu = album && SwitchURunning();
+            /* streaming SwitchU's menu itself: its pauses are not HOME - the edge
+             * came from a state last looked at in the game's session, and ended
+             * the menu's stream 0.3 s after it started (logs/v0721-beta3-test2) */
+            s_swu_self = s_swu && album_pid.value == g_live_pid.load(std::memory_order_relaxed);
             if (!s_album_inited) {
                 s_album_was = album;
                 s_album_now = album;
@@ -627,7 +683,7 @@ namespace ams::mitm::applet {
             return true;
         }
         /* the edge for SwitchU (always up); the Album being up, as before, for everyone else */
-        if (s_swu ? (s_album_now && !s_album_was) : s_album_now) {
+        if (s_swu ? (s_album_now && !s_album_was && !s_swu_self) : s_album_now) {
             if (out_reason != nullptr) { *out_reason = "Album/SwitchU 100D up"; }
             return true;
         }

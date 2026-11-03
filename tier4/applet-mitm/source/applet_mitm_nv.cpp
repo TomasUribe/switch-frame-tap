@@ -68,6 +68,7 @@ namespace ams::mitm::applet {
     constinit GameSurface g_applet_surface = {};   /* v0.7.14 */
     constinit std::atomic<u64> g_applet_target_pid{0};
     constinit std::atomic<u64> g_present_pid{0};
+    constinit std::atomic<u64> g_live_pid{0};
     constinit std::atomic<u64> g_app_present_tick{0};
 
     namespace {
@@ -3985,8 +3986,10 @@ namespace ams::mitm::applet {
                 g_reconfig_request.store(false, std::memory_order_relaxed);   /* this session starts with the current settings */
                 const GameSurface *gp = (geo.num_slots != 0 && geo.buf_size != 0) ? std::addressof(geo) : nullptr;
                 const AttachRecord attached = NoteAttach(pid.value, applet_target);   /* v0.7.19: auto-skip */
+                g_live_pid.store(pid.value, std::memory_order_relaxed);
                 const StreamEnd end = g_uvc_raw ? TryUvcRawStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, gp)
                                                 : TryNvencStream(dbg, slot_base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true, gp);
+                g_live_pid.store(0, std::memory_order_relaxed);
                 const bool target_exited = !DbgIsDmnt(dbg) && DebugPumpTargetGone();
                 if (!DbgIsDmnt(dbg)) { DebugPumpStop(); }
                 DbgDetach(dbg);
@@ -4016,7 +4019,11 @@ namespace ams::mitm::applet {
                 else if (end != StreamEnd::Reconfigure && end != StreamEnd::Disabled && end != StreamEnd::Regrow) { os::SleepThread(TimeSpan::FromSeconds(1)); }
                 else if (end == StreamEnd::Reconfigure) {
                     os::SleepThread(TimeSpan::FromMilliSeconds(300));   /* a new buffer set registers slot by slot */
-                    SettleAfterRebuild();
+                    /* not for the Album / SwitchU's menu: it waits on the game's
+                     * presents - with no game drawing, the full 8 s every time the
+                     * Album made new buffers (logs/v0721-beta3-test2) - and
+                     * attaching to an applet does not stop a game */
+                    if (!applet_target) { SettleAfterRebuild(); }
                 }
             }
         }
