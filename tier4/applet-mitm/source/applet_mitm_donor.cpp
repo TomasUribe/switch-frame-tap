@@ -139,24 +139,28 @@ namespace ams::mitm::applet {
             return Album100DIsHbl(std::addressof(hbl)) && !hbl;
         }
 
-        /* PR #56: SwitchU, a HOME menu that runs as hbl in the Album's place -
-         * only when it is installed (sdmc:/config/SwitchU, looked at every 10 s).
-         * Everyone else keeps v0.7.20's Album handling: no NeedHeadroom waits,
-         * no tight margin beside hbmenu, no boot seeding. */
+        /* PR #56: SwitchU - a HOME menu (its daemon replaces qlaunch) whose menu
+         * takes over the Album's program id 100D through the loader's external
+         * code (ldr 65000), not hbl. Active when its folder and its qlaunch
+         * replacement are both there (a SwitchU switched off leaves the folder
+         * and renames exefs.nsp); looked at every 10 s. Everyone else keeps
+         * v0.7.20's Album handling: no NeedHeadroom waits, no tight margin
+         * beside hbmenu, no boot seeding. */
         bool SwitchUInstalled() {
             static u64 s_checked_ns = 0;
             static bool s_installed = false;
             const u64 now = armTicksToNs(armGetSystemTick());
             if (s_checked_ns == 0 || now - s_checked_ns >= UINT64_C(10000000000)) {
                 s_checked_ns = now;
-                fs::DirectoryEntryType t;
-                s_installed = R_SUCCEEDED(fs::GetEntryType(std::addressof(t), "sdmc:/config/SwitchU")) && t == fs::DirectoryEntryType_Directory;
+                fs::DirectoryEntryType t, q;
+                s_installed = R_SUCCEEDED(fs::GetEntryType(std::addressof(t), "sdmc:/config/SwitchU")) && t == fs::DirectoryEntryType_Directory &&
+                              R_SUCCEEDED(fs::GetEntryType(std::addressof(q), "sdmc:/atmosphere/contents/0100000000001000/exefs.nsp")) && q == fs::DirectoryEntryType_File;
             }
             return s_installed;
         }
+        /* with SwitchU active, 100D is its menu (the stock Album cannot run then) */
         bool SwitchURunning() {
-            bool hbl = false;
-            return SwitchUInstalled() && Album100DIsHbl(std::addressof(hbl)) && hbl;
+            return SwitchUInstalled() && Running(0x010000000000100Dull);
         }
 
         /* SwitchU coexistence needs the tight Album margin - without it
