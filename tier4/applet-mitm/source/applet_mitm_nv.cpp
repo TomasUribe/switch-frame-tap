@@ -3851,7 +3851,14 @@ namespace ams::mitm::applet {
                      * v0.7.17: loading with home_menu idle keeps engines through
                      * title-list handoffs (Duke Nukem, Super Mario 3D All-Stars). */
                     const bool web_menu = have_app && WebMenuUp();
-                    const bool loading = have_app && g_ui_stream_armed && UiSourceIdle();
+                    /* SwitchU: no vi shared buffer says the HOME menu is idle -
+                     * its menu not running says the same, the game is in front
+                     * and loading. The 5 s fallback tore the setup down while
+                     * Mario Kart loaded, and it streamed 1.5 s after its first
+                     * frame (logs/v0721-beta5-test1). HOME brings the menu up,
+                     * which ends this; an applet that starts takes the memory
+                     * back through the pool watch, as always. */
+                    const bool loading = have_app && g_ui_stream_armed && (UiSourceIdle() || SwitchUMenuClosed());
                     const bool app_hidden = have_app && pid.value != skip_pid && !presenting;
                     if (g_donor_mode && g_detach_on_home && app_hidden && !loading) {
                         const u64 now_ns = armTicksToNs(armGetSystemTick());

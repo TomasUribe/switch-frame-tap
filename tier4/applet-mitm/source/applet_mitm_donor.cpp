@@ -595,6 +595,7 @@ namespace ams::mitm::applet {
     bool WebAppletOpen() { return WebAppletRunning(); }
 
     bool SwitchUOpen() { return SwitchURunning(); }
+    bool SwitchUMenuClosed() { return SwitchUInstalled() && !Running(0x010000000000100Dull); }
 
     bool AppletBusy(u64 *out_mb) {
         /* idle (home menu and friends) ~96 MB; the browser 290-494 MB of 500.
