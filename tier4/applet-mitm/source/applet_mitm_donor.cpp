@@ -469,8 +469,8 @@ namespace ams::mitm::applet {
         const u64 until = g_hold_until_ns.load(std::memory_order_relaxed);
         if (now >= until) { return false; }
         /* counted from the first look at this hold - later, never sooner */
-        static u64 s_until = 0, s_start = 0, s_prev_mb = 0, s_stable_ns = 0;
-        if (until != s_until) { s_until = until; s_start = now; s_prev_mb = 0; s_stable_ns = 0; }
+        static u64 s_until = 0, s_start = 0, s_prev_mb = 0, s_stable_ns = 0, s_app = 0;
+        if (until != s_until) { s_until = until; s_start = now; s_prev_mb = 0; s_stable_ns = 0; s_app = g_app_pid.load(std::memory_order_relaxed); }
         constexpr u64 MinHoldNs = 2'000'000'000ull, SettledNs = 750'000'000ull;
         const u64 start = s_start;
         /* SwitchU: its menu closed for the game (resume) - nothing starts in the
@@ -479,7 +479,11 @@ namespace ams::mitm::applet {
          * game streamed again (logs/v0721-beta3-test2). The Album or another
          * applet opened from the menu runs as 100D or fills the pool, and the
          * game does not draw meanwhile - those wait as before. */
-        if (SwitchUInstalled() && now - start >= 300'000'000ull && !Running(0x010000000000100Dull)) {
+        /* the same game as when the hold began: a game just started sets its
+         * present time itself (5 s grace), and was taken for one drawing again
+         * (logs/v0721-beta5-test1) */
+        if (SwitchUInstalled() && now - start >= 300'000'000ull && s_app != 0 && g_app_pid.load(std::memory_order_relaxed) == s_app &&
+            !Running(0x010000000000100Dull)) {
             constexpr u64 IdlePoolMb = 100;   /* SwitchU's daemon and the rest: 42 MB with nothing open */
             const u64 lp = armTicksToNs(g_app_present_tick.load(std::memory_order_relaxed));
             u64 cur = 0, lim = 0;
