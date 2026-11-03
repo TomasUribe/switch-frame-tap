@@ -22,6 +22,8 @@ namespace ams::mitm::applet {
      * eShop) - the donor must not take its memory now. out_mb: Applet group
      * memory in use. */
     bool AppletBusy(u64 *out_mb = nullptr);
+    /* Album title 010000000000100D is up - stock photoViewer, hbmenu, or SwitchU. */
+    bool AlbumOrSwitchUOpen();
     /* v0.7.15: what the viewer is told while AppletBusy holds the stream:
      * the keyboard has its own message (beside System Settings it always
      * pauses the stream) */

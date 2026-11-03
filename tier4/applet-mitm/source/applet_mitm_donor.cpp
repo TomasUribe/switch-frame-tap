@@ -1,4 +1,5 @@
 #include "applet_mitm_donor.hpp"
+#include "applet_mitm_control.hpp"
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_shot.hpp"
@@ -120,15 +121,14 @@ namespace ams::mitm::applet {
             return true;
         }
 
-        bool RealAlbumRunning() {
-            os::ProcessId pid{};
-            if (!Running(0x010000000000100Dull, std::addressof(pid))) { return false; }
-            os::NativeHandle h = os::InvalidNativeHandle;
-            ncm::ProgramLocation loc = {};
-            cfg::OverrideStatus st = {};
-            if (R_FAILED(::ams::pm::dmnt::AtmosphereGetProcessInfo(std::addressof(h), std::addressof(loc), std::addressof(st), pid))) { return false; }
-            os::CloseNativeHandle(h);
-            return !st.IsHbl();
+        /* Any 100D: stock photoViewer, hbmenu, or SwitchU (HBL title replace).
+         * v0.7.15 only counted non-HBL Album so hbmenu's variable size did not
+         * use the tight Album margin. SwitchU coexistence needs that margin -
+         * without it BesideOther (48 MB) never clears AppletBusy while SwitchU
+         * holds ~456 of 467 MB, and NeedHeadroom never runs (DonorObtain is
+         * past the busy wait). */
+        bool AlbumOrSwitchURunning() {
+            return Running(0x010000000000100Dull);
         }
 
         /* the HOME menu's own memory: idle it is part of the 97 MB the Applet
@@ -158,10 +158,10 @@ namespace ams::mitm::applet {
             if (free_mb >= TightMb + FullDonorMb) { s_free.store(~u64(0), std::memory_order_relaxed); return BesideOther; }
             if (s_free.load(std::memory_order_relaxed) != free_mb) {
                 const u64 home_mb = HomeMenuMb();
-                const int kind = RealAlbumRunning() ? 1 : home_mb >= HomeWithSettingsMb ? 2 : 0;
+                const int kind = AlbumOrSwitchURunning() ? 1 : home_mb >= HomeWithSettingsMb ? 2 : 0;
                 if (s_kind.exchange(kind, std::memory_order_relaxed) != kind || s_free.load(std::memory_order_relaxed) == ~u64(0)) {
                     LogLine("donor: %llu MB free in the Applet pool - %s (the HOME menu holds %llu MB)", static_cast<unsigned long long>(free_mb),
-                            kind == 1 ? "the Album is open" : kind == 2 ? "System Settings is open" : "no Album or System Settings",
+                            kind == 1 ? "the Album / SwitchU is open" : kind == 2 ? "System Settings is open" : "no Album or System Settings",
                             static_cast<unsigned long long>(home_mb));
                 }
                 s_free.store(free_mb, std::memory_order_relaxed);
@@ -346,6 +346,29 @@ namespace ams::mitm::applet {
                 }
                 const bool trigger = web || tight || spawned;
                 if (trigger) {
+                    /* SwitchU Theme Shop / heavy overlays grow 100D in-place.
+                     * Prefer NeedHeadroom reclaim over tearing the stream down
+                     * when the pool went tight with no new process / web applet. */
+                    if (tight && !web && !spawned && AlbumOrSwitchURunning()) {
+                        static u64 s_swu_headroom_ns = 0;
+                        const u64 now_hr = armTicksToNs(armGetSystemTick());
+                        if (s_swu_headroom_ns == 0 || now_hr - s_swu_headroom_ns >= UINT64_C(5000000000)) {
+                            s_swu_headroom_ns = now_hr;
+                            const u32 ask = donor_mb > 0 ? static_cast<u32>(donor_mb + 8) : 42;
+                            LogLine("donor: Applet pool tight beside SwitchU (%llu MB free) - asking NeedHeadroom %u MB before teardown",
+                                    static_cast<unsigned long long>(free_mb), ask);
+                            HeadroomAskAndWait(ask, 1500);
+                            HeadroomClear();
+                            const u64 free_after = AppletFreeMb();
+                            if (free_after >= beside.stop_mb) {
+                                LogLine("donor: SwitchU reclaimed - pool has %llu MB free, keeping the stream",
+                                        static_cast<unsigned long long>(free_after));
+                                continue;
+                            }
+                            LogLine("donor: still tight after NeedHeadroom (%llu MB free) - stopping the stream",
+                                    static_cast<unsigned long long>(free_after));
+                        }
+                    }
                     LogDefer(true);   /* written once the memory is back (DonorRelease) */
                     g_trigger_ns = armTicksToNs(armGetSystemTick());
                     g_applet_needs_memory.store(true, std::memory_order_relaxed);
@@ -469,6 +492,8 @@ namespace ams::mitm::applet {
 
     bool WebAppletOpen() { return WebAppletRunning(); }
 
+    bool AlbumOrSwitchUOpen() { return AlbumOrSwitchURunning(); }
+
     bool AppletBusy(u64 *out_mb) {
         /* idle (home menu and friends) ~96 MB; the browser 290-494 MB of 500.
          * Launching the donor then took 42 MB from under it (test15: a
@@ -537,19 +562,30 @@ namespace ams::mitm::applet {
          * session again (what #38 fixed); the pool watch catches an applet that
          * really needs the memory (g_applet_needs_memory, above). */
         static u64 s_asked_ns = 0;
-        static bool s_hold = false, s_album = false;
+        static bool s_hold = false, s_album_now = false, s_album_was = false, s_album_inited = false;
         const u64 now = armTicksToNs(armGetSystemTick());
         if (now - s_asked_ns >= UINT64_C(100000000)) {
             s_asked_ns = now;
             s_hold = AppletHoldActive();
-            /* Stock Album / SwitchU replace qlaunch as 010000000000100D (HBL too). */
-            s_album = Running(0x010000000000100Dull);
+            /* Stock Album / SwitchU replace qlaunch as 010000000000100D (HBL too).
+             * Edge only: 100D *appearing* means we went HOME. Level-triggering
+             * freezes SwitchU capture on Theme Shop / overlay present hitches
+             * (100D was already up the whole time). */
+            const bool album = Running(0x010000000000100Dull);
+            if (!s_album_inited) {
+                s_album_was = album;
+                s_album_now = album;
+                s_album_inited = true;
+            } else {
+                s_album_was = s_album_now;
+                s_album_now = album;
+            }
         }
         if (s_hold) {
             if (out_reason != nullptr) { *out_reason = "applet hold active"; }
             return true;
         }
-        if (s_album) {
+        if (s_album_now && !s_album_was) {
             if (out_reason != nullptr) { *out_reason = "Album/SwitchU 100D up"; }
             return true;
         }
@@ -563,9 +599,65 @@ namespace ams::mitm::applet {
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {
         g_donor_change_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed);   /* its heap comes before the map */
+        /* Cap + SwitchU headroom wait outside g_lock (can sleep many seconds). */
+        u32 ask_cap = FullDonorMb;
+        {
+            const u64 free_mb = AppletFreeMb();
+            const Beside &beside = BesideNow(free_mb);
+            const u64 room = free_mb > beside.take_mb ? free_mb - beside.take_mb : 0;
+            ask_cap = room >= FullDonorMb ? FullDonorMb : (room >= MinDonorMb ? static_cast<u32>(room) : MinDonorMb);
+        }
+        bool need_headroom = false;
+        {
+            std::scoped_lock peek(g_lock);
+            need_headroom = !g_mapped;
+        }
+        if (need_headroom) {
+            if (AlbumOrSwitchUOpen()) {
+                /* Boot / first HOME: do not launch on a 2 s timeout while SwitchU
+                 * still fills the Applet pool (soak: "launching donor anyway" with
+                 * 456 MB used). Re-ask until the pool has room or we defer. */
+                constexpr u32 kTotalMs = 15000;
+                constexpr u32 kRoundMs = 2500;
+                u32 elapsed = 0;
+                bool room = false;
+                while (elapsed < kTotalMs) {
+                    HeadroomAskAndWait(ask_cap, kRoundMs);
+                    u64 used_mb = 0;
+                    if (!AppletBusy(std::addressof(used_mb))) { room = true; break; }
+                    HeadroomClear();
+                    LogLine("donor: SwitchU still holds the Applet pool (%llu MB used, need ~%u MB free) - waiting, not launching",
+                            static_cast<unsigned long long>(used_mb), ask_cap);
+                    os::SleepThread(TimeSpan::FromMilliSeconds(500));
+                    elapsed += kRoundMs + 500;
+                }
+                if (!room) {
+                    LogLine("donor: no Applet-pool headroom after %u ms beside SwitchU - deferring donor (engines will retry)",
+                            kTotalMs);
+                    HeadroomClear();
+                    return false;
+                }
+                /* Pool has room - brief re-assert so SwitchU stays light through launch */
+                HeadroomAskAndWait(ask_cap, 500);
+            } else if (HeadroomEverAcked()) {
+                /* SwitchU was present this boot - short ask before remount.
+                 * Stock (never ACK'd): no wait (Tomas #56). */
+                HeadroomAskAndWait(ask_cap, 2000);
+            }
+        }
         std::scoped_lock lk(g_lock);
         if (!g_mapped) {
             g_state.store(0);
+            /* Last check: SwitchU may have filled the pool again between wait and lock */
+            if (AlbumOrSwitchUOpen()) {
+                u64 used_mb = 0;
+                if (AppletBusy(std::addressof(used_mb))) {
+                    LogLine("donor: Applet pool filled again beside SwitchU (%llu MB) - deferring launch",
+                            static_cast<unsigned long long>(used_mb));
+                    HeadroomClear();
+                    return false;
+                }
+            }
             /* v0.7.14: beside a big applet (System Settings: the pool at 413
              * of 500 MB without us) the HOME menu streams on a smaller donor,
              * leaving the margin free (test5: 41 MB left 46 - the stream stopped) */
@@ -589,12 +681,12 @@ namespace ams::mitm::applet {
             {
                 SmUse sm_pm;
                 ::Result rc = ::pmshellInitialize();
-                if (R_FAILED(rc)) { LogLine("donor: pm:shell rc=0x%x", rc); return false; }
+                if (R_FAILED(rc)) { LogLine("donor: pm:shell rc=0x%x", rc); HeadroomClear(); return false; }
                 const NcmProgramLocation loc = { .program_id = DonorProgramId, .storageID = NcmStorageId_None, .pad = {} };
                 u64 pid = 0;
                 rc = ::pmshellLaunchProgram(0, std::addressof(loc), std::addressof(pid));
                 LogLine("donor: launch rc=0x%x pid %llu", rc, static_cast<unsigned long long>(pid));
-                if (R_FAILED(rc)) { ::pmshellExit(); return false; }
+                if (R_FAILED(rc)) { ::pmshellExit(); HeadroomClear(); return false; }
                 g_pmshell_open = true;   /* kept for TerminateDonor */
                 g_pid = pid;
             }
@@ -602,6 +694,7 @@ namespace ams::mitm::applet {
             if (g_state.load() != 1) {
                 LogLine("donor: no memory (%s, rc=0x%x)", g_state.load() == 2 ? "the Applet pool refused every size" : "no answer in 5 s", g_fail_rc);
                 TerminateDonor();
+                HeadroomClear();
                 return false;
             }
             os::AttachTransferMemory(std::addressof(g_tmem), g_size, g_handle, true);
@@ -610,11 +703,13 @@ namespace ams::mitm::applet {
                 LogLine("donor: map %llu MB rc=0x%x", static_cast<unsigned long long>(g_size >> 20), rc.GetValue());
                 os::DestroyTransferMemory(std::addressof(g_tmem));
                 TerminateDonor();
+                HeadroomClear();
                 return false;
             }
             g_mapped = true;
             g_donor_change_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed);
             LogLine("donor: %llu MB from the Applet pool mapped at %p", static_cast<unsigned long long>(g_size >> 20), g_addr);
+            HeadroomClear();
         }
         *out_addr = reinterpret_cast<uintptr_t>(g_addr);
         *out_size = g_size;

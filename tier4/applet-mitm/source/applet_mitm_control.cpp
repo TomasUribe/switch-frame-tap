@@ -43,7 +43,8 @@ namespace ams::mitm::applet {
                 Result GetStatus(sf::Out<StreamStatus> out) {
                     StreamStatus st = {};
                     st.version      = 4;
-                    st.reserved3    = (g_uvc_mode ? 1u : 0u) | (g_net_armed ? 2u : 0u) | (NetClientPresent() ? 4u : 0u) | (g_uvc_raw ? 8u : 0u) | (g_ui_stream_armed ? 16u : 0u) | (OverlaysArmed() ? 32u : 0u);   /* v0.4 webcam, v0.7 network on / viewer on the network, v0.7.7 webcam-any, v0.7.14 HOME menu, overlays */
+                    st.reserved3    = (g_uvc_mode ? 1u : 0u) | (g_net_armed ? 2u : 0u) | (NetClientPresent() ? 4u : 0u) | (g_uvc_raw ? 8u : 0u) | (g_ui_stream_armed ? 16u : 0u) | (OverlaysArmed() ? 32u : 0u)
+                        | (HeadroomNeeded() ? kReserved3NeedHeadroom : 0u);
                     st.reserved     = (g_audio_enabled.load(std::memory_order_relaxed) ? 0x100u : 0u) | g_audio_state.load(std::memory_order_relaxed);   /* v4: audio */
                     st.state        = g_live_state.load(std::memory_order_relaxed);
                     st.enabled      = g_stream_enabled.load(std::memory_order_relaxed) ? 1 : 0;
@@ -114,7 +115,13 @@ namespace ams::mitm::applet {
                 /* v0.7.14: the most the donor may take (MB) - less than the usual
                  * 42 while the HOME menu streams beside a big applet (Settings) */
                 Result GetDonorCap(sf::Out<u32> out_mb) {
-                    out_mb.SetValue(DonorCapMb());
+                    /* While NeedHeadroom is set, this is the MB we asked SwitchU for
+                     * (not shot_fails - overlay/app show that as screenshot failures). */
+                    out_mb.SetValue(HeadroomNeeded() ? HeadroomNeedMb() : DonorCapMb());
+                    R_SUCCEED();
+                }
+                Result AckHeadroom(u32 free_kb) {
+                    HeadroomAck(free_kb);
                     R_SUCCEED();
                 }
                 Result SetAppExcluded(u64 program_id, u8 excluded) {
@@ -126,7 +133,7 @@ namespace ams::mitm::applet {
 
         using ControlServerOptions = sf::hipc::DefaultServerManagerOptions;
         constexpr sm::ServiceName ControlServiceName = sm::ServiceName::Encode("sftap");
-        constexpr size_t ControlMaxSessions = 3;   /* app, overlay, v0.7.10: the memory donor */
+        constexpr size_t ControlMaxSessions = 4;   /* app, overlay, donor, SwitchU */
 
         sf::hipc::ServerManager<1, ControlServerOptions, ControlMaxSessions> g_control_manager;
         constinit sf::UnmanagedServiceObject<IStreamControl, StreamControl> g_control_object;
@@ -214,6 +221,91 @@ namespace ams::mitm::applet {
         os::SetThreadNamePointer(std::addressof(g_control_thread), "applet-mitm.Control");
         os::StartThread(std::addressof(g_control_thread));
         NoteThread(std::addressof(g_control_thread));
+    }
+
+    namespace {
+        constexpr const char NeedHeadroomFile[] = "sdmc:/config/switch-frame-tap/need_headroom";
+        constexpr const char HeadroomReadyFile[] = "sdmc:/config/SwitchU/ft_headroom_ready";
+        constinit std::atomic<bool> g_need_headroom{false};
+        constinit std::atomic<bool> g_headroom_acked{false};
+        constinit std::atomic<bool> g_headroom_ever_acked{false}; /* SwitchU seen this boot */
+        constinit std::atomic<u32> g_need_headroom_mb{0};
+        constinit std::atomic<u32> g_headroom_free_kb{0};
+
+        void WriteNeedHeadroomFile(u32 need_mb) {
+            char buf[16];
+            const int n = std::snprintf(buf, sizeof(buf), "%u\n", need_mb);
+            if (n <= 0) { return; }
+            static_cast<void>(fs::CreateDirectory("sdmc:/config/switch-frame-tap"));
+            static_cast<void>(fs::DeleteFile(NeedHeadroomFile));
+            if (R_FAILED(fs::CreateFile(NeedHeadroomFile, static_cast<s64>(n)))) { return; }
+            fs::FileHandle f;
+            if (R_FAILED(fs::OpenFile(std::addressof(f), NeedHeadroomFile, fs::OpenMode_Write))) { return; }
+            static_cast<void>(fs::WriteFile(f, 0, buf, static_cast<size_t>(n), fs::WriteOption::Flush));
+            fs::CloseFile(f);
+        }
+
+        void ClearNeedHeadroomFile() {
+            static_cast<void>(fs::DeleteFile(NeedHeadroomFile));
+            static_cast<void>(fs::DeleteFile(HeadroomReadyFile));
+        }
+
+        bool HeadroomReadyFilePresent() {
+            fs::DirectoryEntryType t;
+            return R_SUCCEEDED(fs::GetEntryType(std::addressof(t), HeadroomReadyFile));
+        }
+    }
+
+    bool HeadroomNeeded() {
+        return g_need_headroom.load(std::memory_order_relaxed);
+    }
+
+    u32 HeadroomNeedMb() {
+        return g_need_headroom_mb.load(std::memory_order_relaxed);
+    }
+
+    void HeadroomClear() {
+        g_need_headroom.store(false, std::memory_order_relaxed);
+        g_headroom_acked.store(false, std::memory_order_relaxed);
+        g_need_headroom_mb.store(0, std::memory_order_relaxed);
+        ClearNeedHeadroomFile();
+    }
+
+    void HeadroomAck(u32 free_kb) {
+        g_headroom_free_kb.store(free_kb, std::memory_order_relaxed);
+        g_headroom_acked.store(true, std::memory_order_release);
+        g_headroom_ever_acked.store(true, std::memory_order_release);
+        LogLine("sftap: SwitchU AckHeadroom free=%u KB", free_kb);
+    }
+
+    bool HeadroomEverAcked() {
+        return g_headroom_ever_acked.load(std::memory_order_relaxed);
+    }
+
+    void HeadroomAskAndWait(u32 need_mb, u32 timeout_ms) {
+        if (need_mb == 0) { need_mb = 30; }
+        g_headroom_acked.store(false, std::memory_order_relaxed);
+        g_need_headroom_mb.store(need_mb, std::memory_order_relaxed);
+        g_need_headroom.store(true, std::memory_order_release);
+        WriteNeedHeadroomFile(need_mb);
+        LogLine("sftap: NeedHeadroom %u MB - waiting up to %u ms for SwitchU", need_mb, timeout_ms);
+
+        const u32 step = 50;
+        u32 waited = 0;
+        while (waited < timeout_ms) {
+            if (g_headroom_acked.load(std::memory_order_acquire) || HeadroomReadyFilePresent()) {
+                LogLine("sftap: NeedHeadroom acknowledged after %u ms (free=%u KB)",
+                        waited, g_headroom_free_kb.load(std::memory_order_relaxed));
+                break;
+            }
+            os::SleepThread(TimeSpan::FromMilliSeconds(step));
+            waited += step;
+        }
+        if (waited >= timeout_ms) {
+            LogLine("sftap: NeedHeadroom timed out after %u ms (no ACK)", timeout_ms);
+        }
+        /* Keep the bit set until remount finishes / caller HeadroomClear - so late
+         * SwitchU polls still reclaim. Caller must clear if not launching. */
     }
 
 }

@@ -10,6 +10,9 @@
  *                            list, sdmc:/config/switch-frame-tap/excluded.txt
  *   4  SetScreenOff(u8 on) - v0.7.12: "screen off while streaming", now (the
  *                            overlay keeps config.ini's screen_off in step)
+ *  14  (reserved / unused)
+ *  15  AckHeadroom(u32 free_kb) - SwitchU finished a hard reclaim so the donor
+ *                            may remount; clears NeedHeadroom (reserved3 bit 6)
  *
  * It runs on its own server thread, never on vi:u's: nothing a client does
  * here can delay the game's binder traffic. Both commands only touch atomics
@@ -39,9 +42,14 @@ namespace ams::mitm::applet {
         u32 reserved3;       /* v0.4: bit 0 - this boot is in webcam (UVC) mode; v0.7: bit 1 - network
                                 transport on, bit 2 - a viewer is connected over the network;
                                 v0.7.7: bit 3 - webcam-any; v0.7.14: bit 4 - this boot streams the HOME menu,
-                                bit 5 - and the system overlays */
+                                bit 5 - and the system overlays;
+                                SwitchU coexistence: bit 6 - NeedHeadroom (donor about to remount;
+                                SwitchU should reclaim GPU and AckHeadroom).
+                                Requested MB is GetDonorCap (cmd 13), not shot_fails. */
     };
     static_assert(sizeof(StreamStatus) == 64);
+
+    static constexpr u32 kReserved3NeedHeadroom = 64u;
 
     /* read the persisted switch; called once at boot, before live mode can start */
     void LoadStreamEnabled();
@@ -55,6 +63,18 @@ namespace ams::mitm::applet {
     void SetExcluded(u64 program_id, bool excluded);
     bool IsExcluded(u64 program_id);
 
+    /* Ask SwitchU (GetStatus NeedHeadroom) to free applet headroom; wait up to
+     * timeout_ms for AckHeadroom or the ready file. Does not launch the donor -
+     * caller decides. Clear with HeadroomClear if not remounting. */
+    void HeadroomAskAndWait(u32 need_mb, u32 timeout_ms);
+    void HeadroomClear();
+    bool HeadroomNeeded();
+    u32 HeadroomNeedMb();
+    void HeadroomAck(u32 free_kb);
+    /* True after SwitchU AckHeadroom at least once this boot - gate for the
+     * 2 s remount wait when 100D is not currently open (stock users never wait). */
+    bool HeadroomEverAcked();
+
 }
 
 #define AMS_SFTAP_CONTROL_INTERFACE_INFO(C, H) \
@@ -66,6 +86,7 @@ namespace ams::mitm::applet {
     AMS_SF_METHOD_INFO(C, H, 10, Result, Donate, (u64 size, sf::CopyHandle &&tmem), (size, std::move(tmem))) \
     AMS_SF_METHOD_INFO(C, H, 11, Result, DonateFailed, (u32 rc), (rc)) \
     AMS_SF_METHOD_INFO(C, H, 12, Result, Donate2, (u64 size, u64 nv_size, sf::CopyHandle &&tmem, sf::CopyHandle &&nv_tmem), (size, nv_size, std::move(tmem), std::move(nv_tmem))) \
-    AMS_SF_METHOD_INFO(C, H, 13, Result, GetDonorCap, (sf::Out<u32> out_mb), (out_mb))
+    AMS_SF_METHOD_INFO(C, H, 13, Result, GetDonorCap, (sf::Out<u32> out_mb), (out_mb)) \
+    AMS_SF_METHOD_INFO(C, H, 15, Result, AckHeadroom, (u32 free_kb), (free_kb))
 
 AMS_SF_DEFINE_INTERFACE(ams::mitm::applet, IStreamControl, AMS_SFTAP_CONTROL_INTERFACE_INFO, 0x5F7A4001)
