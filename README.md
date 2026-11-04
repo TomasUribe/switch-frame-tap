@@ -711,8 +711,9 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   title override. Apps with anti-debug protection (TiCo) cannot be streamed;
   exclude them. Docked mode for homebrew (beta) works in title override and
   from forwarders, not from the Album (too little memory there for 1080p).
-- **The HOME menu** (opt-in): no sound outside games yet (the console's
-  recorder only records games); a game's manual still pauses the stream.
+- **The HOME menu** (opt-in): its sounds stream too (with **Game audio**
+  on); the sound of an applet opened from it (the eShop, the Album)
+  and of SwitchU's menu may not. A game's manual still pauses the stream.
 - **The overlays** (opt-in): copied 10-20 times a second, so they move a
   little less smoothly than the game; the power menu is copied at half
   resolution and the overlays look a bit soft at 1080p. Only the system's
@@ -985,7 +986,7 @@ dock works over the network since v0.7.0, with the quality adapting to the link.
 | Viewer: one-thread low-delay decode, vsync toggle, GPU upscaling (FSR 1, NIS, RTX VSR on Windows) | **done, on hardware** (v0.7.11) |
 | Hardware decode in the viewer (VAAPI/NVDEC on Linux, D3D11VA on Windows; VideoToolbox on macOS, off by default there) | **done, on hardware** (v0.7.12; Windows v0.7.13) |
 | USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |
-| The HOME menu and the system screens (System Settings, the user picker, the Album, the homebrew menu) | **done, on hardware** (v0.7.14, opt-in: **Stream the HOME menu** on the Beta page; no sound there yet) |
+| The HOME menu and the system screens (System Settings, the user picker, the Album, the homebrew menu) | **done, on hardware** (v0.7.14, opt-in: **Stream the HOME menu** on the Beta page; with its sound) |
 | System overlays (the volume bar, quick settings, the power menu) and Tesla/Ultrahand in the stream | **done, on hardware** (v0.7.14, opt-in: **Stream the overlays** on the Beta page; copied 10-20 times a second, the power menu at half resolution) |
 | Android / Android TV viewer (didix16's PR #17), the PC viewer's look | **done** (v0.7.14) |
 | A new Switch app (pages, the stream's state at a glance) | **done, on hardware** (v0.7.14) |
