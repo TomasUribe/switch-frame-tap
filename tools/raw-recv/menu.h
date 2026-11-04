@@ -50,7 +50,9 @@ static xform_t unit_xform(SDL_Renderer *ren)
     }
     int ow = 0, oh = 0, ww = 0, wh = 0;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
-    SDL_Window *win = SDL_RenderGetWindow(ren);
+    /* the window of the renderer: SDL_RenderGetWindow needs SDL 2.0.22 and
+     * Ubuntu 22.04 has 2.0.20, so use the one app_events keeps */
+    SDL_Window *win = g_paint_win;
     if (win) SDL_GetWindowSize(win, &ww, &wh);
     if (ww > 0 && ow > 0) t.hd = (float)ow / ww;
     return t;
