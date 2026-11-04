@@ -38,6 +38,7 @@ namespace ams::mitm::applet {
         constinit std::atomic<bool> g_rec_running{false};  /* the recorder below feeds the ring */
         constinit std::atomic<u64> g_rec_sound_ns{0};     /* v0.7.17: the recorder's last non-silent buffer */
         constinit std::atomic<u64> g_audout_ns{0};        /* v0.7.17: audout PCM last went into the ring */
+        constinit std::atomic<bool> g_home_running{false}; /* v0.7.22: the HOME menu's recorder has the ring */
 
         void Push(const u8 *p, size_t n) {
             while (g_push_lock.test_and_set(std::memory_order_acquire)) { os::SleepThread(TimeSpan::FromMicroSeconds(50)); }
@@ -134,7 +135,7 @@ namespace ams::mitm::applet {
                 /* read continuously (so a stream starts with current sound);
                  * keep it only while a stream runs */
                 if (n != 0) { g_grc_data_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed); }
-                if (g_audio_active.load(std::memory_order_relaxed) && n != 0 && !g_rec_running.load(std::memory_order_relaxed)) { Push(g_chunk, n & ~3u); }
+                if (g_audio_active.load(std::memory_order_relaxed) && n != 0 && !g_rec_running.load(std::memory_order_relaxed) && !g_home_running.load(std::memory_order_relaxed)) { Push(g_chunk, n & ~3u); }
             }
         }
 
@@ -167,27 +168,71 @@ namespace ams::mitm::applet {
         alignas(os::ThreadStackAlignment) constinit u8 g_rec_stack[8_KB];   /* a multiple of 4 KB - os::CreateThread aborts on 6 KB (the boot loop of the first build) */
         constinit os::ThreadType g_rec_thread;
 
-        ::Result RecAppend(::Service *srv, size_t i) {
-            g_recbuf[i] = {};
-            g_recbuf[i].sample_buffer_ptr = reinterpret_cast<u64>(g_rec_bufs[i]);
-            g_recbuf[i].sample_buffer_capacity = RecSize;
-            g_recbuf[i].data_size = RecSize;
-            const u64 client = reinterpret_cast<u64>(std::addressof(g_recbuf[i]));
+        /* v0.7.22: the HOME menu's recorder (HomeThread) has buffers of its own */
+        alignas(0x1000) constinit u8 g_home_bufs[RecCount][RecSize];
+        constinit RecBuffer g_home_recbuf[RecCount] = {};
+        alignas(os::ThreadStackAlignment) constinit u8 g_home_stack[8_KB];
+        constinit os::ThreadType g_home_thread;
+
+        /* one recorder's buffers: the PCM and the descriptors handed to audrec */
+        struct RecSet {
+            RecBuffer *desc;
+            u8 (*pcm)[RecSize];
+        };
+        constexpr RecSet GameRec = { g_recbuf, g_rec_bufs };
+        constexpr RecSet HomeRec = { g_home_recbuf, g_home_bufs };
+
+        ::Result RecAppend(::Service *srv, const RecSet &set, size_t i) {
+            set.desc[i] = {};
+            set.desc[i].sample_buffer_ptr = reinterpret_cast<u64>(set.pcm[i]);
+            set.desc[i].sample_buffer_capacity = RecSize;
+            set.desc[i].data_size = RecSize;
+            const u64 client = reinterpret_cast<u64>(std::addressof(set.desc[i]));
             return serviceDispatchIn(srv, 8, client,
                 .buffer_attrs = { SfBufferAttr_HipcAutoSelect | SfBufferAttr_In },
-                .buffers = { { std::addressof(g_recbuf[i]), sizeof(RecBuffer) } },
+                .buffers = { { std::addressof(set.desc[i]), sizeof(RecBuffer) } },
             );
         }
 
-        bool RecOpen(::Service *srv, ::Event *ev) {
+        /* hands each buffer the recorder has released to f(pcm, bytes), then
+         * gives it back; false if the recorder failed */
+        template<typename F>
+        bool RecRelease(::Service *srv, const RecSet &set, F f) {
+            u64 ptrs[RecCount] = {};
+            struct { u32 count; u32 pad; u64 released; } out = {};
+            const ::Result rc = serviceDispatchOut(srv, 9, out,
+                .buffer_attrs = { SfBufferAttr_HipcAutoSelect | SfBufferAttr_Out },
+                .buffers = { { ptrs, sizeof(ptrs) } },
+            );
+            if (R_FAILED(rc)) { LogLine("audio: recorder buffers rc=0x%x - stopping it", rc); return false; }
+            for (u32 k = 0; k < out.count && k < RecCount; ++k) {
+                size_t i = RecCount;
+                for (size_t j = 0; j < RecCount; ++j) { if (ptrs[k] == reinterpret_cast<u64>(std::addressof(set.desc[j]))) { i = j; } }
+                if (i == RecCount) { continue; }
+                const u64 d = set.desc[i].data_size;
+                f(set.pcm[i], (d != 0 && d <= RecSize) ? static_cast<size_t>(d) : RecSize);
+                static_cast<void>(RecAppend(srv, set, i));
+            }
+            return true;
+        }
+
+        u32 Peak(const u8 *pcm, size_t n) {
+            const s16 *smp = reinterpret_cast<const s16 *>(pcm);
+            u32 peak = 0;
+            for (size_t q = 0; q < n / 2; ++q) { const u32 a = static_cast<u32>(smp[q] < 0 ? -static_cast<s32>(smp[q]) : smp[q]); if (a > peak) { peak = a; } }
+            return peak;
+        }
+
+        /* aruid 0: the application's mix; a process id: that applet's (v0.7.22) */
+        bool RecOpen(::Service *srv, ::Event *ev, const RecSet &set, u64 aruid) {
             ::Service mgr = {};
             ::Result rc = 0;
             {
                 SmUse sm;
                 rc = smGetService(&mgr, "audrec:u");
             }
-            if (R_FAILED(rc)) { LogLine("audio: audrec:u unavailable rc=0x%x - no sound for this game", rc); return false; }
-            const struct { u32 sample_rate; u32 channel_count; u64 aruid; } in = { 48000, 2, 0 };
+            if (R_FAILED(rc)) { LogLine("audio: audrec:u unavailable rc=0x%x - no recorder sound", rc); return false; }
+            const struct { u32 sample_rate; u32 channel_count; u64 aruid; } in = { 48000, 2, aruid };
             struct { u32 sample_rate; u32 channel_count; u32 sample_format; u32 state; } out = {};
             rc = serviceDispatchInOut(&mgr, 0, in, out,
                 .in_num_handles = 1,
@@ -196,8 +241,8 @@ namespace ams::mitm::applet {
                 .out_objects = srv,
             );
             serviceClose(&mgr);
-            if (R_FAILED(rc)) { LogLine("audio: the final output recorder did not open rc=0x%x", rc); return false; }
-            LogLine("audio: final output recorder: %u Hz, %u channels, format %u", out.sample_rate, out.channel_count, out.sample_format);
+            if (R_FAILED(rc)) { LogLine("audio: the final output recorder (aruid %llu) did not open rc=0x%x", static_cast<unsigned long long>(aruid), rc); return false; }
+            LogLine("audio: final output recorder (aruid %llu): %u Hz, %u channels, format %u", static_cast<unsigned long long>(aruid), out.sample_rate, out.channel_count, out.sample_format);
             if (out.sample_rate != 48000 || out.channel_count != 2) {
                 LogLine("audio: the final output recorder gives %u Hz, %u channels, format %u - not the stream's 48 kHz stereo s16", out.sample_rate, out.channel_count, out.sample_format);
                 serviceClose(srv);
@@ -207,7 +252,7 @@ namespace ams::mitm::applet {
             rc = serviceDispatch(srv, 4, .out_handle_attrs = { SfOutHandleAttr_HipcCopy }, .out_handles = &h);
             if (R_FAILED(rc)) { LogLine("audio: recorder event rc=0x%x", rc); serviceClose(srv); return false; }
             eventLoadRemote(ev, h, true);
-            for (size_t i = 0; i < RecCount; ++i) { static_cast<void>(RecAppend(srv, i)); }
+            for (size_t i = 0; i < RecCount; ++i) { static_cast<void>(RecAppend(srv, set, i)); }
             rc = serviceDispatch(srv, 1);
             if (R_FAILED(rc)) { LogLine("audio: recorder start rc=0x%x", rc); eventClose(ev); serviceClose(srv); return false; }
             return true;
@@ -286,7 +331,7 @@ namespace ams::mitm::applet {
 
                 ::Service srv = {};
                 ::Event ev = {};
-                if (!RecOpen(&srv, &ev)) { ++failures; os::SleepThread(TimeSpan::FromSeconds(5)); continue; }
+                if (!RecOpen(&srv, &ev, GameRec, 0)) { ++failures; os::SleepThread(TimeSpan::FromSeconds(5)); continue; }
                 LogLine("audio: grc:d has no sound for this game (pid %llu) - recording its mix through the final output recorder", static_cast<unsigned long long>(app));
                 RecVolume(app);
                 g_rec_running.store(true, std::memory_order_relaxed);
@@ -299,33 +344,19 @@ namespace ams::mitm::applet {
                     const u64 g = g_grc_data_ns.load(std::memory_order_relaxed);
                     if (g != 0 && g > app_since && armTicksToNs(armGetSystemTick()) - g < UINT64_C(500000000)) { LogLine("audio: grc:d has sound again - the recorder stops"); break; }
                     if (R_FAILED(eventWait(&ev, 200000000))) { continue; }
-                    u64 ptrs[RecCount] = {};
-                    struct { u32 count; u32 pad; u64 released; } out = {};
-                    const ::Result rc = serviceDispatchOut(&srv, 9, out,
-                        .buffer_attrs = { SfBufferAttr_HipcAutoSelect | SfBufferAttr_Out },
-                        .buffers = { { ptrs, sizeof(ptrs) } },
-                    );
-                    if (R_FAILED(rc)) { LogLine("audio: recorder buffers rc=0x%x - stopping it", rc); ++failures; break; }
-                    for (u32 k = 0; k < out.count && k < RecCount; ++k) {
-                        size_t i = RecCount;
-                        for (size_t j = 0; j < RecCount; ++j) { if (ptrs[k] == reinterpret_cast<u64>(std::addressof(g_recbuf[j]))) { i = j; } }
-                        if (i == RecCount) { continue; }
-                        const u64 d = g_recbuf[i].data_size;
-                        const size_t n = (d != 0 && d <= RecSize) ? static_cast<size_t>(d) : RecSize;
-                        if (windows < 6) {
-                            const s16 *smp = reinterpret_cast<const s16 *>(g_rec_bufs[i]);
-                            for (size_t q = 0; q < n / 2; ++q) { const u32 a = static_cast<u32>(smp[q] < 0 ? -static_cast<s32>(smp[q]) : smp[q]); if (a > peak) { peak = a; } }
-                        }
+                    const bool ok = RecRelease(&srv, GameRec, [&](const u8 *pcm, size_t n) {
+                        if (windows < 6) { const u32 p = Peak(pcm, n); if (p > peak) { peak = p; } }
                         bytes += n;
                         {
-                            const u64 *w = reinterpret_cast<const u64 *>(g_rec_bufs[i]);
+                            const u64 *w = reinterpret_cast<const u64 *>(pcm);
                             for (size_t q = 0; q < n / 8; ++q) { if (w[q] != 0) { g_rec_sound_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed); break; } }
                         }
-                        /* the game's audout PCM has the ring (the recorder hears nothing of it) */
+                        /* the game's audout PCM has the ring (the recorder hears nothing of it);
+                         * v0.7.22: so has the HOME menu's recorder while the HOME menu streams */
                         const bool audout = armTicksToNs(armGetSystemTick()) - g_audout_ns.load(std::memory_order_relaxed) < UINT64_C(500000000);
-                        if (g_audio_active.load(std::memory_order_relaxed) && !audout) { Push(g_rec_bufs[i], n & ~static_cast<size_t>(3)); }
-                        static_cast<void>(RecAppend(&srv, i));
-                    }
+                        if (g_audio_active.load(std::memory_order_relaxed) && !audout && !g_home_running.load(std::memory_order_relaxed)) { Push(pcm, n & ~static_cast<size_t>(3)); }
+                    });
+                    if (!ok) { ++failures; break; }
                     /* the first minute, every 10 s: is there any sound in it (a
                      * game that blocks recording is silent; a title screen may be too) */
                     if (windows < 6 && armTicksToNs(armGetSystemTick()) - win_t0 >= UINT64_C(10000000000)) {
@@ -339,6 +370,89 @@ namespace ams::mitm::applet {
                 g_rec_running.store(false, std::memory_order_relaxed);
                 RecClose(&srv, &ev);
                 LogLine("audio: final output recorder closed after %llu KB", static_cast<unsigned long long>(bytes >> 10));
+            }
+        }
+
+        /* ---- v0.7.22: the HOME menu's sound ---------------------------------
+         * The final output recorder records the mix of one applet resource
+         * user. sound2 (logs/v0714-sound2) opened it for aruid 0 only - the
+         * application - and found the HOME menu exact zeros. Opened with
+         * qlaunch's process id as the aruid, it records the HOME menu. So:
+         * while the HOME menu is the stream's source (g_ui_session_active), this
+         * recorder has the ring - grc:d and the game's recorder keep reading
+         * but push nothing (a game behind the HOME menu is suspended), and it
+         * gives the ring back when the session ends. Volumes are only read. */
+        constexpr u64 QlaunchId = UINT64_C(0x0100000000001000);
+
+        bool HomeWanted() {
+            return g_audio_enabled.load(std::memory_order_relaxed) && g_audio_active.load(std::memory_order_relaxed) &&
+                   g_ui_session_active.load(std::memory_order_relaxed);
+        }
+
+        void HomeVolumes(u64 pid) {
+            ::Service aud = {};
+            ::Result rc = 0;
+            {
+                SmUse sm;
+                rc = smGetService(&aud, "aud:a");
+            }
+            if (R_FAILED(rc)) { return; }
+            float rec = -1.0f, master = -1.0f;
+            const ::Result r1 = serviceDispatchInOut(&aud, 8, pid, rec);
+            const ::Result r2 = serviceDispatchInOut(&aud, 4, pid, master);
+            serviceClose(&aud);
+            LogLine("audio: qlaunch's record volume %d/1000 (rc=0x%x), master volume %d/1000 (rc=0x%x)", Milli(rec), r1, Milli(master), r2);
+        }
+
+        void HomeThread(void *) {
+            u32 failures = 0;
+            for (;;) {
+                os::SleepThread(TimeSpan::FromMilliSeconds(200));
+                if (failures >= 3 || !HomeWanted()) { continue; }
+                os::ProcessId pid{0};
+                if (R_FAILED(::ams::pm::dmnt::GetProcessId(std::addressof(pid), ncm::ProgramId{QlaunchId})) || pid.value == 0) {
+                    if (++failures >= 3) { LogLine("audio: qlaunch's process id not found - no HOME menu sound this boot"); }
+                    os::SleepThread(TimeSpan::FromSeconds(5));
+                    continue;
+                }
+                ::Service srv = {};
+                ::Event ev = {};
+                if (!RecOpen(&srv, &ev, HomeRec, pid.value)) {
+                    if (++failures >= 3) { LogLine("audio: the HOME menu's recorder did not open 3 times - no HOME menu sound this boot"); }
+                    os::SleepThread(TimeSpan::FromSeconds(5));
+                    continue;
+                }
+                failures = 0;
+                LogLine("audio: the HOME menu streams - recording qlaunch's mix (aruid %llu)", static_cast<unsigned long long>(pid.value));
+                HomeVolumes(pid.value);
+                g_home_running.store(true, std::memory_order_relaxed);
+                u64 bytes = 0;
+                u32 peak = 0, windows = 0, loud = 0;
+                u64 win_t0 = armTicksToNs(armGetSystemTick());
+                while (HomeWanted()) {
+                    if (R_FAILED(eventWait(&ev, 200000000))) { continue; }
+                    const bool ok = RecRelease(&srv, HomeRec, [&](const u8 *pcm, size_t n) {
+                        const u32 p = Peak(pcm, n);
+                        if (p > peak) { peak = p; }
+                        if (p != 0) { ++loud; }
+                        bytes += n;
+                        Push(pcm, n & ~static_cast<size_t>(3));
+                    });
+                    if (!ok) { ++failures; break; }
+                    /* the first minute, every 10 s: is there any sound in it - the
+                     * one thing this recorder is not yet known to give on every firmware */
+                    if (windows < 6 && armTicksToNs(armGetSystemTick()) - win_t0 >= UINT64_C(10000000000)) {
+                        ++windows;
+                        LogLine("audio: HOME menu recorder, %u0 s in: %llu KB so far, loudest sample %u of 32767, %u buffers with sound%s", windows,
+                                static_cast<unsigned long long>(bytes >> 10), peak, loud, peak == 0 ? " (silence)" : "");
+                        peak = 0;
+                        loud = 0;
+                        win_t0 = armTicksToNs(armGetSystemTick());
+                    }
+                }
+                g_home_running.store(false, std::memory_order_relaxed);
+                RecClose(&srv, &ev);
+                LogLine("audio: the HOME menu's recorder closed after %llu KB", static_cast<unsigned long long>(bytes >> 10));
             }
         }
 
@@ -358,6 +472,13 @@ namespace ams::mitm::applet {
         os::SetThreadNamePointer(std::addressof(g_rec_thread), "applet-mitm.AudRec");
         os::StartThread(std::addressof(g_rec_thread));
         NoteThread(std::addressof(g_rec_thread));
+        /* v0.7.22: the HOME menu's recorder, while the HOME menu streams */
+        SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_home_thread), HomeThread, nullptr,
+                                        g_home_stack, sizeof(g_home_stack),
+                                        os::GetThreadPriority(os::GetCurrentThread())));
+        os::SetThreadNamePointer(std::addressof(g_home_thread), "applet-mitm.AudHome");
+        os::StartThread(std::addressof(g_home_thread));
+        NoteThread(std::addressof(g_home_thread));
     }
 
     void AudioAttachRing(u8 *ring) {
@@ -389,7 +510,7 @@ namespace ams::mitm::applet {
     }
 
     bool AudioOutWanted() {
-        if (!g_audio_active.load(std::memory_order_relaxed)) { return false; }
+        if (!g_audio_active.load(std::memory_order_relaxed) || g_home_running.load(std::memory_order_relaxed)) { return false; }
         const u64 now = armTicksToNs(armGetSystemTick());
         const u64 grc = g_grc_data_ns.load(std::memory_order_relaxed);
         if (grc != 0 && now - grc < UINT64_C(3000000000)) { return false; }
