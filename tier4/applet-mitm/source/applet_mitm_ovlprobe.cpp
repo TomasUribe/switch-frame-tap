@@ -348,7 +348,7 @@ namespace ams::mitm::applet {
     }
 
     void OvlProbeStart() {
-        SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_probe_thread), ProbeThread, nullptr, g_probe_stack, sizeof(g_probe_stack), os::GetThreadPriority(os::GetCurrentThread())));
+        SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_probe_thread), ProbeThread, nullptr, g_probe_stack, sizeof(g_probe_stack), ThreadBasePriority()));
         os::SetThreadNamePointer(std::addressof(g_probe_thread), "applet-mitm.OvlProbe");
         os::StartThread(std::addressof(g_probe_thread));
         NoteThread(std::addressof(g_probe_thread));

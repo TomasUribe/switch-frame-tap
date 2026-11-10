@@ -256,7 +256,7 @@ namespace ams::mitm::applet {
     void StartShotInput() {
         SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_input_thread), InputThread, nullptr,
                                         g_input_stack, sizeof(g_input_stack),
-                                        os::GetThreadPriority(os::GetCurrentThread())));
+                                        ThreadBasePriority()));
         os::SetThreadNamePointer(std::addressof(g_input_thread), "applet-mitm.ShotInput");
         os::StartThread(std::addressof(g_input_thread));
         NoteThread(std::addressof(g_input_thread));

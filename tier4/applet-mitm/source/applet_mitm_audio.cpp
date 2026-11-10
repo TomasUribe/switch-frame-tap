@@ -347,14 +347,14 @@ namespace ams::mitm::applet {
     void StartAudio() {
         SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_audio_thread), AudioThread, nullptr,
                                         g_audio_stack, sizeof(g_audio_stack),
-                                        os::GetThreadPriority(os::GetCurrentThread())));
+                                        ThreadBasePriority()));
         os::SetThreadNamePointer(std::addressof(g_audio_thread), "applet-mitm.Audio");
         os::StartThread(std::addressof(g_audio_thread));
         NoteThread(std::addressof(g_audio_thread));
         /* v0.7.17: the final output recorder, for games grc:d has no sound for */
         SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_rec_thread), RecThread, nullptr,
                                         g_rec_stack, sizeof(g_rec_stack),
-                                        os::GetThreadPriority(os::GetCurrentThread())));
+                                        ThreadBasePriority()));
         os::SetThreadNamePointer(std::addressof(g_rec_thread), "applet-mitm.AudRec");
         os::StartThread(std::addressof(g_rec_thread));
         NoteThread(std::addressof(g_rec_thread));

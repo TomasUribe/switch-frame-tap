@@ -311,7 +311,7 @@ namespace ams::mitm::applet {
             Feed(g_work->msgs[g_active]);
         }
         g_feed_stop.store(false, std::memory_order_relaxed);
-        if (R_FAILED(os::CreateThread(std::addressof(g_feed_thread), FeedThread, nullptr, g_feed_stack, sizeof(g_feed_stack), os::GetThreadPriority(os::GetCurrentThread())))) {
+        if (R_FAILED(os::CreateThread(std::addressof(g_feed_thread), FeedThread, nullptr, g_feed_stack, sizeof(g_feed_stack), ThreadBasePriority()))) {
             LogLine("   ui: feeder thread not created");
             return false;
         }

@@ -9868,7 +9868,7 @@ namespace ams::mitm::applet {
          * blocks on binder calls we never get scheduled to answer. Below it,
          * IPC preempts us the moment a request arrives and the worker simply
          * uses what is left. */
-        const s32 worker_prio = os::GetThreadPriority(os::GetCurrentThread()) + 4;
+        const s32 worker_prio = ThreadBasePriority() + 4;
         SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_vic_thread), VicWorkerThread, nullptr,
                                         g_vic_stack, sizeof(g_vic_stack), worker_prio));
         os::SetThreadNamePointer(std::addressof(g_vic_thread), "applet-mitm.VIC");

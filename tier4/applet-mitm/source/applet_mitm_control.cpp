@@ -217,7 +217,7 @@ namespace ams::mitm::applet {
         if (R_FAILED(r)) { return; }
         SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_control_thread), ControlThread, nullptr,
                                         g_control_stack, sizeof(g_control_stack),
-                                        os::GetThreadPriority(os::GetCurrentThread())));
+                                        ThreadBasePriority()));
         os::SetThreadNamePointer(std::addressof(g_control_thread), "applet-mitm.Control");
         os::StartThread(std::addressof(g_control_thread));
         NoteThread(std::addressof(g_control_thread));

@@ -634,7 +634,7 @@ namespace ams::mitm::applet {
         if (g_pmdmnt_rc != 0) { LogLine("app watch: pm:dmnt unavailable - homebrew applications need an application-range program id"); return; }
         SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_app_watch_thread), AppWatchThread, nullptr,
                                         g_app_watch_stack, sizeof(g_app_watch_stack),
-                                        os::GetThreadPriority(os::GetCurrentThread())));
+                                        ThreadBasePriority()));
         os::SetThreadNamePointer(std::addressof(g_app_watch_thread), "applet-mitm.AppWatch");
         os::StartThread(std::addressof(g_app_watch_thread));
         NoteThread(std::addressof(g_app_watch_thread));

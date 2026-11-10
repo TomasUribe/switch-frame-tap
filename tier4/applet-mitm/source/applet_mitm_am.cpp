@@ -181,7 +181,7 @@ namespace ams::mitm::applet {
             LogLine("am: appletOE mitm not registered rc=0x%x", rc.GetValue());
             return;
         }
-        const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
+        const s32 prio = ServerThreadPriority;
         for (size_t i = 0; i < AmThreads; ++i) {
             if (R_FAILED(os::CreateThread(std::addressof(g_am_threads[i]), AmLoopThread, nullptr, g_am_stacks[i], sizeof(g_am_stacks[i]), prio))) {
                 LogLine("am: server thread %zu not created", i);

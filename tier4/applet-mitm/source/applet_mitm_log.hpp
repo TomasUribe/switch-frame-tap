@@ -33,6 +33,20 @@ namespace ams::mitm::applet {
     extern bool g_release_mode;
     extern u32 g_arm_probe_rc;    /* GetEntryType(applet-mitm.armed) at boot */
     void LogLine(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
+    /* v0.7.22 (#57): the module's own thread priority (the NPDM's main thread,
+     * 49 for the kernel), taken at boot. Threads are created at it, not at
+     * their creator's: the threads that answer a game's calls run higher. */
+    void SetThreadBasePriority(s32 prio);
+    s32 ThreadBasePriority();
+    /* A game's frame calls (vi binder: dequeueBuffer, queueBuffer), its am
+     * messages (polled every frame by many games) and its audio wait on these
+     * threads - and the HOME menu's frames with home_menu on. At 49, below
+     * fs's workers (44-47) on the same core 3, they waited out the file system
+     * whenever a game loaded assets: stutters right after loads, viewer or
+     * not, streaming on or off (logs/github-issues/57-v0720-babuubaja). Above
+     * fs, below sm (27); they only forward, parse and hand work on. */
+    constexpr s32 ServerThreadPriority = 12;   /* 40 for the kernel */
     /* v0.7.10: true holds lines (and breadcrumbs) in memory, false writes them
      * in one go - for a teardown that must not wait on the SD card */
     void LogDefer(bool on);

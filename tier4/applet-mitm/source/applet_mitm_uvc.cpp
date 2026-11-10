@@ -475,11 +475,11 @@ namespace ams::mitm::applet {
         DefaultProbe(&g_probe, 1);
         g_commit = g_probe;
 
-        SFT_ABORT_UNLESS(os::CreateThread(&g_ep0_thread, Ep0Thread, nullptr, g_ep0_stack, sizeof(g_ep0_stack), os::GetThreadPriority(os::GetCurrentThread())));
+        SFT_ABORT_UNLESS(os::CreateThread(&g_ep0_thread, Ep0Thread, nullptr, g_ep0_stack, sizeof(g_ep0_stack), ThreadBasePriority()));
         os::SetThreadNamePointer(&g_ep0_thread, "applet-mitm.UvcEp0");
         os::StartThread(&g_ep0_thread);
         NoteThread(&g_ep0_thread);
-        SFT_ABORT_UNLESS(os::CreateThread(&g_send_thread, SendThread, nullptr, g_send_stack, sizeof(g_send_stack), os::GetThreadPriority(os::GetCurrentThread())));
+        SFT_ABORT_UNLESS(os::CreateThread(&g_send_thread, SendThread, nullptr, g_send_stack, sizeof(g_send_stack), ThreadBasePriority()));
         os::SetThreadNamePointer(&g_send_thread, "applet-mitm.UvcSend");
         os::StartThread(&g_send_thread);
         NoteThread(&g_send_thread);

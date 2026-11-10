@@ -6,6 +6,12 @@
 
 namespace ams::mitm::applet {
 
+    namespace {
+        constinit s32 g_thread_base_prio = 21;   /* 49 for the kernel, until main says */
+    }
+    void SetThreadBasePriority(s32 prio) { g_thread_base_prio = prio; }
+    s32 ThreadBasePriority() { return g_thread_base_prio; }
+
     constinit Stats g_stats = {};
 
     namespace {

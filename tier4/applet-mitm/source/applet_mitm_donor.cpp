@@ -553,7 +553,7 @@ namespace ams::mitm::applet {
     }
 
     void StartAppletWatch() {
-        const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
+        const s32 prio = ThreadBasePriority();
         if (R_FAILED(os::CreateThread(std::addressof(g_watch_thread), AppletWatchThread, nullptr, g_watch_stack, sizeof(g_watch_stack), prio))) {
             LogLine("donor: applet watch thread not created - opening a manual while streaming will crash it");
             return;

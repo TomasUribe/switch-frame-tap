@@ -287,11 +287,11 @@ namespace ams::mitm::applet {
 
     void StartNet() {
         if (!g_net_armed) { return; }
-        SFT_ABORT_UNLESS(os::CreateThread(&g_net_thread, NetThread, nullptr, g_net_stack, sizeof(g_net_stack), os::GetThreadPriority(os::GetCurrentThread())));
+        SFT_ABORT_UNLESS(os::CreateThread(&g_net_thread, NetThread, nullptr, g_net_stack, sizeof(g_net_stack), ThreadBasePriority()));
         os::SetThreadNamePointer(&g_net_thread, "applet-mitm.Net");
         os::StartThread(&g_net_thread);
         NoteThread(&g_net_thread);
-        SFT_ABORT_UNLESS(os::CreateThread(&g_send_thread, SendThread, nullptr, g_send_stack, sizeof(g_send_stack), os::GetThreadPriority(os::GetCurrentThread())));
+        SFT_ABORT_UNLESS(os::CreateThread(&g_send_thread, SendThread, nullptr, g_send_stack, sizeof(g_send_stack), ThreadBasePriority()));
         os::SetThreadNamePointer(&g_send_thread, "applet-mitm.NetSend");
         os::StartThread(&g_send_thread);
         NoteThread(&g_send_thread);

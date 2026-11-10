@@ -167,7 +167,7 @@ namespace ams::mitm::applet {
             return;
         }
         if (R_FAILED(os::CreateThread(std::addressof(g_audout_thread), AudOutLoopThread, nullptr, g_audout_stack, sizeof(g_audout_stack),
-                                      os::GetThreadPriority(os::GetCurrentThread())))) {
+                                      ServerThreadPriority))) {
             LogLine("audout: server thread not created");
             return;
         }

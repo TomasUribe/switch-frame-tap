@@ -210,7 +210,7 @@ namespace ams {
                 }
             }
             if (!any) { return; }
-            const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
+            const s32 prio = mitm::applet::ServerThreadPriority;
             for (size_t i = 0; i < UiThreads; ++i) {
                 SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_ui_threads[i]), UiLoopThread, nullptr, g_ui_stacks[i], sizeof(g_ui_stacks[i]), prio));
                 os::SetThreadNamePointer(std::addressof(g_ui_threads[i]), "applet-mitm.Ui");
@@ -329,7 +329,7 @@ namespace ams {
                 mitm::applet::LogLine("grc IPC interceptor: ARMED (this handler has hung the console before)");
             }
             SFT_ABORT_UNLESS(g_nv_server_manager.RegisterMitmServer<mitm::applet::NvDrvMitm>(NvPortIndex_Nvdrv, NvdrvMitmServiceName));
-            const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
+            const s32 prio = mitm::applet::ThreadBasePriority();
             for (size_t i = 0; i < NvThreads; ++i) {
                 SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_nv_threads[i]), NvLoopThread, nullptr,
                                                 g_nv_stacks[i], sizeof(g_nv_stacks[i]), prio));
@@ -1135,6 +1135,7 @@ namespace ams {
     }
 
     void Main() {
+        mitm::applet::SetThreadBasePriority(os::GetThreadPriority(os::GetCurrentThread()));
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
@@ -1299,7 +1300,7 @@ namespace ams {
         /* start the heartbeat before anything that can block */
         SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_hb_thread), HeartbeatThread, nullptr,
                                         g_hb_stack, sizeof(g_hb_stack),
-                                        os::GetThreadPriority(os::GetCurrentThread())));
+                                        mitm::applet::ThreadBasePriority()));
         os::SetThreadNamePointer(std::addressof(g_hb_thread), "applet-mitm.HB");
         os::StartThread(std::addressof(g_hb_thread));
         mitm::applet::NoteThread(std::addressof(g_hb_thread));
@@ -1368,7 +1369,7 @@ namespace ams {
         }
 
         {
-            const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
+            const s32 prio = mitm::applet::ServerThreadPriority;
             for (size_t i = 0; i < ViThreads - 1; ++i) {
                 SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_vi_threads[i]), ViLoopThread, nullptr,
                                                 g_vi_stacks[i], sizeof(g_vi_stacks[i]), prio));
@@ -1390,6 +1391,9 @@ namespace ams {
         }
         LogAppletLimits("after sm released");
         mitm::applet::LogMark("main:LoopProcess");
+        /* the fourth vi server thread: every other thread is started by now
+         * (they are created at the base priority, not at this one's) */
+        os::ChangeThreadPriority(os::GetCurrentThread(), mitm::applet::ServerThreadPriority);
         mitm::applet::LoopProcessSafely(g_server_manager, "vi");
         mitm::applet::LogMark("main:LoopProcess_RETURNED");
     }
@@ -1773,7 +1777,7 @@ namespace ams::mitm::applet {
     void StartUsbOutReader() {
         if (!::ams::g_usb_armed || g_uvc_mode || g_out_started) { return; }
         if (R_FAILED(os::CreateThread(std::addressof(g_out_thread), UsbOutThread, nullptr, g_out_stack, sizeof(g_out_stack),
-                                      os::GetThreadPriority(os::GetCurrentThread())))) {
+                                      mitm::applet::ThreadBasePriority()))) {
             LogLine("usb: no thread for the viewer's messages - goodbyes and requests are not read this boot");
             return;
         }
