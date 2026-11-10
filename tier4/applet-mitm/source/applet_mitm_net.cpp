@@ -264,6 +264,14 @@ namespace ams::mitm::applet {
                 const int one = 1, sndbuf = static_cast<int>(TcpTxMax);
                 bsdSetSockOpt(c, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
                 bsdSetSockOpt(c, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+                /* v0.7.22 (#80): a viewer that vanished without closing (a
+                 * phone that slept or left the Wi-Fi) blocked the send for as
+                 * long as TCP retries - minutes: the stream never ended and
+                 * with "Screen off while streaming" the screen stayed dark.
+                 * 4 s without room in the send buffer ends it, as a closed
+                 * viewer does (the viewers reconnect after 5 s without data). */
+                const timeval send_timeout = { 4, 0 };
+                bsdSetSockOpt(c, SOL_SOCKET, SO_SNDTIMEO, &send_timeout, sizeof(send_timeout));
                 g_client_ip = from.sin_addr.s_addr;
                 char s[20];
                 IpString(g_client_ip, s, sizeof(s));
