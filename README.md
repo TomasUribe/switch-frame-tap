@@ -338,6 +338,13 @@ with a file manager that can install apps (Android asks once to allow it). It
 plays the stream over the network (set the Switch's Connection to Network) or
 USB, with sound. Made by didix16.
 
+**HarmonyOS** (phones, tablets, PCs and 2-in-1s on HarmonyOS 5.0 or later):
+[NSSFT](https://appgallery.huawei.com/app/detail?id=wilk.sft.next) on
+AppGallery, made by onewilk - network or USB, controller, keyboard and an
+on-screen touch controller, and recording. Builds that also run on TVs are on
+its [releases page](https://github.com/onewilk/NSSFT/releases). A separate
+app, not made or checked here.
+
 On all of them, the viewer opens a window that says what it is waiting for (the
 Switch, its USB driver, or a game) and lists its keys; the same screen comes
 back whenever the game is closed or not on screen (the HOME menu) instead of
