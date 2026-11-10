@@ -1549,6 +1549,17 @@ static void h264_close(h264_t *d)
  * new window too (Direct3D's swap chain wants one of its own). */
 static int g_ren_swap = 0;
 
+/* v0.7.22 (#78): the menus without vsync - they are paced by their own
+ * 50-200 ms waits, and a vsync present could block for long on Wayland with
+ * NVIDIA (Hyprland: every button took seconds, "not responding"); the
+ * picture with the setting. Also the setting itself: app mode (the desktop
+ * shortcut, the Flatpak) made its window with vsync on and never applied a
+ * saved "off" until a picture came. */
+static void vsync_apply(SDL_Renderer *ren)
+{
+    if (ren) SDL_RenderSetVSync(ren, g_vsync && !g_menu);
+}
+
 static void ren_swap(SDL_Window **winp, SDL_Renderer **renp, SDL_Texture **texp)
 {
     g_ren_swap = 0;
@@ -1594,7 +1605,7 @@ static void ren_swap(SDL_Window **winp, SDL_Renderer **renp, SDL_Texture **texp)
     }
     *renp = ren;
     if (!ren) { fprintf(stderr, "\nSDL renderer: %s\n", SDL_GetError()); g_quit = 1; return; }
-    if (!g_vsync) SDL_RenderSetVSync(ren, 0);
+    vsync_apply(ren);
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
     if (SDL_GetRendererInfo(ren, &ri) == 0) fprintf(stderr, "\nrenderer: %s (for %s)\n", ri.name, up_name[g_upscaler]);
     char t[112];
@@ -1735,7 +1746,7 @@ static void act_hud(int mode)                 /* the stats overlay; -1 = the nex
 static void act_vsync(SDL_Renderer *ren, int on)
 {
     g_vsync = on;
-    SDL_RenderSetVSync(ren, g_vsync);
+    vsync_apply(ren);
     prefs_save();
     hud_toast(g_vsync ? "Vsync on" : "Vsync off: lower latency, may tear");
     fprintf(stderr, "\nvsync %s\n", g_vsync ? "on" : "off");
@@ -2352,6 +2363,7 @@ static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *r
     SDL_SetWindowTitle(win, "Switch Frame Tap - waiting for the Switch (USB cable, a game running)");
     int said = 0;
     g_menu = 1;
+    vsync_apply(ren);
     g_menu_state = MENU_WAITING;
     open_drawer_at_start();
     for (int tick = 0;; tick++) {
@@ -2601,7 +2613,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     } else {
         fprintf(stderr, "audio: %s\n", SDL_GetError());
     }
-    if (!g_vsync) SDL_RenderSetVSync(ren, 0);   /* v0.7.11: V, remembered */
+    vsync_apply(ren);   /* v0.7.11: V, remembered */
     SDL_RendererInfo ri;
     if (SDL_GetRendererInfo(ren, &ri) == 0) {
         fprintf(stderr, "renderer: %s%s\n", ri.name, (ri.flags & SDL_RENDERER_PRESENTVSYNC) ? ", vsync" : ", NO vsync");
@@ -2682,6 +2694,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                  * (the HOME menu itself streams at once with home_menu on) */
                 if (!g_menu && (!t_prev_show || (double)(nowm - t_prev_show) / (double)freq > 8.0)) {
                     g_menu = 1;
+                    vsync_apply(ren);
                     g_menu_state = t_prev_show ? MENU_PAUSED : MENU_CONNECTED;
                     if (t_prev_show) fprintf(stderr, "\nno new picture for 8 s - showing the menu\n");
                 }
@@ -2713,6 +2726,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
             const Uint64 r0 = SDL_GetPerformanceCounter();
             if (g_menu) {                      /* back from the menu: the picture's own size again */
                 g_menu = 0;
+                vsync_apply(ren);
                 if (tex) SDL_RenderSetLogicalSize(ren, (int)W, (int)H);
                 SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
             }
