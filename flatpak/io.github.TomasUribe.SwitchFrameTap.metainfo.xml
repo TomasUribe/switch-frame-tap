@@ -45,6 +45,14 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.22" date="2026-11-10">
+      <description>
+        <ul>
+          <li>The menus no longer wait for vsync (much snappier on Wayland with NVIDIA), and a saved "Vsync off" applies from the start.</li>
+          <li>On the console: fewer stutters while games load, sound on the HOME menu, and a vanished network viewer ends the stream within 4 s.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.21.1" date="2026-11-03">
       <description>
         <ul>

@@ -81,15 +81,15 @@ modules:
   - name: switch-frame-tap
     buildsystem: simple
     build-commands:
-      - gcc -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 -DSFT_VERSION='"0.7.21.1"' -I/app/include $(pkg-config --cflags sdl2 libusb-1.0) -o switch-frame-tap-viewer tools/raw-recv/raw-view.c /app/lib/libavformat.a /app/lib/libavcodec.a /app/lib/libavutil.a -lva -lva-drm $(pkg-config --libs sdl2 libusb-1.0) -ludev -lpthread -lm -ldl
+      - gcc -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 -DSFT_VERSION='"0.7.22"' -I/app/include $(pkg-config --cflags sdl2 libusb-1.0) -o switch-frame-tap-viewer tools/raw-recv/raw-view.c /app/lib/libavformat.a /app/lib/libavcodec.a /app/lib/libavutil.a -lva -lva-drm $(pkg-config --libs sdl2 libusb-1.0) -ludev -lpthread -lm -ldl
       - install -D switch-frame-tap-viewer /app/bin/switch-frame-tap-viewer
       - install -D tools/raw-recv/switch-frame-tap.svg /app/share/icons/hicolor/scalable/apps/io.github.TomasUribe.SwitchFrameTap.svg
       - install -D io.github.TomasUribe.SwitchFrameTap.desktop /app/share/applications/io.github.TomasUribe.SwitchFrameTap.desktop
       - install -D io.github.TomasUribe.SwitchFrameTap.metainfo.xml /app/share/metainfo/io.github.TomasUribe.SwitchFrameTap.metainfo.xml
     sources:
       - type: archive
-        url: https://github.com/TomasUribe/switch-frame-tap/archive/refs/tags/v0.7.21.1.tar.gz
-        sha256: a5f2d5a15970c1c889d3a8a7c12af2542354ca6cb597fba88dbb735d49d20074
+        url: https://github.com/TomasUribe/switch-frame-tap/archive/refs/tags/v0.7.22.tar.gz
+        sha256: 5043081ca4d073907a53acf555e1b32f3b63f587f306f982f0d7b19ef134460f
       - type: file
         path: io.github.TomasUribe.SwitchFrameTap.desktop
       - type: file
