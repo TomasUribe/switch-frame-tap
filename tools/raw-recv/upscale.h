@@ -39,6 +39,14 @@ static int g_up_crop_x = 0, g_up_crop_y = 0;   /* v0.7.16: its top left (Kingdom
 #define UP_CW(W) (g_up_crop_w > 0 && g_up_crop_w <= (W) ? g_up_crop_w : (W))
 #define UP_CH(H) (g_up_crop_h > 0 && g_up_crop_h <= (H) ? g_up_crop_h : (H))
 static int g_fsr_sharpness = 70;         /* macOS RCAS strength, percent */
+/* Render scale (Windows/Linux OpenGL FSR and NIS): the picture is upscaled to
+ * this percent of the window's size, then scaled down to the window - like a
+ * game's resolution scale. 100 = automatic (only when the window is bigger
+ * than the stream). 150/200/300 upscale even on a screen as big as the stream
+ * (1080p stream on a 1080p window rendered at 4K, then downsampled). */
+static int g_up_scale = 100;
+#define UP_SCALE_MAX_DIM 7680
+static void up_scale_next(void) { g_up_scale = g_up_scale < 150 ? 150 : g_up_scale < 200 ? 200 : g_up_scale < 300 ? 300 : 100; }
 static char g_up_note[72] = "";         /* why it is not available, if not */
 static char g_up_why[40] = "";          /* why the last frame was not upscaled (the overlay) */
 
@@ -192,6 +200,7 @@ typedef ptrdiff_t up_GLsizeiptr;
     X(void, glMemoryBarrier, (GLbitfield)) \
     X(void, glBindImageTexture, (GLuint, GLuint, GLint, GLboolean, GLint, GLenum, GLenum)) \
     X(void, glGenTextures, (GLsizei, GLuint *)) \
+    X(void, glDeleteTextures, (GLsizei, const GLuint *)) \
     X(void, glBindTexture, (GLenum, GLuint)) \
     X(void, glTexImage2D, (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *)) \
     X(void, glTexSubImage2D, (GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *)) \
@@ -213,7 +222,8 @@ typedef struct {
     GLuint vao, fbo, ubo;
     GLuint p_yuv, p_easu, p_rcas, p_nis, p_show;
     GLuint t_y, t_u, t_v, t_uv, t_rgb, t_mid, t_coef_scale, t_coef_usm;
-    int in_w, in_h, mid_w, mid_h;
+    GLuint t_ss;                         /* render scale > 100: the sharpened picture before it is scaled down to the window */
+    int in_w, in_h, mid_w, mid_h, ss_w, ss_h;
     int active, out_w, out_h;            /* the last frame: upscaled, and to what size */
 } up_state_t;
 static up_state_t g_up;
@@ -270,8 +280,9 @@ static const char *up_fs_show =
     "#version 430 compatibility\n"
     "layout(binding = 0) uniform sampler2D t;\n"
     "uniform ivec4 vp;\n"
+    "uniform int keep;\n"   /* 1: the texture's row 0 is the picture's bottom (the render-scale pass), no flip */
     "out vec4 o;\n"
-    "void main() { vec2 q = (gl_FragCoord.xy - vec2(vp.xy)) / vec2(vp.zw); q.y = 1.0 - q.y; o = texture(t, q); }\n";
+    "void main() { vec2 q = (gl_FragCoord.xy - vec2(vp.xy)) / vec2(vp.zw); if (keep == 0) q.y = 1.0 - q.y; o = texture(t, q); }\n";
 
 static const char *up_cs_nis_head =
     "#version 430 compatibility\n"
@@ -729,7 +740,14 @@ static int up_draw_ex(SDL_Renderer *ren, uint8_t *const data[3], const int lines
     if ((long)ow * H > (long)oh * W) { vh = oh; vw = (int)((long)oh * W / H); } else { vw = ow; vh = (int)((long)ow * H / W); }
     const int cw = UP_CW(W), ch = UP_CH(H);     /* v0.7.16: the part drawn this frame */
     const int cx = (cw < W && g_up_crop_x + cw <= W) ? g_up_crop_x : 0, cy = (ch < H && g_up_crop_y + ch <= H) ? g_up_crop_y : 0;
-    if (vw <= cw && vh <= ch && mode != UP_OFF) { up_skip("window too small", 0); if (!ext) return 0; mode = UP_OFF; }
+    int tw = vw, th = vh;                         /* the size it is upscaled to: the window's, times the render scale */
+    if (g_up_scale > 100 && mode != UP_OFF) {
+        long sw = (long)vw * g_up_scale / 100, sh = (long)vh * g_up_scale / 100;
+        if (sw > UP_SCALE_MAX_DIM) { sh = sh * UP_SCALE_MAX_DIM / sw; sw = UP_SCALE_MAX_DIM; }
+        if (sh > UP_SCALE_MAX_DIM) { sw = sw * UP_SCALE_MAX_DIM / sh; sh = UP_SCALE_MAX_DIM; }
+        tw = (int)sw; th = (int)sh;
+    }
+    if (tw <= cw && th <= ch && mode != UP_OFF) { up_skip("window too small", 0); if (!ext) return 0; mode = UP_OFF; }
     const int vx = (ow - vw) / 2, vy = (oh - vh) / 2;
 
     SDL_RenderFlush(ren);
@@ -749,11 +767,17 @@ static int up_draw_ex(SDL_Renderer *ren, uint8_t *const data[3], const int lines
         g_up.in_w = W; g_up.in_h = H;
         g_up.mid_w = g_up.mid_h = 0;
     }
-    int mw = vw, mh = vh;                         /* NIS goes up to 2x; the rest is a linear scale */
+    int mw = tw, mh = th;                         /* NIS goes up to 2x; the rest is a linear scale */
     if (mode == UP_NIS) { if (mw > 2 * cw) mw = 2 * cw; if (mh > 2 * ch) mh = 2 * ch; }
     if (mw != g_up.mid_w || mh != g_up.mid_h) {
+        if (g_up.t_mid) up_glDeleteTextures(1, &g_up.t_mid);   /* a big texture: do not leak it on every resize */
         g_up.t_mid = up_tex(GL_RGBA8, mw, mh, GL_RGBA, GL_UNSIGNED_BYTE, NULL, GL_LINEAR);
         g_up.mid_w = mw; g_up.mid_h = mh;
+    }
+    if (mode == UP_FSR && (tw != vw || th != vh) && (tw != g_up.ss_w || th != g_up.ss_h)) {
+        if (g_up.t_ss) up_glDeleteTextures(1, &g_up.t_ss);
+        g_up.t_ss = up_tex(GL_RGBA8, tw, th, GL_RGBA, GL_UNSIGNED_BYTE, NULL, GL_LINEAR);
+        g_up.ss_w = tw; g_up.ss_h = th;
     }
 
     /* the planes in, the RGB picture out */
@@ -787,6 +811,7 @@ static int up_draw_ex(SDL_Renderer *ren, uint8_t *const data[3], const int lines
         up_glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)sv.dfbo);
         up_glViewport(vx, vy, vw, vh);
         up_glUseProgram(g_up.p_show);
+        up_glUniform1i(up_glGetUniformLocation(g_up.p_show, "keep"), 0);
         up_glUniform4i(up_glGetUniformLocation(g_up.p_show, "vp"), vx, vy, vw, vh);
         up_bind(0, g_up.t_rgb);
         up_glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -794,32 +819,54 @@ static int up_draw_ex(SDL_Renderer *ren, uint8_t *const data[3], const int lines
         if (g_upscaler == UP_OFF) g_up_why[0] = 0;
         return 1;
     } else if (mode == UP_FSR) {
-        /* EASU into the picture's on-screen size */
+        /* EASU into the render size (the window's, times the render scale) */
         GLuint con[16];
-        const float rx = (float)cw / vw, ry = (float)ch / vh;   /* the drawn part over the screen; texel steps below: the whole texture */
+        const float rx = (float)cw / tw, ry = (float)ch / th;   /* the drawn part over the target; texel steps below: the whole texture */
         con[0] = fbits(rx); con[1] = fbits(ry); con[2] = fbits(0.5f * rx - 0.5f + cx); con[3] = fbits(0.5f * ry - 0.5f + cy);   /* + the part's offset (FsrEasuConOffset) */
         con[4] = fbits(1.f / W); con[5] = fbits(1.f / H); con[6] = fbits(1.f / W); con[7] = fbits(-1.f / H);
         con[8] = fbits(-1.f / W); con[9] = fbits(2.f / H); con[10] = fbits(1.f / W); con[11] = fbits(2.f / H);
         con[12] = fbits(0.f); con[13] = fbits(4.f / H); con[14] = 0; con[15] = 0;
-        up_fbo_target(g_up.t_mid, vw, vh);
+        up_fbo_target(g_up.t_mid, tw, th);
         up_glUseProgram(g_up.p_easu);
         up_glUniform4uiv(up_glGetUniformLocation(g_up.p_easu, "con"), 4, con);
         up_bind(0, g_up.t_rgb);
         up_glDrawArrays(GL_TRIANGLES, 0, 3);
-        /* RCAS onto the screen (sharpness 0.25 stops: AMD's suggested default range is 0 to 2) */
-        const float sharp = 0.25f;
+        /* RCAS sharpness in stops (0 = sharpest, 2 = softest). The setting is a
+         * percent (F9: 40 / 70 / 100); 70 is the old fixed 0.25 stops */
+        const float sharp = g_fsr_sharpness >= 70
+                                ? 0.25f * (100 - g_fsr_sharpness) / 30.0f
+                                : 0.25f + (70 - g_fsr_sharpness) / 70.0f * 1.75f;
         GLuint rc[4] = { fbits(SDL_powf(2.f, -sharp)), 0, 0, 0 };
-        up_glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)sv.dfbo);
-        up_glViewport(vx, vy, vw, vh);
-        up_glUseProgram(g_up.p_rcas);
-        up_glUniform4uiv(up_glGetUniformLocation(g_up.p_rcas, "con"), 1, rc);
-        up_glUniform4i(up_glGetUniformLocation(g_up.p_rcas, "vp"), vx, vy, vw, vh);
-        up_bind(0, g_up.t_mid);
-        up_glDrawArrays(GL_TRIANGLES, 0, 3);
+        if (tw != vw || th != vh) {
+            /* render scale: RCAS into a texture of the render size, then scaled
+             * down to the window by the GPU's linear filter (a 2x render is a
+             * clean 2x2 average per pixel) */
+            up_fbo_target(g_up.t_ss, tw, th);
+            up_glUseProgram(g_up.p_rcas);
+            up_glUniform4uiv(up_glGetUniformLocation(g_up.p_rcas, "con"), 1, rc);
+            up_glUniform4i(up_glGetUniformLocation(g_up.p_rcas, "vp"), 0, 0, tw, th);
+            up_bind(0, g_up.t_mid);
+            up_glDrawArrays(GL_TRIANGLES, 0, 3);
+            up_glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)sv.dfbo);
+            up_glViewport(vx, vy, vw, vh);
+            up_glUseProgram(g_up.p_show);
+            up_glUniform1i(up_glGetUniformLocation(g_up.p_show, "keep"), 1);
+            up_glUniform4i(up_glGetUniformLocation(g_up.p_show, "vp"), vx, vy, vw, vh);
+            up_bind(0, g_up.t_ss);
+            up_glDrawArrays(GL_TRIANGLES, 0, 3);
+        } else {
+            up_glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)sv.dfbo);
+            up_glViewport(vx, vy, vw, vh);
+            up_glUseProgram(g_up.p_rcas);
+            up_glUniform4uiv(up_glGetUniformLocation(g_up.p_rcas, "con"), 1, rc);
+            up_glUniform4i(up_glGetUniformLocation(g_up.p_rcas, "vp"), vx, vy, vw, vh);
+            up_bind(0, g_up.t_mid);
+            up_glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
     } else {
         /* NIS: the compute pass, then whatever scaling is left */
         up_nis_config_t cfg;
-        up_nis_config(&cfg, 0.5f, cx, cy, cw, ch, W, H, mw, mh);
+        up_nis_config(&cfg, SDL_min(1.0f, 0.5f * g_fsr_sharpness / 70.0f), cx, cy, cw, ch, W, H, mw, mh);
         up_glBindBuffer(GL_UNIFORM_BUFFER, g_up.ubo);
         up_glBufferData(GL_UNIFORM_BUFFER, sizeof(cfg), &cfg, GL_STREAM_DRAW);
         up_glBindBufferBase(GL_UNIFORM_BUFFER, 0, g_up.ubo);
@@ -833,13 +880,14 @@ static int up_draw_ex(SDL_Renderer *ren, uint8_t *const data[3], const int lines
         up_glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)sv.dfbo);
         up_glViewport(vx, vy, vw, vh);
         up_glUseProgram(g_up.p_show);
+        up_glUniform1i(up_glGetUniformLocation(g_up.p_show, "keep"), 0);
         up_glUniform4i(up_glGetUniformLocation(g_up.p_show, "vp"), vx, vy, vw, vh);
         up_bind(0, g_up.t_mid);
         up_glDrawArrays(GL_TRIANGLES, 0, 3);
     }
     up_restore(&sv);
     g_up_why[0] = 0;
-    g_up.active = 1; g_up.out_w = vw; g_up.out_h = vh;
+    g_up.active = 1; g_up.out_w = tw; g_up.out_h = th;
     return 1;
 #endif
 }

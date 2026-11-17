@@ -687,6 +687,7 @@ static void prefs_load(void)
         if (sscanf(line, "volume=%d", &hm) == 1 && hm >= 0 && hm <= 100) SDL_AtomicSet(&g_volume, hm);
         if (sscanf(line, "upscaler=%127s", v) == 1) up_set_by_key(v);
         if (sscanf(line, "fsr_sharpness=%d", &hm) == 1 && hm >= 0 && hm <= 100) g_fsr_sharpness = hm;
+        if (sscanf(line, "render_scale=%d", &hm) == 1 && (hm == 100 || hm == 150 || hm == 200 || hm == 300)) g_up_scale = hm;
         if (sscanf(line, "hwdec=%d", &hm) == 1) g_hwdec = hm != 0;
         if (sscanf(line, "lock_aspect=%d", &hm) == 1) g_lock_aspect = hm != 0;
         if (sscanf(line, "chromeless=%d", &hm) == 1) g_chromeless = hm != 0;
@@ -806,6 +807,7 @@ static void prefs_save(void)
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
     fprintf(f, "volume=%d\n", SDL_AtomicGet(&g_volume));
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
+    fprintf(f, "render_scale=%d\n", g_up_scale);
     fprintf(f, "one_file_recording=%d\n", g_rec_one_file);
     pad_prefs_save(f);
     fprintf(f, "update_betas=%d\nupdate_check=%d\n", g_upd_betas, g_upd_check);
@@ -878,6 +880,20 @@ static void viewer_log_init(void)
             getenv("XDG_CURRENT_DESKTOP") ? getenv("XDG_CURRENT_DESKTOP") : "?",
             getenv("WAYLAND_DISPLAY") ? getenv("WAYLAND_DISPLAY") : "-",
             getenv("DISPLAY") ? getenv("DISPLAY") : "-");
+}
+#endif
+
+#ifdef _WIN32
+/* a crash (access violation, ...) is written to viewer.log before the process
+ * dies, with the faulting address, so a silent close leaves a trace */
+static LONG WINAPI viewer_crash_filter(EXCEPTION_POINTERS *ep)
+{
+    fprintf(stderr, "\n*** CRASH: exception 0x%08lx at %p (tick %llu ms)\n",
+            (unsigned long)ep->ExceptionRecord->ExceptionCode,
+            ep->ExceptionRecord->ExceptionAddress,
+            (unsigned long long)SDL_GetTicks64());
+    fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 #endif
 
@@ -1282,6 +1298,7 @@ static void key_send_pending(void)
 static int reader_main(void *arg)
 {
     (void)arg;
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);   /* perf: keep the cable drained under CPU load */
     /* After a Switch reboot the old TCP session often goes half-open: recv
      * only times out, never errors, so g_lost never trips and --app sits on
      * the waiting menu until the user toggles USB/network. Treat sustained
@@ -1389,12 +1406,16 @@ static int reader_pop(sft_hdr_t *hdr, uint8_t **payload, size_t *cap, Uint64 *t_
     if (g_qn == 0) SDL_CondWaitTimeout(g_q_get, g_qm, (Uint32)ms);
     if (g_qn == 0) { SDL_UnlockMutex(g_qm); return 0; }
     pkt_t *p = &g_q[g_qh];
-    if (p->hdr.length > *cap) {
-        uint8_t *d = realloc(*payload, (size_t)p->hdr.length + 64);
-        if (!d) { SDL_UnlockMutex(g_qm); return 0; }
-        *payload = d; *cap = p->hdr.length;
+    /* perf: swap buffers instead of copying the whole packet (up to several MB
+     * at 1080p keyframes) while holding the queue lock, which stalled the
+     * reader - and with it the cable - for the length of the copy. The slot
+     * gets the decoder's old buffer; the reader re-grows it as needed. The
+     * 64 zeroed padding bytes the reader wrote travel with the buffer. */
+    {
+        uint8_t *td = *payload; const size_t tc = *cap;
+        *payload = p->data; *cap = p->cap;
+        p->data = td; p->cap = tc;
     }
-    memcpy(*payload, p->data, (size_t)p->hdr.length + 64);
     *hdr = p->hdr;
     *t_hdr = p->t_hdr;
     g_qh = (g_qh + 1) % QN;
@@ -1849,6 +1870,23 @@ static void act_upscaler(SDL_Renderer *ren, int mode)   /* -1 = the next one */
     fprintf(stderr, "\nupscaler: %s\n", t);
 }
 
+/* Y: the render scale of FSR / NIS - upscale to 150 / 200 / 300 % of the
+ * window's size and scale it back down, even when the window is no bigger than
+ * the stream (OpenGL FSR and NIS only; Metal and RTX VSR ignore it) */
+static void act_render_scale(void)
+{
+    char t[112];
+    up_scale_next();
+    prefs_save();
+    if (g_up_scale == 100)
+        snprintf(t, sizeof(t), "Render scale: auto (Y)");
+    else
+        snprintf(t, sizeof(t), "Render scale: %d%% of the window (Y)%s", g_up_scale,
+                 g_upscaler == UP_FSR || g_upscaler == UP_NIS ? "" : " - turn on FSR or NIS (U)");
+    hud_toast(t);
+    fprintf(stderr, "\nupscaler: %s\n", t);
+}
+
 static void act_mute(int mute)
 {
     g_mute = mute;
@@ -2276,10 +2314,22 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
         else if (key == SDLK_a) { act_lock_aspect(win, !g_lock_aspect); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_b) { act_chromeless(win, !g_chromeless); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_u) { act_upscaler(ren, -1); if (g_menu) menu_draw(ren); }
+        else if (key == SDLK_y) { act_render_scale(); }
 #ifdef __APPLE__
         else if (key == SDLK_F9) {
             g_fsr_sharpness = g_fsr_sharpness < 40 ? 40 : g_fsr_sharpness < 70 ? 70 : g_fsr_sharpness < 100 ? 100 : 40;
             act_upscaler(ren, UP_FSR);
+        }
+#else
+        else if (key == SDLK_F9) {
+            /* FSR / NIS sharpness: 40 -> 70 (default) -> 100 (sharpest) */
+            char t[112];
+            g_fsr_sharpness = g_fsr_sharpness < 40 ? 40 : g_fsr_sharpness < 70 ? 70 : g_fsr_sharpness < 100 ? 100 : 40;
+            prefs_save();
+            snprintf(t, sizeof(t), "Upscaler sharpness: %d%% (F9)%s", g_fsr_sharpness,
+                     g_upscaler == UP_FSR || g_upscaler == UP_NIS ? "" : " - turn on FSR or NIS (U)");
+            hud_toast(t);
+            fprintf(stderr, "\nupscaler: %s\n", t);
         }
 #endif
         else if (key == SDLK_m) { act_mute(!g_mute); if (g_menu) menu_draw(ren); }
@@ -2525,6 +2575,7 @@ typedef struct { h264_t *dec; FILE *rec; FILE *es; } dec_args_t;
 static int decoder_main(void *arg)
 {
     dec_args_t *a = arg;
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);   /* perf: decode is on the critical path of every frame */
     uint8_t *payload = NULL; size_t cap = 0;
     uint32_t last_kind = 0; int have_kind = 0;
     const Uint64 freq = SDL_GetPerformanceFrequency();
@@ -3077,7 +3128,12 @@ int main(int argc, char **argv)
      * 96 dpi and stretched it on a scaled display (a 4K TV at 150-300 %):
      * a soft picture and soft text */
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+    /* perf: a stream viewer should not lose its slice to background work (the
+     * source of periodic hitches); and 1 ms timers for the waits/presents */
+    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    SDL_SetHint(SDL_HINT_TIMER_RESOLUTION, "1");
 #endif
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);   /* the display loop (main thread) */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--swap")) swap_rb = 1;
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
@@ -3147,10 +3203,27 @@ int main(int argc, char **argv)
     if (g_app) {
         char *dir = SDL_GetPrefPath("switch-frame-tap", "viewer");
         if (dir) {
-            char path[1024];
+            char path[1024], prev[1024];
             snprintf(path, sizeof(path), "%sviewer.log", dir);
+            snprintf(prev, sizeof(prev), "%sviewer.prev.log", dir);
+            /* keep the previous session's log: after a crash the next start
+             * would otherwise overwrite the evidence */
+            remove(prev);
+            rename(path, prev);
             if (freopen(path, "w", stderr)) setvbuf(stderr, NULL, _IONBF, 0);
+            {
+                time_t t0 = time(NULL);
+                struct tm tmv;
+                char when[64] = "?";
+                if (localtime_s(&tmv, &t0) == 0)
+                    strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tmv);
+                SDL_version sv;
+                SDL_GetVersion(&sv);
+                fprintf(stderr, "Switch Frame Tap viewer log\nwhen: %s\nSDL %u.%u.%u  cpus: %d  ram: %d MB\n",
+                        when, sv.major, sv.minor, sv.patch, SDL_GetCPUCount(), SDL_GetSystemRAM());
+            }
             fprintf(stderr, "viewer.log: %s\n", path);
+            SetUnhandledExceptionFilter(viewer_crash_filter);
             if (g_ui_debug) fprintf(stderr, "ui_debug: on (drag/focus/chrome traces; FOCUS_CLICKTHROUGH)\n");
             SDL_free(dir);
         }
