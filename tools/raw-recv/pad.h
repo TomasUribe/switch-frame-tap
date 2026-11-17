@@ -390,6 +390,41 @@ static int pad_event(const SDL_Event *e)
     return 0;
 }
 
+/* Map viewer-relative stick / D-pad to console axes so motion matches a
+ * rotated picture (g_orient). Inverse of the CW display rotation. */
+static void pad_orient_vec(int32_t *x, int32_t *y)
+{
+    if (g_orient == 0 || (!*x && !*y)) return;
+    const int32_t ox = *x, oy = *y;
+    if (g_orient == 90) { *x = -oy; *y = ox; }
+    else if (g_orient == 180) { *x = -ox; *y = -oy; }
+    else if (g_orient == 270) { *x = oy; *y = -ox; }
+}
+
+static void pad_orient_dpad(uint64_t *b)
+{
+    if (g_orient == 0) return;
+    const uint64_t L = 1ull << 12, U = 1ull << 13, R = 1ull << 14, D = 1ull << 15;
+    const uint64_t m = (*b) & (L | U | R | D);
+    if (!m) return;
+    *b &= ~(L | U | R | D);
+    const int x = !!(m & R) - !!(m & L), y = !!(m & U) - !!(m & D);
+    int nx = x, ny = y;
+    if (g_orient == 90) { nx = -y; ny = x; }
+    else if (g_orient == 180) { nx = -x; ny = -y; }
+    else if (g_orient == 270) { nx = y; ny = -x; }
+    if (nx < 0) *b |= L; else if (nx > 0) *b |= R;
+    if (ny > 0) *b |= U; else if (ny < 0) *b |= D;
+}
+
+static void pad_orient_apply(pad_state *s)
+{
+    if (g_orient == 0) return;
+    pad_orient_vec(&s->lx, &s->ly);
+    pad_orient_vec(&s->rx, &s->ry);
+    pad_orient_dpad(&s->b);
+}
+
 /* the controller, keyboard and mouse now, as the message; 0 in flags = nothing to send */
 static void pad_build(unsigned char *msg, SDL_Window *win, int keys_free)
 {
@@ -405,6 +440,7 @@ static void pad_build(unsigned char *msg, SDL_Window *win, int keys_free)
     if (pad_keyboard_playing(win, keys_free))
         pad_apply_keyboard(g_pad_test ? g_pad_test_keys : SDL_GetKeyboardState(NULL), &s);
     if (g_mouse_cap) pad_apply_mouse(&s);
+    pad_orient_apply(&s);
     pad_put32(msg + 8, (uint32_t)s.b);
     pad_put32(msg + 12, (uint32_t)(s.b >> 32));
     pad_put32(msg + 16, (uint32_t)s.lx);

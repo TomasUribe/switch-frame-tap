@@ -160,6 +160,37 @@ static int g_lock_aspect = 1;
 static int g_lock_aspect = 0;
 #endif
 static int g_lock_aspect_cli = -1;   /* -1 = use prefs; 0/1 from --no-aspect-lock / --aspect-lock */
+/* Picture rotation for Flip-Grip / TATE (degrees CW). Settings chrome stays upright. */
+static int g_orient = 0;             /* 0, 90, 180, 270 */
+static int g_orient_btn = 1;         /* top-chrome cycle button */
+/* Bits for which angles the chrome/Y cycle visits: bit0=0°,1=90°,2=180°,3=270°. */
+static int g_orient_cycle = 0x0F;
+static int orient_bit_for_deg(int deg)
+{
+    if (deg == 90) return 1;
+    if (deg == 180) return 2;
+    if (deg == 270) return 3;
+    return 0;
+}
+static int orient_deg_for_bit(int bit)
+{
+    static const int deg[4] = { 0, 90, 180, 270 };
+    return deg[bit & 3];
+}
+/* Keep at least two cycle entries when the button is on (mirrors SwitchU). */
+static int orient_sanitize_cycle(int mask)
+{
+    mask &= 0x0F;
+    if (!g_orient_btn)
+        return mask ? mask : 0x0F;
+    int n = 0;
+    for (int i = 0; i < 4; i++) if (mask & (1 << i)) n++;
+    if (n >= 2) return mask;
+    mask |= 1 << orient_bit_for_deg(g_orient);
+    mask |= 1; /* landscape */
+    if (mask == (1 << orient_bit_for_deg(g_orient))) mask |= 2; /* +90° */
+    return mask & 0x0F;
+}
 /* Optional borderless window; drag the client area to move. Default off. */
 static int g_chromeless = 0;
 static int g_chromeless_cli = -1;
@@ -212,6 +243,14 @@ static Uint32 video_window_flags(void)
     Uint32 f = VIDEO_WINDOW_FLAGS;
     if (g_chromeless) f |= SDL_WINDOW_BORDERLESS;
     return f;
+}
+
+/* Content aspect follows display orientation: 16:9 landscape, 9:16 portrait. */
+static int aspect_portrait(void) { return g_orient == 90 || g_orient == 270; }
+static void aspect_wh(int *aw, int *ah)
+{
+    if (aspect_portrait()) { *aw = 9; *ah = 16; }
+    else { *aw = 16; *ah = 9; }
 }
 
 #ifdef _WIN32
@@ -274,20 +313,23 @@ static LRESULT CALLBACK aspect_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     }
     if (msg == WM_SIZING && g_lock_aspect) {
         RECT *r = (RECT *)lp;
-        int bw = 0, bh = 0;
+        int bw = 0, bh = 0, aw = 16, ah = 9;
         aspect_borders(hwnd, &bw, &bh);
+        aspect_wh(&aw, &ah);
         int cw = (int)(r->right - r->left) - bw;
         int ch = (int)(r->bottom - r->top) - bh;
-        if (cw < 160) cw = 160;
-        if (ch < 90) ch = 90;
+        const int min_w = aspect_portrait() ? 90 : 160;
+        const int min_h = aspect_portrait() ? 160 : 90;
+        if (cw < min_w) cw = min_w;
+        if (ch < min_h) ch = min_h;
         const int edge = (int)wp;
         if (edge == WMSZ_LEFT || edge == WMSZ_RIGHT) {
-            ch = (cw * 9 + 8) / 16;
+            ch = (cw * ah + aw / 2) / aw;
         } else if (edge == WMSZ_TOP || edge == WMSZ_BOTTOM) {
-            cw = (ch * 16 + 4) / 9;
+            cw = (ch * aw + ah / 2) / ah;
         } else {
-            const int ch2 = (cw * 9 + 8) / 16;
-            const int cw2 = (ch * 16 + 4) / 9;
+            const int ch2 = (cw * ah + aw / 2) / aw;
+            const int cw2 = (ch * aw + ah / 2) / ah;
             if ((ch2 > ch ? ch2 - ch : ch - ch2) <= (cw2 > cw ? cw2 - cw : cw - cw2)) ch = ch2;
             else cw = cw2;
         }
@@ -345,7 +387,8 @@ static void aspect_hook_window(SDL_Window *win)
 #endif
 }
 
-/* Portable snap after resize (mac/linux, or if the Win32 hook missed a frame). */
+/* Portable snap after resize (mac/linux, or if the Win32 hook missed a frame).
+ * 0°/180° → 16:9 wide; 90°/270° → 9:16 tall. Absolute, not relative to prior size. */
 static void aspect_constrain_window(SDL_Window *win)
 {
     if (!g_lock_aspect || !win) return;
@@ -353,9 +396,27 @@ static void aspect_constrain_window(SDL_Window *win)
     if (fl & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED)) return;
     int w, h;
     SDL_GetWindowSize(win, &w, &h);
-    if (w < 160) w = 160;
-    const int nh = (w * 9 + 8) / 16;
-    if (nh != h && nh >= 90) SDL_SetWindowSize(win, w, nh);
+    const int port = aspect_portrait();
+    /* Keep the longer side so resize/orient changes don't shrink the window. */
+    int major = (w > h) ? w : h;
+    if (major < 160) major = 160;
+    int minor = (major * 9 + 8) / 16;
+    if (minor < 90) minor = 90;
+    const int nw = port ? minor : major;
+    const int nh = port ? major : minor;
+    if (nw != w || nh != h) SDL_SetWindowSize(win, nw, nh);
+}
+
+/* Force window shape to match orientation (windowed + aspect lock). */
+static void aspect_apply_orient_window(SDL_Window *win, int prev_orient)
+{
+    (void)prev_orient;
+    if (!win) return;
+    const Uint32 fl = SDL_GetWindowFlags(win);
+    if (fl & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED)) return;
+    if (!g_lock_aspect) return;
+    aspect_constrain_window(win);
+    window_geom_capture(win);
 }
 
 #ifdef __linux__
@@ -674,6 +735,10 @@ static void prefs_load(void)
         if (sscanf(line, "fsr_sharpness=%d", &hm) == 1 && hm >= 0 && hm <= 100) g_fsr_sharpness = hm;
         if (sscanf(line, "hwdec=%d", &hm) == 1) g_hwdec = hm != 0;
         if (sscanf(line, "lock_aspect=%d", &hm) == 1) g_lock_aspect = hm != 0;
+        if (sscanf(line, "orientation=%d", &hm) == 1 &&
+            (hm == 0 || hm == 90 || hm == 180 || hm == 270)) g_orient = hm;
+        if (sscanf(line, "orient_button=%d", &hm) == 1) g_orient_btn = hm != 0;
+        if (sscanf(line, "orient_cycle=%d", &hm) == 1) g_orient_cycle = hm & 0x0F;
         if (sscanf(line, "chromeless=%d", &hm) == 1) g_chromeless = hm != 0;
         if (sscanf(line, "always_on_top=%d", &hm) == 1) g_always_on_top = hm != 0;
         if (sscanf(line, "one_file_recording=%d", &hm) == 1) g_rec_one_file = hm != 0;
@@ -695,6 +760,7 @@ static void prefs_load(void)
         }
     }
     fclose(f);
+    g_orient_cycle = orient_sanitize_cycle(g_orient_cycle);
 }
 
 /* --pad-test without --app: only the controller lines of viewer.ini, so a test can set the bindings */
@@ -773,7 +839,7 @@ static void prefs_save(void)
     prefs_path(path, sizeof(path));
     FILE *f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\nvsync=%d\nupscaler=%s\nhwdec=%d\nlock_aspect=%d\nchromeless=%d\nalways_on_top=%d\npicture=%d,%d,%d,%d,%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud, g_vsync, up_key[g_upscaler], g_hwdec, g_lock_aspect, g_chromeless, g_always_on_top,
+    fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\nvsync=%d\nupscaler=%s\nhwdec=%d\nlock_aspect=%d\norientation=%d\norient_button=%d\norient_cycle=%d\nchromeless=%d\nalways_on_top=%d\npicture=%d,%d,%d,%d,%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud, g_vsync, up_key[g_upscaler], g_hwdec, g_lock_aspect, g_orient, g_orient_btn, g_orient_cycle & 0x0F, g_chromeless, g_always_on_top,
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
     fprintf(f, "one_file_recording=%d\n", g_rec_one_file);
@@ -1761,12 +1827,51 @@ static void act_rec_one_file(int on)
     fprintf(stderr, "\none file per recording %s\n", g_rec_one_file ? "on" : "off");
 }
 
+static void act_orient_set(int deg)
+{
+    if (deg != 0 && deg != 90 && deg != 180 && deg != 270) deg = 0;
+    if (g_orient == deg) return;
+    const int prev = g_orient;
+    g_orient = deg;
+    aspect_apply_orient_window(g_paint_win, prev);
+    prefs_save();
+    char t[48];
+    if (g_orient == 0) snprintf(t, sizeof(t), "Orientation: landscape");
+    else snprintf(t, sizeof(t), "Orientation: %d°", g_orient);
+    hud_toast(t);
+}
+
+static void act_orient_cycle(void)
+{
+    const int mask = orient_sanitize_cycle(g_orient_cycle);
+    const int start = orient_bit_for_deg(g_orient);
+    for (int step = 1; step <= 4; step++) {
+        const int bit = (start + step) & 3;
+        if (mask & (1 << bit)) {
+            act_orient_set(orient_deg_for_bit(bit));
+            return;
+        }
+    }
+}
+
+static void act_orient_cycle_set(int bit, int on)
+{
+    bit &= 3;
+    int mask = g_orient_cycle & 0x0F;
+    if (on) mask |= 1 << bit;
+    else mask &= ~(1 << bit);
+    g_orient_cycle = orient_sanitize_cycle(mask);
+    prefs_save();
+}
+
 static void act_lock_aspect(SDL_Window *win, int on)
 {
     g_lock_aspect = on != 0;
     prefs_save();
     if (g_lock_aspect && win) aspect_constrain_window(win);
-    hud_toast(g_lock_aspect ? "Aspect lock on (16:9)" : "Aspect lock off");
+    hud_toast(g_lock_aspect
+              ? (aspect_portrait() ? "Aspect lock on (9:16)" : "Aspect lock on (16:9)")
+              : "Aspect lock off");
     fprintf(stderr, "\naspect lock %s\n", g_lock_aspect ? "on" : "off");
 }
 
@@ -1906,7 +2011,8 @@ static int view_gestures_ok(SDL_Window *win)
 }
 
 /* Blit the stream into output pixels with contain-fit + pan/zoom.
- * Clears logical size for the copy so portrait letterbox bars are paintable. */
+ * Clears logical size for the copy so portrait letterbox bars are paintable.
+ * g_orient rotates the picture (Flip-Grip / TATE); chrome stays upright. */
 static void view_video_copy(SDL_Renderer *ren, SDL_Texture *tex, const SDL_Rect *crop)
 {
     if (!ren || !tex) return;
@@ -1916,19 +2022,28 @@ static void view_video_copy(SDL_Renderer *ren, SDL_Texture *tex, const SDL_Rect 
     else SDL_QueryTexture(tex, NULL, NULL, &tw, &th);
     if (ow < 1 || oh < 1 || tw < 1 || th < 1) return;
 
-    view_clamp_pan(ow, oh, tw, th);
-    float w, h;
-    view_fit_size(ow, oh, tw, th, &w, &h);
-    const float x = ((float)ow - w) * 0.5f + g_view_pan_x;
-    const float y = ((float)oh - h) * 0.5f + g_view_pan_y;
+    const int rot = g_orient;
+    const int cw = (rot == 90 || rot == 270) ? th : tw;
+    const int ch = (rot == 90 || rot == 270) ? tw : th;
+    view_clamp_pan(ow, oh, cw, ch);
+    float disp_w, disp_h;
+    view_fit_size(ow, oh, cw, ch, &disp_w, &disp_h);
+    float dst_w = disp_w, dst_h = disp_h;
+    if (rot == 90 || rot == 270) { dst_w = disp_h; dst_h = disp_w; }
+    const float cx = (float)ow * 0.5f + g_view_pan_x;
+    const float cy = (float)oh * 0.5f + g_view_pan_y;
 
     int lw = 0, lh = 0;
     SDL_RenderGetLogicalSize(ren, &lw, &lh);
     SDL_RenderSetLogicalSize(ren, 0, 0);
     SDL_RenderSetViewport(ren, NULL);
     SDL_RenderSetScale(ren, 1.f, 1.f);
-    SDL_FRect dst = { x, y, w, h };
-    SDL_RenderCopyF(ren, tex, (crop && crop->w > 0) ? crop : NULL, &dst);
+    const SDL_Rect *src = (crop && crop->w > 0) ? crop : NULL;
+    SDL_FRect dst = { cx - dst_w * 0.5f, cy - dst_h * 0.5f, dst_w, dst_h };
+    if (rot == 0)
+        SDL_RenderCopyF(ren, tex, src, &dst);
+    else
+        SDL_RenderCopyExF(ren, tex, src, &dst, (double)rot, NULL, SDL_FLIP_NONE);
     if (lw > 0 && lh > 0) SDL_RenderSetLogicalSize(ren, lw, lh);
 }
 
@@ -1945,7 +2060,8 @@ static void viewer_repaint(void)
             /* FSR already painted */
         } else
 #endif
-        if (!zc_repaint(g_paint_ren))   /* a zero-copy frame never reached the texture */
+        /* Orientation uses SDL CopyEx — skip zerocopy GL path when rotated. */
+        if (g_orient != 0 || !zc_repaint(g_paint_ren))
             view_video_copy(g_paint_ren, g_paint_tex, g_paint_crop.w ? &g_paint_crop : NULL);
     }
     int lw = 0, lh = 0;
@@ -2238,6 +2354,7 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
         else if (key == SDLK_o || key == SDLK_F3) act_hud(-1);
         else if (key == SDLK_v) { act_vsync(ren, !g_vsync); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_a) { act_lock_aspect(win, !g_lock_aspect); if (g_menu) menu_draw(ren); }
+        else if (key == SDLK_y) { act_orient_cycle(); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_b) { act_chromeless(win, !g_chromeless); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_u) { act_upscaler(ren, -1); if (g_menu) menu_draw(ren); }
 #ifdef __APPLE__
