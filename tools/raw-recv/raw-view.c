@@ -388,50 +388,34 @@ static void aspect_hook_window(SDL_Window *win)
 }
 
 /* Portable snap after resize (mac/linux, or if the Win32 hook missed a frame).
- * Portrait orientations lock 9:16; landscape keeps 16:9. */
+ * 0°/180° → 16:9 wide; 90°/270° → 9:16 tall. Absolute, not relative to prior size. */
 static void aspect_constrain_window(SDL_Window *win)
 {
     if (!g_lock_aspect || !win) return;
     const Uint32 fl = SDL_GetWindowFlags(win);
     if (fl & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED)) return;
-    int w, h, aw = 16, ah = 9;
+    int w, h;
     SDL_GetWindowSize(win, &w, &h);
-    aspect_wh(&aw, &ah);
-    /* Flip wide↔tall when orientation family changed but size lagged. */
-    if (aspect_portrait() && w > h) { int t = w; w = h; h = t; }
-    else if (!aspect_portrait() && h > w) { int t = w; w = h; h = t; }
-    const int min_w = aspect_portrait() ? 90 : 160;
-    const int min_h = aspect_portrait() ? 160 : 90;
-    if (w < min_w) w = min_w;
-    if (h < min_h) h = min_h;
-    int nw = w, nh = h;
-    if (aspect_portrait()) {
-        /* Prefer keeping height (tall window); derive width. */
-        nw = (h * aw + ah / 2) / ah;
-        if (nw < min_w) { nw = min_w; nh = (nw * ah + aw / 2) / aw; }
-    } else {
-        nh = (w * ah + aw / 2) / aw;
-        if (nh < min_h) { nh = min_h; nw = (nh * aw + ah / 2) / ah; }
-    }
+    const int port = aspect_portrait();
+    /* Keep the longer side so resize/orient changes don't shrink the window. */
+    int major = (w > h) ? w : h;
+    if (major < 160) major = 160;
+    int minor = (major * 9 + 8) / 16;
+    if (minor < 90) minor = 90;
+    const int nw = port ? minor : major;
+    const int nh = port ? major : minor;
     if (nw != w || nh != h) SDL_SetWindowSize(win, nw, nh);
 }
 
-/* One-shot reshape when cycling landscape ↔ portrait (windowed only). */
+/* Force window shape to match orientation (windowed + aspect lock). */
 static void aspect_apply_orient_window(SDL_Window *win, int prev_orient)
 {
+    (void)prev_orient;
     if (!win) return;
     const Uint32 fl = SDL_GetWindowFlags(win);
     if (fl & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED)) return;
-    const int was_port = (prev_orient == 90 || prev_orient == 270);
-    const int now_port = aspect_portrait();
-    if (was_port == now_port) {
-        if (g_lock_aspect) aspect_constrain_window(win);
-        return;
-    }
-    int w, h;
-    SDL_GetWindowSize(win, &w, &h);
-    SDL_SetWindowSize(win, h, w); /* swap → tall or wide */
-    if (g_lock_aspect) aspect_constrain_window(win);
+    if (!g_lock_aspect) return;
+    aspect_constrain_window(win);
     window_geom_capture(win);
 }
 
