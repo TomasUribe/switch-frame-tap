@@ -3,7 +3,8 @@
 set -e
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # AMS_TREE picks another Atmosphere checkout (v0.7.11: ref/Atmosphere-1.12.0 for
-# firmware 23); its .nsp is then named after it, next to the default build
+# firmware 23; v0.7.23: ref/Atmosphere-1.12.2 for 23.5.0); its .nsp is then
+# named after it, next to the default build
 AMS="${AMS_TREE:-$REPO/ref/Atmosphere}"
 case "$AMS" in /*) ;; *) AMS="$REPO/$AMS" ;; esac
 TAG="${AMS_TREE:+-$(basename "$AMS")}"

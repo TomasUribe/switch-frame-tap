@@ -45,7 +45,8 @@ done
 rm -rf "$STAGE"
 mkdir -p "$STAGE/atmosphere/contents/0100000000000C20" "$STAGE/switch/.overlays" "$STAGE/switch/switch-frame-tap"
 # AMS_TREE / DKP_IMG (tier4/applet-mitm/build.sh) pick the Atmosphere the
-# sysmodule is built against - v0.7.11: ref/Atmosphere-1.12.0 for firmware 23
+# sysmodule is built against - v0.7.11: ref/Atmosphere-1.12.0 for firmware 23;
+# v0.7.23: ref/Atmosphere-1.12.2 (DKP_IMG with libnx b156b477) for 23.5.0
 NSP="$REPO/tier4/applet-mitm/applet-mitm${AMS_TREE:+-$(basename "$AMS_TREE")}.nsp"
 cp "$NSP" "$STAGE/atmosphere/contents/0100000000000C20/exefs.nsp"
 # v0.7.13: no boot2 flag here - the launcher (0100000000000C21) starts the

@@ -182,7 +182,7 @@ animation.*
 | Video | H.264 from the Switch's NVENC, constant QP 20 (P frames 22, v0.6.0), keyframe every 60 frames (live to the viewer over USB or Wi-Fi: every 240, plus one whenever the viewer asks); 1080p ~80 Mbps in a fast race, 720p about half; the manager's Medium / Low quality roughly half / a third of that |
 | Latency | 720p: ~20-23 ms on the console (game present -> sent) + ~21-24 ms on the PC (arrival -> on screen); 1080p: ~34 + ~25 ms |
 | Reliability | 0 lost / 0 undecodable frames in every run since M84; 0 stale or torn frames (M89) |
-| Console | Mariko, firmware 22.5.0, Atmosphère 1.11.2 (the author's); users report a Switch Lite on 23.0.0 with Atmosphère 1.12.0 |
+| Console | Mariko, firmware 23.0.1, Atmosphère 1.12.1 (the author's; before, 22.5.0 with 1.11.2); users report a Switch Lite on 23.0.0 with Atmosphère 1.12.0 |
 
 For comparison, [SysDVR](https://github.com/exelix11/SysDVR), the established
 tool, is capped at 720p30 for game video, because it reads the system's own
@@ -236,7 +236,7 @@ manager app:
 
 | | |
 |---|---|
-| A Switch running **Atmosphère** custom firmware | [Atmosphère releases](https://github.com/Atmosphere-NX/Atmosphere/releases) - tested with 1.11.2 on firmware 22.5.0 (Mariko); users report 23.0.0 (Atmosphère 1.12.0, since v0.7.11), 22.0.0 (Atmosphère 1.11.1) and 21.0.1 working. New to custom firmware: the [NH Switch Guide](https://switch.hacks.guide/). Keep a NAND backup. |
+| A Switch running **Atmosphère** custom firmware | [Atmosphère releases](https://github.com/Atmosphere-NX/Atmosphere/releases) - tested with 1.12.1 on firmware 23.0.1 and 1.11.2 on 22.5.0 (Mariko); users report 23.0.0 (Atmosphère 1.12.0, since v0.7.11), 22.0.0 (Atmosphère 1.11.1) and 21.0.1 working. **Firmware 23.5.0 needs v0.7.23 or newer** (built for Atmosphère 1.12.2; older versions stop the console at boot there). New to custom firmware: the [NH Switch Guide](https://switch.hacks.guide/). Keep a NAND backup. |
 | The **homebrew menu** | Comes with Atmosphère (`hbmenu.nro`); also [nx-hbmenu releases](https://github.com/switchbrew/nx-hbmenu/releases). It opens the manager app. |
 | A **PC or an Android device** | Windows 10/11: the viewer zip, plus the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie/). Linux: one program with everything built in, or build it with one `apt install` line. macOS 12+: the app. Android 6+ / Android TV: the APK, over the network. All [below](#install). In [webcam mode](#webcam-mode), no viewer or driver: OBS reads it as a camera. |
 | A **USB-C cable**, or a **network** | USB 2.0 is plenty; over USB the Switch stays in handheld (the dock owns the port). Use a **USB-C to USB-A** cable into a USB-A port: with a USB-C to USB-C cable the Switch can take the host role, as it does for a controller, and the PC never sees it. [Network streaming](#network-streaming-play-docked) needs no cable and works docked: Wi-Fi or the dock's LAN port, the PC on the same network. |
@@ -763,8 +763,8 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   and gives its memory back (it comes back when the game is on screen
   again), so they also open from the HOME menu; since v0.7.14 the eShop
   opens from the HOME menu while the HOME menu streams too.
-- **Few consoles tested.** The author's Mariko (firmware 22.5.0, Atmosphère
-  1.11.2), plus users' reports: a Switch Lite on 23.0.0 (Atmosphère 1.12.0),
+- **Few consoles tested.** The author's Mariko (firmware 23.0.1, Atmosphère
+  1.12.1; before, 22.5.0 with 1.11.2), plus users' reports: a Switch Lite on 23.0.0 (Atmosphère 1.12.0),
   23.0.1, 22.0.0 and 21.0.1.
 
 ## If something goes wrong
