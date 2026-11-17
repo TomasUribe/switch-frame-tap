@@ -160,6 +160,9 @@ static int g_lock_aspect = 1;
 static int g_lock_aspect = 0;
 #endif
 static int g_lock_aspect_cli = -1;   /* -1 = use prefs; 0/1 from --no-aspect-lock / --aspect-lock */
+/* Picture rotation for Flip-Grip / TATE (degrees CW). Settings chrome stays upright. */
+static int g_orient = 0;             /* 0, 90, 180, 270 */
+static int g_orient_btn = 1;         /* top-chrome cycle button */
 /* Optional borderless window; drag the client area to move. Default off. */
 static int g_chromeless = 0;
 static int g_chromeless_cli = -1;
@@ -674,6 +677,9 @@ static void prefs_load(void)
         if (sscanf(line, "fsr_sharpness=%d", &hm) == 1 && hm >= 0 && hm <= 100) g_fsr_sharpness = hm;
         if (sscanf(line, "hwdec=%d", &hm) == 1) g_hwdec = hm != 0;
         if (sscanf(line, "lock_aspect=%d", &hm) == 1) g_lock_aspect = hm != 0;
+        if (sscanf(line, "orientation=%d", &hm) == 1 &&
+            (hm == 0 || hm == 90 || hm == 180 || hm == 270)) g_orient = hm;
+        if (sscanf(line, "orient_button=%d", &hm) == 1) g_orient_btn = hm != 0;
         if (sscanf(line, "chromeless=%d", &hm) == 1) g_chromeless = hm != 0;
         if (sscanf(line, "always_on_top=%d", &hm) == 1) g_always_on_top = hm != 0;
         if (sscanf(line, "one_file_recording=%d", &hm) == 1) g_rec_one_file = hm != 0;
@@ -773,7 +779,7 @@ static void prefs_save(void)
     prefs_path(path, sizeof(path));
     FILE *f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\nvsync=%d\nupscaler=%s\nhwdec=%d\nlock_aspect=%d\nchromeless=%d\nalways_on_top=%d\npicture=%d,%d,%d,%d,%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud, g_vsync, up_key[g_upscaler], g_hwdec, g_lock_aspect, g_chromeless, g_always_on_top,
+    fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\nvsync=%d\nupscaler=%s\nhwdec=%d\nlock_aspect=%d\norientation=%d\norient_button=%d\nchromeless=%d\nalways_on_top=%d\npicture=%d,%d,%d,%d,%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud, g_vsync, up_key[g_upscaler], g_hwdec, g_lock_aspect, g_orient, g_orient_btn, g_chromeless, g_always_on_top,
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
     fprintf(f, "one_file_recording=%d\n", g_rec_one_file);
@@ -1761,6 +1767,23 @@ static void act_rec_one_file(int on)
     fprintf(stderr, "\none file per recording %s\n", g_rec_one_file ? "on" : "off");
 }
 
+static void act_orient_set(int deg)
+{
+    if (deg != 0 && deg != 90 && deg != 180 && deg != 270) deg = 0;
+    if (g_orient == deg) return;
+    g_orient = deg;
+    prefs_save();
+    char t[48];
+    if (g_orient == 0) snprintf(t, sizeof(t), "Orientation: landscape");
+    else snprintf(t, sizeof(t), "Orientation: %d°", g_orient);
+    hud_toast(t);
+}
+
+static void act_orient_cycle(void)
+{
+    act_orient_set((g_orient + 90) % 360);
+}
+
 static void act_lock_aspect(SDL_Window *win, int on)
 {
     g_lock_aspect = on != 0;
@@ -1906,7 +1929,8 @@ static int view_gestures_ok(SDL_Window *win)
 }
 
 /* Blit the stream into output pixels with contain-fit + pan/zoom.
- * Clears logical size for the copy so portrait letterbox bars are paintable. */
+ * Clears logical size for the copy so portrait letterbox bars are paintable.
+ * g_orient rotates the picture (Flip-Grip / TATE); chrome stays upright. */
 static void view_video_copy(SDL_Renderer *ren, SDL_Texture *tex, const SDL_Rect *crop)
 {
     if (!ren || !tex) return;
@@ -1916,19 +1940,28 @@ static void view_video_copy(SDL_Renderer *ren, SDL_Texture *tex, const SDL_Rect 
     else SDL_QueryTexture(tex, NULL, NULL, &tw, &th);
     if (ow < 1 || oh < 1 || tw < 1 || th < 1) return;
 
-    view_clamp_pan(ow, oh, tw, th);
-    float w, h;
-    view_fit_size(ow, oh, tw, th, &w, &h);
-    const float x = ((float)ow - w) * 0.5f + g_view_pan_x;
-    const float y = ((float)oh - h) * 0.5f + g_view_pan_y;
+    const int rot = g_orient;
+    const int cw = (rot == 90 || rot == 270) ? th : tw;
+    const int ch = (rot == 90 || rot == 270) ? tw : th;
+    view_clamp_pan(ow, oh, cw, ch);
+    float disp_w, disp_h;
+    view_fit_size(ow, oh, cw, ch, &disp_w, &disp_h);
+    float dst_w = disp_w, dst_h = disp_h;
+    if (rot == 90 || rot == 270) { dst_w = disp_h; dst_h = disp_w; }
+    const float cx = (float)ow * 0.5f + g_view_pan_x;
+    const float cy = (float)oh * 0.5f + g_view_pan_y;
 
     int lw = 0, lh = 0;
     SDL_RenderGetLogicalSize(ren, &lw, &lh);
     SDL_RenderSetLogicalSize(ren, 0, 0);
     SDL_RenderSetViewport(ren, NULL);
     SDL_RenderSetScale(ren, 1.f, 1.f);
-    SDL_FRect dst = { x, y, w, h };
-    SDL_RenderCopyF(ren, tex, (crop && crop->w > 0) ? crop : NULL, &dst);
+    const SDL_Rect *src = (crop && crop->w > 0) ? crop : NULL;
+    SDL_FRect dst = { cx - dst_w * 0.5f, cy - dst_h * 0.5f, dst_w, dst_h };
+    if (rot == 0)
+        SDL_RenderCopyF(ren, tex, src, &dst);
+    else
+        SDL_RenderCopyExF(ren, tex, src, &dst, (double)rot, NULL, SDL_FLIP_NONE);
     if (lw > 0 && lh > 0) SDL_RenderSetLogicalSize(ren, lw, lh);
 }
 
@@ -1945,7 +1978,8 @@ static void viewer_repaint(void)
             /* FSR already painted */
         } else
 #endif
-        if (!zc_repaint(g_paint_ren))   /* a zero-copy frame never reached the texture */
+        /* Orientation uses SDL CopyEx — skip zerocopy GL path when rotated. */
+        if (g_orient != 0 || !zc_repaint(g_paint_ren))
             view_video_copy(g_paint_ren, g_paint_tex, g_paint_crop.w ? &g_paint_crop : NULL);
     }
     int lw = 0, lh = 0;
@@ -2238,6 +2272,7 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
         else if (key == SDLK_o || key == SDLK_F3) act_hud(-1);
         else if (key == SDLK_v) { act_vsync(ren, !g_vsync); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_a) { act_lock_aspect(win, !g_lock_aspect); if (g_menu) menu_draw(ren); }
+        else if (key == SDLK_y) { act_orient_cycle(); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_b) { act_chromeless(win, !g_chromeless); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_u) { act_upscaler(ren, -1); if (g_menu) menu_draw(ren); }
 #ifdef __APPLE__
