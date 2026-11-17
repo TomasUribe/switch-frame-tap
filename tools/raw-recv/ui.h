@@ -662,7 +662,11 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
             ui_toggle(ren, xri, y + tog_y, g_vsync, H_VSYNC, 1);
             y += h + gap_y;
             ui_row(H_ASPECT, 0, y, h);
-            ui_label(ren, cxi, y, h, "Lock aspect ratio", g_lock_aspect ? "Window stays 16:9 while resizing (A)" : "Free resize; picture letterboxed (A)", ui_focused(H_ASPECT, 0), cwi);
+            ui_label(ren, cxi, y, h, "Lock aspect ratio",
+                     g_lock_aspect
+                         ? (aspect_portrait() ? "Window stays 9:16 while resizing (A)" : "Window stays 16:9 while resizing (A)")
+                         : "Free resize; picture letterboxed (A)",
+                     ui_focused(H_ASPECT, 0), cwi);
             ui_toggle(ren, xri, y + tog_y, g_lock_aspect, H_ASPECT, 1);
             y += h + gap_y;
             {

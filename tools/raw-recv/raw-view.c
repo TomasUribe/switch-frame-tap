@@ -245,6 +245,14 @@ static Uint32 video_window_flags(void)
     return f;
 }
 
+/* Content aspect follows display orientation: 16:9 landscape, 9:16 portrait. */
+static int aspect_portrait(void) { return g_orient == 90 || g_orient == 270; }
+static void aspect_wh(int *aw, int *ah)
+{
+    if (aspect_portrait()) { *aw = 9; *ah = 16; }
+    else { *aw = 16; *ah = 9; }
+}
+
 #ifdef _WIN32
 static WNDPROC g_prev_wndproc;
 static HWND g_aspect_hwnd;
@@ -305,20 +313,23 @@ static LRESULT CALLBACK aspect_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     }
     if (msg == WM_SIZING && g_lock_aspect) {
         RECT *r = (RECT *)lp;
-        int bw = 0, bh = 0;
+        int bw = 0, bh = 0, aw = 16, ah = 9;
         aspect_borders(hwnd, &bw, &bh);
+        aspect_wh(&aw, &ah);
         int cw = (int)(r->right - r->left) - bw;
         int ch = (int)(r->bottom - r->top) - bh;
-        if (cw < 160) cw = 160;
-        if (ch < 90) ch = 90;
+        const int min_w = aspect_portrait() ? 90 : 160;
+        const int min_h = aspect_portrait() ? 160 : 90;
+        if (cw < min_w) cw = min_w;
+        if (ch < min_h) ch = min_h;
         const int edge = (int)wp;
         if (edge == WMSZ_LEFT || edge == WMSZ_RIGHT) {
-            ch = (cw * 9 + 8) / 16;
+            ch = (cw * ah + aw / 2) / aw;
         } else if (edge == WMSZ_TOP || edge == WMSZ_BOTTOM) {
-            cw = (ch * 16 + 4) / 9;
+            cw = (ch * aw + ah / 2) / ah;
         } else {
-            const int ch2 = (cw * 9 + 8) / 16;
-            const int cw2 = (ch * 16 + 4) / 9;
+            const int ch2 = (cw * ah + aw / 2) / aw;
+            const int cw2 = (ch * aw + ah / 2) / ah;
             if ((ch2 > ch ? ch2 - ch : ch - ch2) <= (cw2 > cw ? cw2 - cw : cw - cw2)) ch = ch2;
             else cw = cw2;
         }
@@ -376,17 +387,52 @@ static void aspect_hook_window(SDL_Window *win)
 #endif
 }
 
-/* Portable snap after resize (mac/linux, or if the Win32 hook missed a frame). */
+/* Portable snap after resize (mac/linux, or if the Win32 hook missed a frame).
+ * Portrait orientations lock 9:16; landscape keeps 16:9. */
 static void aspect_constrain_window(SDL_Window *win)
 {
     if (!g_lock_aspect || !win) return;
     const Uint32 fl = SDL_GetWindowFlags(win);
     if (fl & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED)) return;
+    int w, h, aw = 16, ah = 9;
+    SDL_GetWindowSize(win, &w, &h);
+    aspect_wh(&aw, &ah);
+    /* Flip wide↔tall when orientation family changed but size lagged. */
+    if (aspect_portrait() && w > h) { int t = w; w = h; h = t; }
+    else if (!aspect_portrait() && h > w) { int t = w; w = h; h = t; }
+    const int min_w = aspect_portrait() ? 90 : 160;
+    const int min_h = aspect_portrait() ? 160 : 90;
+    if (w < min_w) w = min_w;
+    if (h < min_h) h = min_h;
+    int nw = w, nh = h;
+    if (aspect_portrait()) {
+        /* Prefer keeping height (tall window); derive width. */
+        nw = (h * aw + ah / 2) / ah;
+        if (nw < min_w) { nw = min_w; nh = (nw * ah + aw / 2) / aw; }
+    } else {
+        nh = (w * ah + aw / 2) / aw;
+        if (nh < min_h) { nh = min_h; nw = (nh * aw + ah / 2) / ah; }
+    }
+    if (nw != w || nh != h) SDL_SetWindowSize(win, nw, nh);
+}
+
+/* One-shot reshape when cycling landscape ↔ portrait (windowed only). */
+static void aspect_apply_orient_window(SDL_Window *win, int prev_orient)
+{
+    if (!win) return;
+    const Uint32 fl = SDL_GetWindowFlags(win);
+    if (fl & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED)) return;
+    const int was_port = (prev_orient == 90 || prev_orient == 270);
+    const int now_port = aspect_portrait();
+    if (was_port == now_port) {
+        if (g_lock_aspect) aspect_constrain_window(win);
+        return;
+    }
     int w, h;
     SDL_GetWindowSize(win, &w, &h);
-    if (w < 160) w = 160;
-    const int nh = (w * 9 + 8) / 16;
-    if (nh != h && nh >= 90) SDL_SetWindowSize(win, w, nh);
+    SDL_SetWindowSize(win, h, w); /* swap → tall or wide */
+    if (g_lock_aspect) aspect_constrain_window(win);
+    window_geom_capture(win);
 }
 
 #ifdef __linux__
@@ -1801,7 +1847,9 @@ static void act_orient_set(int deg)
 {
     if (deg != 0 && deg != 90 && deg != 180 && deg != 270) deg = 0;
     if (g_orient == deg) return;
+    const int prev = g_orient;
     g_orient = deg;
+    aspect_apply_orient_window(g_paint_win, prev);
     prefs_save();
     char t[48];
     if (g_orient == 0) snprintf(t, sizeof(t), "Orientation: landscape");
@@ -1837,7 +1885,9 @@ static void act_lock_aspect(SDL_Window *win, int on)
     g_lock_aspect = on != 0;
     prefs_save();
     if (g_lock_aspect && win) aspect_constrain_window(win);
-    hud_toast(g_lock_aspect ? "Aspect lock on (16:9)" : "Aspect lock off");
+    hud_toast(g_lock_aspect
+              ? (aspect_portrait() ? "Aspect lock on (9:16)" : "Aspect lock on (16:9)")
+              : "Aspect lock off");
     fprintf(stderr, "\naspect lock %s\n", g_lock_aspect ? "on" : "off");
 }
 
