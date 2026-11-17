@@ -53,7 +53,7 @@ static void ui_open(int open);
 static void ui_page(int page);
 
 enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_ASPECT, H_ORIENT, H_ORIENTBTN,
-       H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
+       H_ORIENTCYCLE, H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
        H_PIC, H_PIC_RESET, H_SOUND, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
        H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_PIN, H_REC1, H_PAD, H_PADKB,
        H_PADMENU, H_PADBACK, H_PADMOUSE, H_PADTAB, H_PADBIND, H_PADMBTN, H_PADMODE, H_PADINV, H_PADSL, H_PADCHANGE,
@@ -674,7 +674,7 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
                 ui_row(H_ORIENT, 0, y, h_or);
                 if (ui_focused(H_ORIENT, 0)) ui_rrect(ren, cxi - ui_d(12), y - 2, cwi + ui_d(24), h_or + 4, ui_d(10), UI_SURF2);
                 text_draw(ren, "Display orientation", (int)cxi, (int)(y + ui_d(2)), ui_px(17), 0, UI_INK, 0);
-                ui_text_fit(ren, "Rotate the picture only (Y). Virtual pad follows the image.",
+                ui_text_fit(ren, "Rotates the live stream picture (Y). No effect until a stream is showing.",
                             (int)cxi, (int)(y + ui_d(24)), ui_px(13), 0, UI_DIM, 0, (int)cwi);
                 ui_seg(ren, xri, 0, y + ui_d(48), orients, 4, oi, H_ORIENT, 13, cwi);
                 y += h_or + gap_y;
@@ -683,6 +683,24 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
             ui_label(ren, cxi, y, h, "Orientation button", g_orient_btn ? "Cycle control in the top chrome" : "Hidden; use Settings or Y", ui_focused(H_ORIENTBTN, 0), cwi);
             ui_toggle(ren, xri, y + tog_y, g_orient_btn, H_ORIENTBTN, 1);
             y += h + gap_y;
+            if (g_orient_btn) {
+                static const char *const cycle_labs[] = {
+                    "Cycle 0° (landscape)", "Cycle 90°", "Cycle 180°", "Cycle 270°"
+                };
+                const int cmask = orient_sanitize_cycle(g_orient_cycle);
+                for (int bi = 0; bi < 4; bi++) {
+                    const int on = (cmask & (1 << bi)) != 0;
+                    ui_row(H_ORIENTCYCLE, bi, y, h);
+                    ui_label(ren, cxi + ui_d(16), y, h, cycle_labs[bi],
+                             on ? "Included when cycling (button / Y)" : "Skipped when cycling",
+                             ui_focused(H_ORIENTCYCLE, bi), cwi - ui_d(16));
+                    ui_toggle(ren, xri, y + tog_y, on, H_ORIENTCYCLE, 1);
+                    /* ui_toggle stores !on; rewrite arg to the bit index. */
+                    if (g_ui_nhits > 0 && g_ui_hits[g_ui_nhits - 1].id == H_ORIENTCYCLE)
+                        g_ui_hits[g_ui_nhits - 1].arg = bi;
+                    y += h + gap_y;
+                }
+            }
             ui_row(H_CHROMELESS, 0, y, h);
             ui_label(ren, cxi, y, h, "Borderless window", g_chromeless ? "No title bar; drag the picture to move (B)" : "Normal window frame (B)", ui_focused(H_CHROMELESS, 0), cwi);
             ui_toggle(ren, xri, y + tog_y, g_chromeless, H_CHROMELESS, 1);
@@ -1415,7 +1433,14 @@ static void ui_change(SDL_Window *win, SDL_Renderer *ren, int id, int arg, int d
         else act_orient_set(deg[(oi + (d > 0 ? 1 : 3)) % 4]);
         break;
     }
-    case H_ORIENTBTN: g_orient_btn = !g_orient_btn; prefs_save(); break;
+    case H_ORIENTBTN:
+        g_orient_btn = !g_orient_btn;
+        g_orient_cycle = orient_sanitize_cycle(g_orient_cycle);
+        prefs_save();
+        break;
+    case H_ORIENTCYCLE:
+        act_orient_cycle_set(arg, !(orient_sanitize_cycle(g_orient_cycle) & (1 << (arg & 3))));
+        break;
     case H_CHROMELESS: act_chromeless(win, !g_chromeless); break;
     case H_HWDEC: act_hwdec(!g_hwdec); break;
     case H_REC1: act_rec_one_file(!g_rec_one_file); break;
@@ -1572,7 +1597,14 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
                 else act_orient_cycle();
                 break;
             }
-            case H_ORIENTBTN: g_orient_btn = h->arg != 0; prefs_save(); break;
+            case H_ORIENTBTN:
+                g_orient_btn = h->arg != 0;
+                g_orient_cycle = orient_sanitize_cycle(g_orient_cycle);
+                prefs_save();
+                break;
+            case H_ORIENTCYCLE:
+                act_orient_cycle_set(h->arg, !(orient_sanitize_cycle(g_orient_cycle) & (1 << (h->arg & 3))));
+                break;
             case H_REC1: act_rec_one_file(!g_rec_one_file); break;
             case H_PAD: act_pad_send(!g_pad_send); break;
             case H_PADKB: act_pad_kbd(!g_pad_kbd); break;

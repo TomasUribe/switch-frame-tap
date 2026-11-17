@@ -163,6 +163,34 @@ static int g_lock_aspect_cli = -1;   /* -1 = use prefs; 0/1 from --no-aspect-loc
 /* Picture rotation for Flip-Grip / TATE (degrees CW). Settings chrome stays upright. */
 static int g_orient = 0;             /* 0, 90, 180, 270 */
 static int g_orient_btn = 1;         /* top-chrome cycle button */
+/* Bits for which angles the chrome/Y cycle visits: bit0=0°,1=90°,2=180°,3=270°. */
+static int g_orient_cycle = 0x0F;
+static int orient_bit_for_deg(int deg)
+{
+    if (deg == 90) return 1;
+    if (deg == 180) return 2;
+    if (deg == 270) return 3;
+    return 0;
+}
+static int orient_deg_for_bit(int bit)
+{
+    static const int deg[4] = { 0, 90, 180, 270 };
+    return deg[bit & 3];
+}
+/* Keep at least two cycle entries when the button is on (mirrors SwitchU). */
+static int orient_sanitize_cycle(int mask)
+{
+    mask &= 0x0F;
+    if (!g_orient_btn)
+        return mask ? mask : 0x0F;
+    int n = 0;
+    for (int i = 0; i < 4; i++) if (mask & (1 << i)) n++;
+    if (n >= 2) return mask;
+    mask |= 1 << orient_bit_for_deg(g_orient);
+    mask |= 1; /* landscape */
+    if (mask == (1 << orient_bit_for_deg(g_orient))) mask |= 2; /* +90° */
+    return mask & 0x0F;
+}
 /* Optional borderless window; drag the client area to move. Default off. */
 static int g_chromeless = 0;
 static int g_chromeless_cli = -1;
@@ -680,6 +708,7 @@ static void prefs_load(void)
         if (sscanf(line, "orientation=%d", &hm) == 1 &&
             (hm == 0 || hm == 90 || hm == 180 || hm == 270)) g_orient = hm;
         if (sscanf(line, "orient_button=%d", &hm) == 1) g_orient_btn = hm != 0;
+        if (sscanf(line, "orient_cycle=%d", &hm) == 1) g_orient_cycle = hm & 0x0F;
         if (sscanf(line, "chromeless=%d", &hm) == 1) g_chromeless = hm != 0;
         if (sscanf(line, "always_on_top=%d", &hm) == 1) g_always_on_top = hm != 0;
         if (sscanf(line, "one_file_recording=%d", &hm) == 1) g_rec_one_file = hm != 0;
@@ -701,6 +730,7 @@ static void prefs_load(void)
         }
     }
     fclose(f);
+    g_orient_cycle = orient_sanitize_cycle(g_orient_cycle);
 }
 
 /* --pad-test without --app: only the controller lines of viewer.ini, so a test can set the bindings */
@@ -779,7 +809,7 @@ static void prefs_save(void)
     prefs_path(path, sizeof(path));
     FILE *f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\nvsync=%d\nupscaler=%s\nhwdec=%d\nlock_aspect=%d\norientation=%d\norient_button=%d\nchromeless=%d\nalways_on_top=%d\npicture=%d,%d,%d,%d,%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud, g_vsync, up_key[g_upscaler], g_hwdec, g_lock_aspect, g_orient, g_orient_btn, g_chromeless, g_always_on_top,
+    fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\nvsync=%d\nupscaler=%s\nhwdec=%d\nlock_aspect=%d\norientation=%d\norient_button=%d\norient_cycle=%d\nchromeless=%d\nalways_on_top=%d\npicture=%d,%d,%d,%d,%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud, g_vsync, up_key[g_upscaler], g_hwdec, g_lock_aspect, g_orient, g_orient_btn, g_orient_cycle & 0x0F, g_chromeless, g_always_on_top,
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
     fprintf(f, "one_file_recording=%d\n", g_rec_one_file);
@@ -1781,7 +1811,25 @@ static void act_orient_set(int deg)
 
 static void act_orient_cycle(void)
 {
-    act_orient_set((g_orient + 90) % 360);
+    const int mask = orient_sanitize_cycle(g_orient_cycle);
+    const int start = orient_bit_for_deg(g_orient);
+    for (int step = 1; step <= 4; step++) {
+        const int bit = (start + step) & 3;
+        if (mask & (1 << bit)) {
+            act_orient_set(orient_deg_for_bit(bit));
+            return;
+        }
+    }
+}
+
+static void act_orient_cycle_set(int bit, int on)
+{
+    bit &= 3;
+    int mask = g_orient_cycle & 0x0F;
+    if (on) mask |= 1 << bit;
+    else mask &= ~(1 << bit);
+    g_orient_cycle = orient_sanitize_cycle(mask);
+    prefs_save();
 }
 
 static void act_lock_aspect(SDL_Window *win, int on)
