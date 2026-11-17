@@ -3674,10 +3674,12 @@ namespace ams::mitm::applet {
             LogLine("   ==== LIVE MODE (M86): streaming whenever a viewer is reading and a game is running ====");
             /* M98: a release install captures only on the firmware it was
              * tested on (22.x; v0.7.8: 21.x too, a user's 21.0.1; v0.7.11:
-             * 23.x, a user's 23.0.0); the debug reads and engine jobs assume it */
+             * 23.x, a user's 23.0.0); the debug reads and engine jobs assume it.
+             * v0.7.23: and only on a firmware the Atmosphere it was built with
+             * knows (a newer one used to abort it at boot, #83) */
             {
                 const u32 v = hosversionGet();
-                if (g_release_mode && !g_anyfw_armed && (HOSVER_MAJOR(v) < 21 || HOSVER_MAJOR(v) > 23)) {
+                if (g_release_mode && !g_anyfw_armed && (HOSVER_MAJOR(v) < 21 || HOSVER_MAJOR(v) > 23 || hos::g_sft_firmware_newer_than_build)) {
                     g_live_state.store(LiveState_Unsupported, std::memory_order_relaxed);
                     LogLine("   live: firmware %u.%u.%u is untested (this build: 21.x-23.x) - not streaming. allow_untested_firmware = 1 in config.ini overrides.",
                             HOSVER_MAJOR(v), HOSVER_MINOR(v), HOSVER_MICRO(v));

@@ -116,6 +116,27 @@ else:
     F3.write_text(src3.replace(old3, new3, 1))
     print("patch_libstrat: mitm request copy handles closed after forwarding (backport of Atmosphere b05166d50)")
 
+# v0.7.23: a firmware newer than this libstratosphere knows aborted the module
+# before main (hos::InitializeVersionInternal, std::abort 0xFFE) - every boot
+# of a console updated before Switch Frame Tap was (#83, #87: 23.5.0 against
+# 1.12.0). It records that instead; Main logs it and the stream treats the
+# firmware as untested (allow_untested_firmware = 1 overrides), so the console
+# boots and the module tells the user to update.
+F4 = pathlib.Path(sys.argv[1]) / "libraries/libstratosphere/source/hos/hos_version_api.cpp"
+src4 = F4.read_text()
+MARK4 = "g_sft_firmware_newer_than_build"
+if MARK4 in src4:
+    print("patch_libstrat: newer firmware recorded instead of aborting already applied")
+else:
+    old4 = "                AMS_ABORT_UNLESS(is_safely_tryable_version);\n"
+    assert src4.count(old4) == 1, "the firmware version abort was not found"
+    anchor4 = "namespace ams::hos {\n"
+    assert src4.count(anchor4) == 1, "namespace ams::hos not found"
+    src4 = src4.replace(anchor4, anchor4 + "\n    /* Switch Frame Tap (patch_libstrat.py): set instead of aborting on a firmware newer than this library knows */\n    constinit bool g_sft_firmware_newer_than_build = false;\n", 1)
+    src4 = src4.replace(old4, "                if (!is_safely_tryable_version) { g_sft_firmware_newer_than_build = true; }\n", 1)
+    F4.write_text(src4)
+    print("patch_libstrat: a newer firmware is recorded instead of aborting")
+
 # only when something changed: rewriting the header bumps its timestamp, and
 # make then rebuilds the whole of libstratosphere (30+ minutes)
 if src != orig:

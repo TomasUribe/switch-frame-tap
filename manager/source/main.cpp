@@ -41,7 +41,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.7.22";
+    constexpr const char *AppVersion  = "0.7.23-beta1";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -580,7 +580,7 @@ namespace {
                     return b;
                 case 5: return "Restart the console to stream again.";
                 case 6: return "Live mode is not on in the test arm file.";
-                case 7: return "Streaming is off on this firmware - see Setup, Allow untested firmware.";
+                case 7: return "Streaming is off on this firmware - update Switch Frame Tap, or see Setup, Allow untested firmware.";
                 case 8: return "It is on the never-streamed list (Stream, Apps never streamed).";
                 default: return "";
             }

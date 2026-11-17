@@ -15,6 +15,12 @@
 #include <atomic>
 #include "applet_mitm_gbuf.hpp"
 
+namespace ams::hos {
+    /* v0.7.23: set by patch_libstrat.py's hos_version_api.cpp in place of the
+     * abort on a firmware newer than the Atmosphere this was built with (#83) */
+    extern bool g_sft_firmware_newer_than_build;
+}
+
 namespace ams::mitm::applet {
 
     /* Swapchain description, filled from the first few setPreallocatedBuffer

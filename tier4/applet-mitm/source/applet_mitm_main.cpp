@@ -1152,16 +1152,23 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.22: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.23-beta1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
             const auto api = exosphere::GetApiInfo();
             const u32 hv = hosversionGet();
-            mitm::applet::LogLine("Atmosphere %u.%u.%u, firmware %u.%u.%u (built with Atmosphere %u.%u.%u, tested on firmware 22.5.0; 23.0.0 by a user)",
+            mitm::applet::LogLine("Atmosphere %u.%u.%u, firmware %u.%u.%u (built with Atmosphere %u.%u.%u, tested on firmware 22.5.0 and 23.0.1)",
                                   api.GetMajorVersion(), api.GetMinorVersion(), api.GetMicroVersion(),
                                   HOSVER_MAJOR(hv), HOSVER_MINOR(hv), HOSVER_MICRO(hv),
                                   ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
+            /* v0.7.23 (#83): before, the library aborted here, before the log existed */
+            if (hos::g_sft_firmware_newer_than_build) {
+                mitm::applet::LogLine("firmware %u.%u.%u is newer than Atmosphere %u.%u.%u knows: no stream until Switch Frame Tap is updated "
+                                      "(allow_untested_firmware = 1 in config.ini tries anyway)",
+                                      HOSVER_MAJOR(hv), HOSVER_MINOR(hv), HOSVER_MICRO(hv),
+                                      ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
+            }
         }
         SyncSoundPatches();
 
@@ -1469,7 +1476,7 @@ namespace ams::mitm::applet {
                 { "Paused - a manual, the eShop or another applet is open", "The stream comes back a few seconds after you close it." },
                 { "Streaming is turned off", "Turn it on in the Switch Frame Tap overlay or manager app." },
                 { "This app is excluded from streaming", "Remove it from the excluded apps in the manager app." },
-                { "This firmware is untested", "Set allow_untested_firmware = 1 in config.ini to stream anyway." },
+                { "This firmware is untested", "Updating Switch Frame Tap may help; allow_untested_firmware = 1 in config.ini tries anyway." },
                 { "The video engine stopped responding", "Restart the console to stream again." },
                 { "Not enough memory to stream right now", "It tries again every few seconds." },
                 { "This game's picture was not found", "Restart the game. If it keeps happening, please send the log." },
