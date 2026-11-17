@@ -26,6 +26,7 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 
 namespace ams::mitm::applet::slotmatch {
 
@@ -130,6 +131,29 @@ namespace ams::mitm::applet::slotmatch {
         }
 
         bool GaveUp() const { return intervals >= GiveUpAfter || samples >= MaxSamples; }
+
+        /* v0.7.23: why no match - per slot the intervals counted (drawn / not
+         * drawn) and the two best candidates with their scores, for the log
+         * when it gives up (#70, Maestro's 1080p buffers never matched) */
+        int Describe(char *out, size_t n) const {
+            int len = std::snprintf(out, n, "%u intervals, %u samples;", intervals, samples);
+            for (uint32_t s = 0; s < nslots && len > 0 && static_cast<size_t>(len) < n; ++s) {
+                int32_t b1 = -1, b2 = -1, s1 = -100000, s2 = -100000;
+                if (tot_in[s] != 0 && tot_out[s] != 0) {
+                    for (uint32_t c = 0; c < ncand; ++c) {
+                        const int32_t score = static_cast<int32_t>(hit_in[s][c] * 1000u / tot_in[s]) -
+                                              static_cast<int32_t>(hit_out[s][c] * 1000u / tot_out[s]);
+                        if (score > s1) { b2 = b1; s2 = s1; b1 = static_cast<int32_t>(c); s1 = score; }
+                        else if (score > s2) { b2 = static_cast<int32_t>(c); s2 = score; }
+                    }
+                }
+                len += std::snprintf(out + len, n - len, " slot %u: drawn in %u, not in %u", s, tot_in[s], tot_out[s]);
+                if (b1 >= 0 && len > 0 && static_cast<size_t>(len) < n) { len += std::snprintf(out + len, n - len, ", best c%d %d", b1, s1); }
+                if (b2 >= 0 && len > 0 && static_cast<size_t>(len) < n) { len += std::snprintf(out + len, n - len, ", next c%d %d", b2, s2); }
+                if (len > 0 && static_cast<size_t>(len) < n) { len += std::snprintf(out + len, n - len, ";"); }
+            }
+            return len;
+        }
     };
 
     /* A first guess while the picture stands still and Match has nothing to

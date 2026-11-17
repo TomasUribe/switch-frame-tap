@@ -6891,6 +6891,19 @@ namespace ams::mitm::applet {
                 } else if (matcher.GaveUp()) {
                     sep_locked = true;
                     LogLine("   swapchain: slots not told apart in %u samples (%u with a change) - keeping the first guess", matcher.samples, matcher.intervals);
+                    char why[320];
+                    matcher.Describe(why, sizeof(why));
+                    LogLine("   swapchain: %s", why);
+                    /* the cN above, and the guess streamed meanwhile */
+                    for (u32 c0 = 0; c0 < ncand; c0 += 10) {
+                        char line[240];
+                        int len = std::snprintf(line, sizeof(line), "   swapchain: c%u-:", c0);
+                        for (u32 c = c0; c < ncand && c < c0 + 10 && len > 0 && static_cast<size_t>(len) < sizeof(line); ++c) {
+                            len += std::snprintf(line + len, sizeof(line) - len, " %llx", static_cast<unsigned long long>(cand[c]));
+                        }
+                        LogLine("%s", line);
+                    }
+                    LogLine("   swapchain: streaming slot 0-%u from c%u c%u c%u", nslots - 1, slot_cand[0], nslots > 1 ? slot_cand[1] : 0, nslots > 2 ? slot_cand[2] : 0);
                 }
             }
 

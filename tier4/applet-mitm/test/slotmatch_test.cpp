@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <random>
+#include <cstring>
 
 namespace sm = ams::mitm::applet::slotmatch;
 
@@ -152,6 +153,17 @@ int main() {
         for (uint32_t n = 1; n <= sm::MaxSamples; ++n) { m.Add(n, n % 3, sig); }
         if (!m.GaveUp()) { std::printf("FAIL still picture: still sampling after %u samples\n", sm::MaxSamples); ++g_fail; }
         else { std::printf("ok   still picture: gives up after %u samples\n", sm::MaxSamples); }
+    }
+    /* Describe: what the log says when no match comes */
+    {
+        sm::Matcher m; m.Reset(3, 6);
+        uint32_t sig[sm::MaxCand] = {};
+        for (uint32_t n = 1; n <= 40; ++n) { sig[n % 3] = n; sig[5] = n; m.Add(n, n % 3, sig); }
+        char b[320];
+        m.Describe(b, sizeof(b));
+        const bool ok = std::strstr(b, "slot 0: drawn in 13, not in 26, best c0 1000") != nullptr && std::strstr(b, "slot 2:") != nullptr;
+        std::printf(ok ? "ok   describe: %s\n" : "FAIL describe: %s\n", b);
+        if (!ok) { ++g_fail; }
     }
     /* the next slot drawn early EVERY time: every slot's buffer and the
      * next one change together - ambiguous, so no match rather than a wrong one */
