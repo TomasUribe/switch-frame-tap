@@ -264,15 +264,30 @@ static void ui_chrome_hit(float x, float y, float d, int id)
     ui_hit(x - pad, y - pad, d + pad * 2, d + pad * 2, id, 0);
 }
 
-/* Hover tip centered under a chrome button (avoids covering neighbours). */
+/* Hover tip centered under a chrome button; clamped so it stays on-screen. */
 static void ui_chrome_tip_below(SDL_Renderer *ren, float x, float y, float d, const char *tip)
 {
     if (!tip || !tip[0]) return;
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
     const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
     const float tw = text_width(tip, px, 1) + d * 0.48f;
     const float th = d * 0.62f;
-    const float tx = x + (d - tw) * 0.5f;
-    const float ty = y + d + d * 0.12f;
+    const float margin = d * 0.12f;
+    float tx = x + (d - tw) * 0.5f;
+    float ty = y + d + margin;
+    if (ow > 0) {
+        if (tx < margin) tx = margin;
+        if (tx + tw > (float)ow - margin) tx = (float)ow - margin - tw;
+        if (tx < margin) tx = margin; /* still too wide: pin left */
+    }
+    if (oh > 0 && ty + th > (float)oh - margin) {
+        /* Prefer under; if that clips the bottom, flip above the button. */
+        const float above = y - margin - th;
+        if (above >= margin) ty = above;
+        else ty = (float)oh - margin - th;
+        if (ty < margin) ty = margin;
+    }
     ui_rrect(ren, tx, ty, tw, th, th * 0.5f, (SDL_Color){ 21, 24, 30, 230 });
     text_draw(ren, tip, (int)(tx + tw * 0.5f), (int)(ty + th * 0.18f), px, 1, UI_INK, 1);
 }
