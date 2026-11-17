@@ -53,7 +53,7 @@ static void ui_open(int open);
 static void ui_page(int page);
 
 enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_ASPECT, H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
-       H_PIC, H_PIC_RESET, H_SOUND, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
+       H_PIC, H_PIC_RESET, H_SOUND, H_VOLUME, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
        H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_PIN, H_REC1, H_PAD, H_PADKB,
        H_PADMENU, H_PADBACK, H_PADMOUSE, H_PADTAB, H_PADBIND, H_PADMBTN, H_PADMODE, H_PADINV, H_PADSL, H_PADCHANGE,
        H_PADSWAP, H_PADRESET };
@@ -736,6 +736,19 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
             ui_label(ren, cxi, y, h, "Game sound", g_mute ? "Muted (M)" : "On (M mutes)", ui_focused(H_SOUND, 0), cwi);
             ui_toggle(ren, xri, y + ui_d(12), !g_mute, H_SOUND, 1);
             y += h + ui_d(4);
+            const float sh = ui_d(52), ty = y + ui_d(34);
+            const int volume = SDL_AtomicGet(&g_volume);
+            ui_row(H_VOLUME, 0, y, sh);
+            if (ui_focused(H_VOLUME, 0)) ui_rrect(ren, cxi - ui_d(12), y - 2, cwi + ui_d(24), sh + 4, ui_d(10), UI_SURF2);
+            text_draw(ren, "Playback volume", (int)cxi, (int)(y + ui_d(4)), ui_px(16), 0, UI_INK, 0);
+            char value[16]; snprintf(value, sizeof(value), "%d%%", volume);
+            text_draw(ren, value, (int)xri, (int)(y + ui_d(4)), ui_px(15), 1, UI_ACC, 2);
+            const float vx = cxi + cwi * volume / 100.0f;
+            ui_rrect(ren, cxi, ty - 2, cwi, 4, 2, UI_SURF3);
+            ui_rrect(ren, cxi, ty - 2, vx - cxi, 4, 2, UI_ACC);
+            ui_rrect(ren, vx - ui_d(8), ty - ui_d(8), ui_d(16), ui_d(16), ui_d(8), UI_INK);
+            ui_hit(cxi - ui_d(8), ty - ui_d(14), cwi + ui_d(16), ui_d(28), H_VOLUME, 0);
+            y += sh + ui_d(4);
         }
 
         /* v0.7.20: the controller, keyboard and mouse have their own page */
@@ -1389,6 +1402,10 @@ static void ui_change(SDL_Window *win, SDL_Renderer *ren, int id, int arg, int d
         prefs_save();
         break;
     }
+    case H_VOLUME:
+        act_volume(d == 0 ? 100 : SDL_AtomicGet(&g_volume) + d * 5);
+        prefs_save();
+        break;
     case H_SOUND: act_mute(!g_mute); break;
     case H_REC: if (d == 0) act_record(win); break;
     case H_UPD: if (d == 0) act_update(); break;
@@ -1407,13 +1424,14 @@ static void ui_slide(float mx)
         if (g_ui_hits[i].window_space) mx = g_ui_wx;
         const float tx = r.x + ui_d(8), tw = r.w - ui_d(16);
         const int a = g_ui_drag_arg;
-        const int fsr = g_ui_drag == H_FSR_SHARP, pd = g_ui_drag == H_PADSL;
-        const int lo = fsr ? 0 : pd ? pad_sliders[a].lo : pic_rows[a].min, hi = fsr ? 100 : pd ? pad_sliders[a].hi : pic_rows[a].max;
-        const int st = fsr ? 1 : pd ? pad_sliders[a].step : pic_rows[a].step;
+        const int fsr = g_ui_drag == H_FSR_SHARP, pd = g_ui_drag == H_PADSL, vol = g_ui_drag == H_VOLUME;
+        const int lo = fsr || vol ? 0 : pd ? pad_sliders[a].lo : pic_rows[a].min, hi = fsr || vol ? 100 : pd ? pad_sliders[a].hi : pic_rows[a].max;
+        const int st = fsr || vol ? 1 : pd ? pad_sliders[a].step : pic_rows[a].step;
         float f = tw > 1.f ? (mx - tx) / tw : 0.f;
         f = f < 0 ? 0 : f > 1 ? 1 : f;
         int v = lo + (int)lrintf(f * (hi - lo) / st) * st;
-        if (fsr) g_fsr_sharpness = v;
+        if (vol) act_volume(v);
+        else if (fsr) g_fsr_sharpness = v;
         else if (pd) *pad_sliders[a].v = v;
         else *pic_field(a) = v;
         return;
@@ -1441,13 +1459,13 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
         g_ui_ptr_inside = 1;
         g_ui_mouse_t = SDL_GetPerformanceCounter();
         g_ui_kbd = 0;
-        if (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP || g_ui_drag == H_PADSL) { ui_slide(g_ui_mx); prefs_mark_dirty(); }
+        if (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP || g_ui_drag == H_PADSL || g_ui_drag == H_VOLUME) { ui_slide(g_ui_mx); prefs_mark_dirty(); }
         else if (g_ui_drag == H_SCROLL) ui_scroll_drag(g_ui_wy);
         return 1;                           /* redraw so hover chrome tracks the pointer */
     }
     if (e->type == SDL_MOUSEBUTTONUP) {
         if (g_ui_drag) {
-            const int was_slide = (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP || g_ui_drag == H_PADSL);
+            const int was_slide = (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP || g_ui_drag == H_PADSL || g_ui_drag == H_VOLUME);
             g_ui_drag = 0;
             if (was_slide) prefs_save();    /* flush slider prefs on release */
             return 1;
@@ -1514,6 +1532,7 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_PIC: g_ui_drag = H_PIC; g_ui_drag_arg = h->arg; ui_slide(g_ui_mx); prefs_mark_dirty(); break;
             case H_FSR_SHARP: g_ui_drag = H_FSR_SHARP; g_ui_drag_arg = 0; ui_slide(g_ui_mx); prefs_mark_dirty(); break;
             case H_PIC_RESET: g_pic = pic_default; prefs_save(); break;
+            case H_VOLUME: g_ui_drag = H_VOLUME; g_ui_drag_arg = 0; ui_slide(g_ui_mx); prefs_mark_dirty(); break;
             case H_SOUND: act_mute(!h->arg); break;
             case H_REC: act_record(win); break;
             case H_SUPPORT: SDL_OpenURL("https://buymeacoffee.com/papux200"); break;
@@ -1555,6 +1574,7 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
     case SDLK_BACKSPACE: case SDLK_DELETE:
         if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_PIC) ui_change(win, ren, H_PIC, g_ui_rows[g_ui_focus].arg, 0);
         if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_FSR_SHARP) ui_change(win, ren, H_FSR_SHARP, 0, 0);
+        if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_VOLUME) ui_change(win, ren, H_VOLUME, 0, 0);
         if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_PADSL) ui_change(win, ren, H_PADSL, g_ui_rows[g_ui_focus].arg, 0);
         if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_PADBIND) pui_clear(g_ui_rows[g_ui_focus].arg);
         if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_PADMBTN) { g_bind_mouse[g_ui_rows[g_ui_focus].arg / 2] = -1; prefs_save(); }

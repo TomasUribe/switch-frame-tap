@@ -497,11 +497,13 @@ static int g_hwdec = 1;
  * so the sound cannot drift behind the picture. M mutes. */
 static SDL_AudioDeviceID g_adev = 0;
 static int g_a_paused = 1, g_mute = 0;
+static SDL_atomic_t g_volume = { 100 };   /* playback only; UI writes, reader thread reads */
 static volatile long g_a_bytes = 0, g_a_resyncs = 0, g_a_underruns = 0;
 
 static void audio_packet(const uint8_t *d, uint32_t n, uint32_t rate, uint32_t ch)
 {
-    if (!g_adev || g_mute || rate != 48000 || ch != 2) return;
+    if (!g_adev || g_mute || rate != 48000 || ch != 2 || n % 4 != 0) return;
+    const int volume = SDL_AtomicGet(&g_volume);
     const Uint32 bps = 48000 * 4;
     Uint32 q = SDL_GetQueuedAudioSize(g_adev);
     if (!g_a_paused && q == 0) {               /* ran dry: build the cushion again */
@@ -514,7 +516,19 @@ static void audio_packet(const uint8_t *d, uint32_t n, uint32_t rate, uint32_t c
         q = 0;
         g_a_resyncs++;
     }
-    SDL_QueueAudio(g_adev, d, n);
+    if (volume == 100) {
+        SDL_QueueAudio(g_adev, d, n);
+    } else {
+        /* Mix into a bounded scratch buffer, not the source: rec_audio() needs
+         * the untouched PCM. Zero volume still queues silence to keep timing. */
+        uint8_t scaled[4096];
+        for (Uint32 off = 0; off < n; off += sizeof(scaled)) {
+            const Uint32 len = SDL_min(n - off, (Uint32)sizeof(scaled));
+            memset(scaled, 0, len);
+            SDL_MixAudioFormat(scaled, d + off, AUDIO_S16LSB, len, volume * SDL_MIX_MAXVOLUME / 100);
+            SDL_QueueAudio(g_adev, scaled, len);
+        }
+    }
     g_a_bytes += n;
     if (g_a_paused && q + n >= bps * 40 / 1000) {
         SDL_PauseAudioDevice(g_adev, 0);
@@ -670,6 +684,7 @@ static void prefs_load(void)
         int hm;
         if (sscanf(line, "stats_overlay=%d", &hm) == 1 && hm >= 0 && hm < HUD_MODES) g_hud = hm;
         if (sscanf(line, "vsync=%d", &hm) == 1) g_vsync = hm != 0;
+        if (sscanf(line, "volume=%d", &hm) == 1 && hm >= 0 && hm <= 100) SDL_AtomicSet(&g_volume, hm);
         if (sscanf(line, "upscaler=%127s", v) == 1) up_set_by_key(v);
         if (sscanf(line, "fsr_sharpness=%d", &hm) == 1 && hm >= 0 && hm <= 100) g_fsr_sharpness = hm;
         if (sscanf(line, "hwdec=%d", &hm) == 1) g_hwdec = hm != 0;
@@ -693,6 +708,20 @@ static void prefs_load(void)
                 g_view_pan_x = px; g_view_pan_y = py;
             }
         }
+    }
+    fclose(f);
+}
+
+/* Live CLI playback restores volume without loading unrelated app preferences. */
+static void prefs_load_volume(void)
+{
+    char path[1024], line[256];
+    prefs_path(path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof(line), f)) {
+        int volume;
+        if (sscanf(line, "volume=%d", &volume) == 1 && volume >= 0 && volume <= 100) SDL_AtomicSet(&g_volume, volume);
     }
     fclose(f);
 }
@@ -775,6 +804,7 @@ static void prefs_save(void)
     if (!f) return;
     fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\nvsync=%d\nupscaler=%s\nhwdec=%d\nlock_aspect=%d\nchromeless=%d\nalways_on_top=%d\npicture=%d,%d,%d,%d,%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud, g_vsync, up_key[g_upscaler], g_hwdec, g_lock_aspect, g_chromeless, g_always_on_top,
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
+    fprintf(f, "volume=%d\n", SDL_AtomicGet(&g_volume));
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
     fprintf(f, "one_file_recording=%d\n", g_rec_one_file);
     pad_prefs_save(f);
@@ -789,7 +819,7 @@ static void prefs_save(void)
 
 #define ui_dbg(...) do { if (g_ui_debug) { fprintf(stderr, "ui: " __VA_ARGS__); fflush(stderr); } } while (0)
 
-/* Picture/FSR slider drags: mark dirty; flush on release or after ~400 ms idle. */
+/* Slider drags: mark dirty; flush on release or after ~400 ms idle. */
 static void prefs_mark_dirty(void)
 {
     g_prefs_dirty_ms = SDL_GetTicks();
@@ -1824,6 +1854,12 @@ static void act_mute(int mute)
     g_mute = mute;
     if (g_adev) { SDL_ClearQueuedAudio(g_adev); SDL_PauseAudioDevice(g_adev, 1); g_a_paused = 1; }
     fprintf(stderr, "\naudio %s\n", g_mute ? "muted" : "on");
+}
+
+static void act_volume(int volume)
+{
+    SDL_AtomicSet(&g_volume, SDL_clamp(volume, 0, 100));
+    prefs_mark_dirty();
 }
 
 static void act_hwdec(int on)
@@ -3101,8 +3137,9 @@ int main(int argc, char **argv)
         if (g_ui_debug_cli >= 0) g_ui_debug = g_ui_debug_cli;
         if (g_lock_aspect_cli >= 0) g_lock_aspect = g_lock_aspect_cli;
         if (g_chromeless_cli >= 0) g_chromeless = g_chromeless_cli;
-    } else if (g_ui_debug_cli >= 0) {
-        g_ui_debug = g_ui_debug_cli;
+    } else {
+        if (!file && !check) prefs_load_volume();
+        if (g_ui_debug_cli >= 0) g_ui_debug = g_ui_debug_cli;
     }
 #ifdef _WIN32
     /* a GUI program has no console: the statistics go to a log file,
