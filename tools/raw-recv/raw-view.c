@@ -1174,19 +1174,28 @@ static int read_exact(uint8_t *dst, size_t n, int ms)
         return g_quit ? -1 : (int)done;
     }
     size_t done = 0;
+    static int errs = 0;                /* v0.7.23: failed reads in a row */
     while (done < n && !g_quit) {
         int got = 0;
         int chunk = (int)((n - done) > 0x40000 ? 0x40000 : (n - done));
         int rc = libusb_bulk_transfer(g_usb, SFT_EP_IN, dst + done, chunk, &got, ms);
         if (rc == 0 || rc == LIBUSB_ERROR_TIMEOUT) {
+            if (rc == 0) errs = 0;
             if (got == 0 && rc == LIBUSB_ERROR_TIMEOUT) return (done > 0) ? -2 : 0;
             done += (size_t)got;
             continue;
         }
         /* NO_DEVICE means the console left the bus (powered off, rebooted):
          * exit cleanly instead of spinning on errors */
-        if (rc == LIBUSB_ERROR_NO_DEVICE) { if (g_app) g_lost = 1; else g_quit = 1; return -3; }
+        if (rc == LIBUSB_ERROR_NO_DEVICE) { errs = 0; if (g_app) g_lost = 1; else g_quit = 1; return -3; }
         fprintf(stderr, "bulk read: %s\n", libusb_error_name(rc));
+        /* v0.7.23 (#49, an M4 Mac): PIPE, OTHER and NOT_FOUND came in long
+         * runs, the reader retrying at once each time. A stalled endpoint
+         * stays stalled until it is cleared; and errors that keep coming are
+         * a link that went away - open the device again, as after a pull */
+        if (rc == LIBUSB_ERROR_PIPE) libusb_clear_halt(g_usb, SFT_EP_IN);
+        if (++errs >= 8) { errs = 0; fprintf(stderr, "bulk read: 8 errors in a row - opening the Switch again\n"); if (g_app) g_lost = 1; else g_quit = 1; return -3; }
+        SDL_Delay(5);
         return -1;
     }
     return g_quit ? -1 : (int)done;
