@@ -140,6 +140,9 @@ int main() {
      * pairs, and the stream taking only ~2 in 5 presents */
     Expect("VV: 3 slots among 43, 60% missed",      { 3, 43, true,  true,  0.10, 0.60, 0.05, 3000, 0, 0.0, 28, 4 }, 900);
     Expect("VV: + 80% missed",                      { 3, 43, true,  true,  0.10, 0.80, 0.05, 6000, 0, 0.0, 28, 4 }, 3000);
+    /* Maestro (v0.7.23, #70): 95 buffers of the slots' size, the slots
+     * anywhere among them (past the first 64 too), the stream at ~27 fps */
+    Expect("Maestro: 3 slots among 95",             { 3, 95, true,  true,  0.10, 0.50, 0.05, 6000, 20, 0.10, 40, 8 }, 900);
     /* a picture that never moves says nothing about which buffer is which */
     ExpectNoMatch("still picture",                  { 3, 6,  true,  true,  0.0,  0.0,  1.0,  2000 });
     /* and it stops sampling after MaxSamples even when nothing ever changes */

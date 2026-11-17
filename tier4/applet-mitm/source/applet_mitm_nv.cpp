@@ -6552,6 +6552,10 @@ namespace ams::mitm::applet {
              * session found if its buffers are all still there. */
             static constexpr u32 MaxSlotCand = slotmatch::MaxCand;
             static constexpr u32 SigPoints = 32;
+            /* v0.7.23: past 48 candidates (#70, Maestro: 95), half the points
+             * each - a sample reads what 48 candidates did at 32 */
+            static constexpr u32 SigPointsMany = 16;
+            u32 sig_points = SigPoints;
             bool sep_layout = false;       /* the geometry says one object per slot */
             bool sep = false;              /* reading per-slot buffers */
             bool sep_locked = false;       /* matched (or given up): no more sampling */
@@ -6578,6 +6582,7 @@ namespace ams::mitm::applet {
              * the slots are offsets in it (MK8) */
             void PrepareSlots(::ams::svc::Handle dbg, u64 slot_base, const char *who) {
                 sep = sep_locked = still_guessed = false;
+                sig_points = SigPoints;
                 u64 span = buf_bytes;
                 for (u32 k = 0; k < nslots; ++k) { if (slot_off[k] + static_cast<u64>(buf_bytes) > span) { span = slot_off[k] + static_cast<u64>(buf_bytes); } }
                 ::ams::svc::MemoryInfo mi = {};
@@ -6759,6 +6764,7 @@ namespace ams::mitm::applet {
                     }
                 }
                 matcher.Reset(nslots, ncand);
+                sig_points = ncand > 48 ? SigPointsMany : SigPoints;
                 sep = true;
                 LogLine("   %s: %u slot(s), %s; %u candidate buffer(s) of %u B from 0x%010llx%s - matching them to slots while streaming",
                         who, nslots, sep_layout ? "each its own nvmap object" : "no region exactly the swapchain's size",
@@ -6766,14 +6772,14 @@ namespace ams::mitm::applet {
                         reused ? " (starting from the last session's match)" : "");
             }
 
-            /* a hash of SigPoints 64-byte samples spread over the buffer;
+            /* a hash of sig_points 64-byte samples spread over the buffer;
              * *varied false when every sample is one repeated 4-byte value
              * (a cleared buffer) */
             u32 SampleSig(::ams::svc::Handle dbg, u64 base, bool *varied) const {
-                const u64 step = (buf_bytes / SigPoints) & ~UINT64_C(63);
+                const u64 step = (buf_bytes / sig_points) & ~UINT64_C(63);
                 u32 h = 2166136261u, first = 0;
                 bool var = false;
-                for (u32 j = 0; j < SigPoints; ++j) {
+                for (u32 j = 0; j < sig_points; ++j) {
                     alignas(64) u8 b[64];
                     if (!DbgRead(dbg, b, base + j * step + ((step / 2) & ~UINT64_C(63)), sizeof(b))) { *varied = false; return 0; }
                     if (j == 0) { std::memcpy(std::addressof(first), b, sizeof(first)); }

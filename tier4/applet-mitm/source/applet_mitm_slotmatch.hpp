@@ -31,8 +31,13 @@ namespace ams::mitm::applet::slotmatch {
 
     constexpr uint32_t MaxSlots = 8;
     /* v0.7.3: 48 (was 24) - Minecraft back in handheld after docked had
-     * more than 24 regions of a 720p buffer's size, its new buffers past them */
-    constexpr uint32_t MaxCand  = 48;
+     * more than 24 regions of a 720p buffer's size, its new buffers past them.
+     * v0.7.23: 96 - Maestro (#70) has 95 buffers of its 720p slots' size, none
+     * mapped for the display; the slots were past the 48 the list kept, the
+     * match never came and the stream showed a render target (violet noise).
+     * The stream samples fewer points per buffer past 48 (SigPointsMany), so
+     * a sample costs what it did. */
+    constexpr uint32_t MaxCand  = 96;
 
     constexpr uint32_t MinPerSlot = 8;      /* counted intervals per slot before any match */
     constexpr int32_t  MinScore   = 600;    /* of 1000 */
@@ -104,7 +109,7 @@ namespace ams::mitm::applet::slotmatch {
             if (nslots < 2) { return false; }
             for (uint32_t s = 0; s < nslots; ++s) { if (tot_in[s] < MinPerSlot || tot_out[s] < MinPerSlot) { return false; } }
             uint8_t m[MaxSlots] = {};
-            uint64_t used = 0;
+            uint64_t used[(MaxCand + 63) / 64] = {};
             int32_t worst = 1000;
             for (uint32_t s = 0; s < nslots; ++s) {
                 int32_t best = -1, best_score = -100000, second = -100000;
@@ -114,9 +119,9 @@ namespace ams::mitm::applet::slotmatch {
                     if (score > best_score) { second = best_score; best_score = score; best = static_cast<int32_t>(c); }
                     else if (score > second) { second = score; }
                 }
-                if (best < 0 || best_score < MinScore || best_score - second < MinMargin || (used & (UINT64_C(1) << best)) != 0) { return false; }
+                if (best < 0 || best_score < MinScore || best_score - second < MinMargin || (used[best / 64] & (UINT64_C(1) << (best % 64))) != 0) { return false; }
                 m[s] = static_cast<uint8_t>(best);
-                used |= UINT64_C(1) << best;
+                used[best / 64] |= UINT64_C(1) << (best % 64);
                 if (best_score < worst) { worst = best_score; }
             }
             std::memcpy(out, m, nslots);
