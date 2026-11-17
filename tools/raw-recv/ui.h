@@ -264,7 +264,20 @@ static void ui_chrome_hit(float x, float y, float d, int id)
     ui_hit(x - pad, y - pad, d + pad * 2, d + pad * 2, id, 0);
 }
 
-/* the settings button: a gear in a round button, "Settings" beside it on hover */
+/* Hover tip centered under a chrome button (avoids covering neighbours). */
+static void ui_chrome_tip_below(SDL_Renderer *ren, float x, float y, float d, const char *tip)
+{
+    if (!tip || !tip[0]) return;
+    const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
+    const float tw = text_width(tip, px, 1) + d * 0.48f;
+    const float th = d * 0.62f;
+    const float tx = x + (d - tw) * 0.5f;
+    const float ty = y + d + d * 0.12f;
+    ui_rrect(ren, tx, ty, tw, th, th * 0.5f, (SDL_Color){ 21, 24, 30, 230 });
+    text_draw(ren, tip, (int)(tx + tw * 0.5f), (int)(ty + th * 0.18f), px, 1, UI_INK, 1);
+}
+
+/* the settings button: a gear in a round button, tip under on hover */
 static void ui_gear_button(SDL_Renderer *ren, float xr, float y, float d, SDL_Color bg, int id)
 {
     const float x = xr - d, inset = d * 0.19f;
@@ -279,17 +292,11 @@ static void ui_gear_button(SDL_Renderer *ren, float xr, float y, float d, SDL_Co
         const SDL_FRect g = { x + inset, y + inset, d - inset * 2, d - inset * 2 };
         SDL_RenderCopyF(ren, g_ui_gear, NULL, &g);
     }
-    if (hov) {
-        const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
-        const float tw = text_width("Settings", px, 1) + d * 0.48f;
-        const float th = d * 0.62f, ty = y + (d - th) * 0.5f;
-        ui_rrect(ren, x - tw - d * 0.19f, ty, tw, th, th * 0.5f, (SDL_Color){ 21, 24, 30, 230 });
-        text_draw(ren, "Settings", (int)(x - d * 0.19f - tw * 0.5f), (int)(ty + th * 0.18f), px, 1, UI_INK, 1);
-    }
+    if (hov) ui_chrome_tip_below(ren, x, y, d, "Settings");
     ui_chrome_hit(x, y, d, id);
 }
 
-/* Cycle picture orientation (Flip-Grip / TATE). Top-left, right of the pad button. */
+/* Cycle picture orientation (Flip-Grip / TATE). Top-right, between gear and pin. */
 static void ui_orient_button(SDL_Renderer *ren, float x, float y, float d, SDL_Color bg, int id)
 {
     const int hov = ui_in(x, y, d, d);
@@ -303,17 +310,11 @@ static void ui_orient_button(SDL_Renderer *ren, float x, float y, float d, SDL_C
     const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
     SDL_Color ink = g_orient != 0 ? (SDL_Color){ 12, 14, 18, 255 } : UI_INK;
     text_draw(ren, lab, (int)(x + d * 0.5f), (int)(y + d * 0.28f), px, 1, ink, 1);
-    if (hov) {
-        const char *tip = "Orientation";
-        const float tw = text_width(tip, px, 1) + d * 0.48f;
-        const float th = d * 0.62f, ty = y + (d - th) * 0.5f, tx = x + d + d * 0.19f;
-        ui_rrect(ren, tx, ty, tw, th, th * 0.5f, (SDL_Color){ 21, 24, 30, 230 });
-        text_draw(ren, tip, (int)(tx + tw * 0.5f), (int)(ty + th * 0.18f), px, 1, UI_INK, 1);
-    }
+    if (hov) ui_chrome_tip_below(ren, x, y, d, "Orientation");
     ui_chrome_hit(x, y, d, id);
 }
 
-/* the controller button: a gamepad in a round button at the top left, "Controller" beside it on hover */
+/* the controller button: a gamepad in a round button at the top left */
 static void ui_pad_button(SDL_Renderer *ren, float x, float y, float d, SDL_Color bg, int id)
 {
     const float inset = d * 0.17f;
@@ -328,13 +329,7 @@ static void ui_pad_button(SDL_Renderer *ren, float x, float y, float d, SDL_Colo
         const SDL_FRect g = { x + inset, y + inset, d - inset * 2, d - inset * 2 };
         SDL_RenderCopyF(ren, g_ui_pad, NULL, &g);
     }
-    if (hov) {
-        const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
-        const float tw = text_width("Controller", px, 1) + d * 0.48f;
-        const float th = d * 0.62f, ty = y + (d - th) * 0.5f, tx = x + d + d * 0.19f;
-        ui_rrect(ren, tx, ty, tw, th, th * 0.5f, (SDL_Color){ 21, 24, 30, 230 });
-        text_draw(ren, "Controller", (int)(tx + tw * 0.5f), (int)(ty + th * 0.18f), px, 1, UI_INK, 1);
-    }
+    if (hov) ui_chrome_tip_below(ren, x, y, d, "Controller");
     ui_chrome_hit(x, y, d, id);
 }
 
@@ -376,8 +371,7 @@ static void ui_win_btn(SDL_Renderer *ren, float x, float y, float d, int id, int
     ui_chrome_hit(x, y, d, id);
 }
 
-/* Pin / always-on-top: sits right of the gear, left of min/max/close when borderless.
- * Status is the bottom toast only - no hover label (it sat under the gear). */
+/* Pin / always-on-top: right of orient (or gear), left of min/max/close when borderless. */
 static void ui_pin_button(SDL_Renderer *ren, float x, float y, float d)
 {
     const int hov = ui_in(x, y, d, d);
@@ -395,11 +389,12 @@ static void ui_pin_button(SDL_Renderer *ren, float x, float y, float d)
         const SDL_FRect g = { x + inset, y + inset, d - inset * 2, d - inset * 2 };
         SDL_RenderCopyF(ren, g_ui_pin, NULL, &g);
     }
+    if (hov) ui_chrome_tip_below(ren, x, y, d, on ? "Unpin from top" : "Pin to top");
     ui_chrome_hit(x, y, d, H_PIN);
 }
 
 /* Layout of top chrome in window/output pixels. Returns button count.
- * Right→left: [close max min] pin gear; left: pad [orient]. */
+ * Right→left: [close max min] pin [orient] gear; left: pad. */
 static int ui_chrome_layout(int ow, float *xs, int *ids, float *out_d, float *out_y)
 {
     const float dens = ui_chrome_dens(ow);
@@ -413,11 +408,11 @@ static int ui_chrome_layout(int ow, float *xs, int *ids, float *out_d, float *ou
         ids[n] = H_WIN_MIN;   xs[n] = right - d; n++; right -= d + gap;
     }
     ids[n] = H_PIN;      xs[n] = right - d; n++; right -= d + gap;
+    if (g_orient_btn) {
+        ids[n] = H_ORIENT; xs[n] = right - d; n++; right -= d + gap;
+    }
     ids[n] = H_SETTINGS; xs[n] = right - d; n++;
     ids[n] = H_PADMENU;  xs[n] = margin; n++;       /* top left, the mirror of the gear */
-    if (g_orient_btn) {
-        ids[n] = H_ORIENT; xs[n] = margin + d + gap; n++;
-    }
     *out_d = d; *out_y = y;
     return n;
 }
@@ -429,8 +424,7 @@ static float ui_chrome_left_extent_px(SDL_Renderer *ren)
     int ow = 0, oh = 0;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
     const float dens = ui_chrome_dens(ow > 0 ? ow : 1280);
-    const float buttons = g_orient_btn ? 2.f : 1.f;
-    return (10.f + 42.f * buttons + 8.f * buttons) * dens;
+    return (10.f + 42.f + 8.f) * dens;
 }
 
 /* the same, in 720p units over the picture (the picture may not reach the window's edge) */
