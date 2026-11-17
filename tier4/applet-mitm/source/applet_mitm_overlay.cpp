@@ -621,6 +621,14 @@ namespace ams::mitm::applet {
         if (g_armed || probe) { g_ovl_vi_mitm.store(true, std::memory_order_relaxed); }
         if (g_armed) {
             LogLine("overlays: on (%s) - the volume bar, quick settings, power menu and Tesla/Ultrahand in the stream; Tesla's new vi:m sessions are wrapped (never captured)", on ? "config" : "overlays.txt");
+            /* v0.7.23 (#79): Tesla shows in the stream through its vi:m session,
+             * and only a session opened after ours is up passes through us - one
+             * from before (Ultrahand started first) stays invisible until it
+             * opens a new one (another overlay, a reload) */
+            if (const u64 pid = PidOf(TeslaProgramId); pid != 0) {
+                LogLine("overlays: Tesla/Ultrahand (pid %llu) started before Switch Frame Tap - it shows in the stream once it opens its display again (switch to another overlay and back)",
+                        static_cast<unsigned long long>(pid));
+            }
             SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_ovl_thread), OverlayThread, nullptr, g_ovl_stack, sizeof(g_ovl_stack), ThreadBasePriority()));
             os::SetThreadNamePointer(std::addressof(g_ovl_thread), "applet-mitm.Overlays");
             os::StartThread(std::addressof(g_ovl_thread));
