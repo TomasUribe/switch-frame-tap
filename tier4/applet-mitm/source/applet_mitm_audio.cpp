@@ -387,8 +387,11 @@ namespace ams::mitm::applet {
         constexpr u64 AlbumId   = UINT64_C(0x010000000000100D);
 
         bool HomeWanted() {
+            // Stock HOME sets g_ui_session_active. SwitchU streams as Album/100D
+            // (live game path) and never arms that flag — also record while its
+            // menu is open or HOME audio stays silent on SwitchU.
             return g_audio_enabled.load(std::memory_order_relaxed) && g_audio_active.load(std::memory_order_relaxed) &&
-                   g_ui_session_active.load(std::memory_order_relaxed);
+                   (g_ui_session_active.load(std::memory_order_relaxed) || SwitchUOpen());
         }
 
         /* Prefer SwitchU's menu (100D) when it is the HOME stand-in; else qlaunch. */
