@@ -3,6 +3,7 @@
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_service.hpp"
 #include "applet_mitm_nv.hpp"
+#include "applet_mitm_donor.hpp"
 
 namespace ams::mitm::applet {
 
@@ -377,19 +378,35 @@ namespace ams::mitm::applet {
          * The final output recorder records the mix of one applet resource
          * user. sound2 (logs/v0714-sound2) opened it for aruid 0 only - the
          * application - and found the HOME menu exact zeros. Opened with
-         * qlaunch's process id as the aruid, it records the HOME menu. So:
-         * while the HOME menu is the stream's source (g_ui_session_active), this
-         * recorder has the ring - grc:d and the game's recorder keep reading
-         * but push nothing (a game behind the HOME menu is suspended), and it
-         * gives the ring back when the session ends. Volumes are only read. */
+         * qlaunch's process id as the aruid, it records stock HOME. SwitchU
+         * replaces qlaunch's exefs with its daemon and plays music/SFX in the
+         * Album takeover (100D): record that process instead when SwitchU's
+         * menu is open. Same AudHome thread + HomeRec buffers either way - no
+         * extra BSS. While g_ui_session_active, this recorder has the ring. */
         constexpr u64 QlaunchId = UINT64_C(0x0100000000001000);
+        constexpr u64 AlbumId   = UINT64_C(0x010000000000100D);
 
         bool HomeWanted() {
             return g_audio_enabled.load(std::memory_order_relaxed) && g_audio_active.load(std::memory_order_relaxed) &&
                    g_ui_session_active.load(std::memory_order_relaxed);
         }
 
-        void HomeVolumes(u64 pid) {
+        /* Prefer SwitchU's menu (100D) when it is the HOME stand-in; else qlaunch. */
+        bool ResolveHomePid(os::ProcessId *out, const char **out_who) {
+            if (SwitchUOpen()) {
+                if (R_SUCCEEDED(::ams::pm::dmnt::GetProcessId(out, ncm::ProgramId{AlbumId})) && out->value != 0) {
+                    *out_who = "SwitchU's menu";
+                    return true;
+                }
+            }
+            if (R_SUCCEEDED(::ams::pm::dmnt::GetProcessId(out, ncm::ProgramId{QlaunchId})) && out->value != 0) {
+                *out_who = "qlaunch";
+                return true;
+            }
+            return false;
+        }
+
+        void HomeVolumes(u64 pid, const char *who) {
             ::Service aud = {};
             ::Result rc = 0;
             {
@@ -401,7 +418,8 @@ namespace ams::mitm::applet {
             const ::Result r1 = serviceDispatchInOut(&aud, 8, pid, rec);
             const ::Result r2 = serviceDispatchInOut(&aud, 4, pid, master);
             serviceClose(&aud);
-            LogLine("audio: qlaunch's record volume %d/1000 (rc=0x%x), master volume %d/1000 (rc=0x%x)", Milli(rec), r1, Milli(master), r2);
+            LogLine("audio: %s record volume %d/1000 (rc=0x%x), master volume %d/1000 (rc=0x%x)",
+                    who, Milli(rec), r1, Milli(master), r2);
         }
 
         void HomeThread(void *) {
@@ -410,8 +428,9 @@ namespace ams::mitm::applet {
                 os::SleepThread(TimeSpan::FromMilliSeconds(200));
                 if (failures >= 3 || !HomeWanted()) { continue; }
                 os::ProcessId pid{0};
-                if (R_FAILED(::ams::pm::dmnt::GetProcessId(std::addressof(pid), ncm::ProgramId{QlaunchId})) || pid.value == 0) {
-                    if (++failures >= 3) { LogLine("audio: qlaunch's process id not found - no HOME menu sound this boot"); }
+                const char *who = "qlaunch";
+                if (!ResolveHomePid(std::addressof(pid), std::addressof(who))) {
+                    if (++failures >= 3) { LogLine("audio: HOME/SwitchU process id not found - no HOME menu sound this boot"); }
                     os::SleepThread(TimeSpan::FromSeconds(5));
                     continue;
                 }
@@ -423,8 +442,9 @@ namespace ams::mitm::applet {
                     continue;
                 }
                 failures = 0;
-                LogLine("audio: the HOME menu streams - recording qlaunch's mix (aruid %llu)", static_cast<unsigned long long>(pid.value));
-                HomeVolumes(pid.value);
+                LogLine("audio: the HOME menu streams - recording %s mix (aruid %llu)",
+                        who, static_cast<unsigned long long>(pid.value));
+                HomeVolumes(pid.value, who);
                 g_home_running.store(true, std::memory_order_relaxed);
                 u64 bytes = 0;
                 u32 peak = 0, windows = 0, loud = 0;
@@ -443,8 +463,8 @@ namespace ams::mitm::applet {
                      * one thing this recorder is not yet known to give on every firmware */
                     if (windows < 6 && armTicksToNs(armGetSystemTick()) - win_t0 >= UINT64_C(10000000000)) {
                         ++windows;
-                        LogLine("audio: HOME menu recorder, %u0 s in: %llu KB so far, loudest sample %u of 32767, %u buffers with sound%s", windows,
-                                static_cast<unsigned long long>(bytes >> 10), peak, loud, peak == 0 ? " (silence)" : "");
+                        LogLine("audio: HOME menu recorder (%s), %u0 s in: %llu KB so far, loudest sample %u of 32767, %u buffers with sound%s",
+                                who, windows, static_cast<unsigned long long>(bytes >> 10), peak, loud, peak == 0 ? " (silence)" : "");
                         peak = 0;
                         loud = 0;
                         win_t0 = armTicksToNs(armGetSystemTick());

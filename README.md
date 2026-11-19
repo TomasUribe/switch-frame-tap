@@ -719,8 +719,10 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   exclude them. Docked mode for homebrew (beta) works in title override and
   from forwarders, not from the Album (too little memory there for 1080p).
 - **The HOME menu** (opt-in): its sounds stream too (with **Game audio**
-  on); the sound of an applet opened from it (the eShop, the Album)
-  and of SwitchU's menu may not. A game's manual still pauses the stream.
+  on), including **SwitchU**'s menu music/SFX (same recorder, SwitchU's
+  Album-takeover process instead of qlaunch). An applet opened from HOME
+  (the eShop, the real Album) may still be silent. A game's manual still
+  pauses the stream.
 - **The overlays** (opt-in): copied 10-20 times a second, so they move a
   little less smoothly than the game; the power menu is copied at half
   resolution and the overlays look a bit soft at 1080p. Only the system's
