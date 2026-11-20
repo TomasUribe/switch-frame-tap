@@ -424,9 +424,15 @@ namespace ams {
         /* v0.7.12: "Screen off while streaming" - the console's backlight off
          * (lbl, as the system's own screen-off does) while a stream runs, on
          * again the moment it stops: the viewer closed, HOME pressed, the
-         * stream switched off. Only this thread touches it. */
+         * stream switched off. Only this thread touches it.
+         *
+         * SwitchU #221: with "Stream the HOME Menu" + SwitchU, display remounts
+         * / UI→game handoffs can turn the panel back on after we first darken
+         * it. Edge-only lblSwitchBacklightOff then never fires again (want
+         * still true, dark still true). Re-assert Off while we want dark. */
         void ScreenFollowStream() {
             static bool dark = false, tried = false, lbl_ok = false;
+            static u32 reassert = 0;
             /* and the game is drawing: HOME with detach_on_home = 0 keeps the
              * session, but the screen should come back for the HOME menu.
              * v0.7.17: 2.5 s without a frame, not 1 - since v0.7.16 a session
@@ -437,7 +443,6 @@ namespace ams {
             const bool drawing = qt != 0 && armTicksToNs(armGetSystemTick() - qt) < UINT64_C(2500000000);
             const bool want = g_screen_off.load(std::memory_order_relaxed) && drawing &&
                               mitm::applet::g_streaming_now.load(std::memory_order_relaxed);
-            if (want == dark) { return; }
             if (!tried) {
                 tried = true;
                 mitm::applet::SmUse sm;
@@ -446,9 +451,24 @@ namespace ams {
                 mitm::applet::LogLine("screen: lbl %s (rc=0x%x)", lbl_ok ? "ready" : "unavailable", r.GetValue());
             }
             if (!lbl_ok) { return; }
-            const Result r = want ? lblSwitchBacklightOff(0) : lblSwitchBacklightOn(0);
-            dark = want;
-            mitm::applet::LogLine("screen: %s (rc=0x%x)", want ? "off while streaming" : "on", r.GetValue());
+            if (want) {
+                /* Heartbeat calls us every 250 ms — re-assert ~1 s. */
+                const bool first = !dark;
+                if (first || ++reassert >= 4) {
+                    reassert = 0;
+                    const Result r = lblSwitchBacklightOff(0);
+                    if (first) {
+                        mitm::applet::LogLine("screen: off while streaming (rc=0x%x)", r.GetValue());
+                    }
+                    dark = true;
+                }
+                return;
+            }
+            reassert = 0;
+            if (!dark) { return; }
+            const Result r = lblSwitchBacklightOn(0);
+            dark = false;
+            mitm::applet::LogLine("screen: on (rc=0x%x)", r.GetValue());
         }
 
         /* v0.7.13 test: config/switch-frame-tap/ballast.txt = "N [S]" holds N MB
