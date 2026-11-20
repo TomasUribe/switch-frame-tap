@@ -45,6 +45,14 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.23" date="2026-11-19">
+      <description>
+        <ul>
+          <li>A playback volume slider (Settings, Sound), a smoother viewer under load, and an FSR/NIS render scale (Y) and sharpness (F9).</li>
+          <li>On the console: firmware 23.5.0 no longer crashes at boot, and a firmware newer than the build leaves the console booting with the stream off.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.22" date="2026-11-10">
       <description>
         <ul>
