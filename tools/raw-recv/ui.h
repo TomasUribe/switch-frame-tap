@@ -1,8 +1,8 @@
 /* ui.h - v0.7.12: the viewer's look. One home screen while there is no
  * picture, and one settings drawer (Esc, or the Settings button) with every
  * option in it, over the home screen or over the game - mouse or keys. The
- * old shortcuts (R, M, F11, Tab, I, O, V, A, B, U) still work; P opens the drawer at
- * the picture controls.
+ * old shortcuts (R, M, F11, Tab, I, O, V, A, B, U, T, Y) still work; P opens the drawer at
+ * the picture controls; T cycles display orientation, Y the render scale.
  *
  * Immediate mode: every draw lays the controls out again and remembers where
  * the clickable ones are; the next mouse event is matched against that.
@@ -52,7 +52,8 @@ static int ui_px(int px)
 static void ui_open(int open);
 static void ui_page(int page);
 
-enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_ASPECT, H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
+enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_ASPECT, H_ORIENT, H_ORIENTBTN,
+       H_ORIENTCYCLE, H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
        H_PIC, H_PIC_RESET, H_SOUND, H_VOLUME, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
        H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_PIN, H_REC1, H_PAD, H_PADKB,
        H_PADMENU, H_PADBACK, H_PADMOUSE, H_PADTAB, H_PADBIND, H_PADMBTN, H_PADMODE, H_PADINV, H_PADSL, H_PADCHANGE,
@@ -263,7 +264,35 @@ static void ui_chrome_hit(float x, float y, float d, int id)
     ui_hit(x - pad, y - pad, d + pad * 2, d + pad * 2, id, 0);
 }
 
-/* the settings button: a gear in a round button, "Settings" beside it on hover */
+/* Hover tip centered under a chrome button; clamped so it stays on-screen. */
+static void ui_chrome_tip_below(SDL_Renderer *ren, float x, float y, float d, const char *tip)
+{
+    if (!tip || !tip[0]) return;
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
+    const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
+    const float tw = text_width(tip, px, 1) + d * 0.48f;
+    const float th = d * 0.62f;
+    const float margin = d * 0.12f;
+    float tx = x + (d - tw) * 0.5f;
+    float ty = y + d + margin;
+    if (ow > 0) {
+        if (tx < margin) tx = margin;
+        if (tx + tw > (float)ow - margin) tx = (float)ow - margin - tw;
+        if (tx < margin) tx = margin; /* still too wide: pin left */
+    }
+    if (oh > 0 && ty + th > (float)oh - margin) {
+        /* Prefer under; if that clips the bottom, flip above the button. */
+        const float above = y - margin - th;
+        if (above >= margin) ty = above;
+        else ty = (float)oh - margin - th;
+        if (ty < margin) ty = margin;
+    }
+    ui_rrect(ren, tx, ty, tw, th, th * 0.5f, (SDL_Color){ 21, 24, 30, 230 });
+    text_draw(ren, tip, (int)(tx + tw * 0.5f), (int)(ty + th * 0.18f), px, 1, UI_INK, 1);
+}
+
+/* the settings button: a gear in a round button, tip under on hover */
 static void ui_gear_button(SDL_Renderer *ren, float xr, float y, float d, SDL_Color bg, int id)
 {
     const float x = xr - d, inset = d * 0.19f;
@@ -278,17 +307,29 @@ static void ui_gear_button(SDL_Renderer *ren, float xr, float y, float d, SDL_Co
         const SDL_FRect g = { x + inset, y + inset, d - inset * 2, d - inset * 2 };
         SDL_RenderCopyF(ren, g_ui_gear, NULL, &g);
     }
-    if (hov) {
-        const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
-        const float tw = text_width("Settings", px, 1) + d * 0.48f;
-        const float th = d * 0.62f, ty = y + (d - th) * 0.5f;
-        ui_rrect(ren, x - tw - d * 0.19f, ty, tw, th, th * 0.5f, (SDL_Color){ 21, 24, 30, 230 });
-        text_draw(ren, "Settings", (int)(x - d * 0.19f - tw * 0.5f), (int)(ty + th * 0.18f), px, 1, UI_INK, 1);
-    }
+    if (hov) ui_chrome_tip_below(ren, x, y, d, "Settings");
     ui_chrome_hit(x, y, d, id);
 }
 
-/* the controller button: a gamepad in a round button at the top left, "Controller" beside it on hover */
+/* Cycle picture orientation (Flip-Grip / TATE). Top-right, between gear and pin. */
+static void ui_orient_button(SDL_Renderer *ren, float x, float y, float d, SDL_Color bg, int id)
+{
+    const int hov = ui_in(x, y, d, d);
+    SDL_Color b = bg;
+    if (g_orient != 0) b = (SDL_Color){ UI_ACC.r, UI_ACC.g, UI_ACC.b, 220 };
+    else if (hov) { b = UI_SURF3; b.a = bg.a > 230 ? bg.a : 230; }
+    ui_rrect(ren, x, y, d, d, d / 2, b);
+    char lab[8];
+    if (g_orient == 0) snprintf(lab, sizeof(lab), "0");
+    else snprintf(lab, sizeof(lab), "%d", g_orient);
+    const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
+    SDL_Color ink = g_orient != 0 ? (SDL_Color){ 12, 14, 18, 255 } : UI_INK;
+    text_draw(ren, lab, (int)(x + d * 0.5f), (int)(y + d * 0.28f), px, 1, ink, 1);
+    if (hov) ui_chrome_tip_below(ren, x, y, d, "Orientation");
+    ui_chrome_hit(x, y, d, id);
+}
+
+/* the controller button: a gamepad in a round button at the top left */
 static void ui_pad_button(SDL_Renderer *ren, float x, float y, float d, SDL_Color bg, int id)
 {
     const float inset = d * 0.17f;
@@ -303,13 +344,7 @@ static void ui_pad_button(SDL_Renderer *ren, float x, float y, float d, SDL_Colo
         const SDL_FRect g = { x + inset, y + inset, d - inset * 2, d - inset * 2 };
         SDL_RenderCopyF(ren, g_ui_pad, NULL, &g);
     }
-    if (hov) {
-        const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
-        const float tw = text_width("Controller", px, 1) + d * 0.48f;
-        const float th = d * 0.62f, ty = y + (d - th) * 0.5f, tx = x + d + d * 0.19f;
-        ui_rrect(ren, tx, ty, tw, th, th * 0.5f, (SDL_Color){ 21, 24, 30, 230 });
-        text_draw(ren, "Controller", (int)(tx + tw * 0.5f), (int)(ty + th * 0.18f), px, 1, UI_INK, 1);
-    }
+    if (hov) ui_chrome_tip_below(ren, x, y, d, "Controller");
     ui_chrome_hit(x, y, d, id);
 }
 
@@ -351,8 +386,7 @@ static void ui_win_btn(SDL_Renderer *ren, float x, float y, float d, int id, int
     ui_chrome_hit(x, y, d, id);
 }
 
-/* Pin / always-on-top: sits right of the gear, left of min/max/close when borderless.
- * Status is the bottom toast only - no hover label (it sat under the gear). */
+/* Pin / always-on-top: right of orient (or gear), left of min/max/close when borderless. */
 static void ui_pin_button(SDL_Renderer *ren, float x, float y, float d)
 {
     const int hov = ui_in(x, y, d, d);
@@ -370,11 +404,12 @@ static void ui_pin_button(SDL_Renderer *ren, float x, float y, float d)
         const SDL_FRect g = { x + inset, y + inset, d - inset * 2, d - inset * 2 };
         SDL_RenderCopyF(ren, g_ui_pin, NULL, &g);
     }
+    if (hov) ui_chrome_tip_below(ren, x, y, d, on ? "Unpin from top" : "Pin to top");
     ui_chrome_hit(x, y, d, H_PIN);
 }
 
-/* Layout of top-right chrome in window/output pixels. Returns button count.
- * Right→left: [close max min] pin gear  (window controls only when borderless). */
+/* Layout of top chrome in window/output pixels. Returns button count.
+ * Right→left: [close max min] pin [orient] gear; left: pad. */
 static int ui_chrome_layout(int ow, float *xs, int *ids, float *out_d, float *out_y)
 {
     const float dens = ui_chrome_dens(ow);
@@ -388,13 +423,16 @@ static int ui_chrome_layout(int ow, float *xs, int *ids, float *out_d, float *ou
         ids[n] = H_WIN_MIN;   xs[n] = right - d; n++; right -= d + gap;
     }
     ids[n] = H_PIN;      xs[n] = right - d; n++; right -= d + gap;
+    if (g_orient_btn) {
+        ids[n] = H_ORIENT; xs[n] = right - d; n++; right -= d + gap;
+    }
     ids[n] = H_SETTINGS; xs[n] = right - d; n++;
     ids[n] = H_PADMENU;  xs[n] = margin; n++;       /* top left, the mirror of the gear */
     *out_d = d; *out_y = y;
     return n;
 }
 
-/* how far from the left edge the top-left button reaches (output pixels, with a gap):
+/* how far from the left edge the top-left chrome reaches (output pixels, with a gap):
  * the stats overlay, the REC badge and the brand sit right of it */
 static float ui_chrome_left_extent_px(SDL_Renderer *ren)
 {
@@ -421,8 +459,8 @@ static int ui_chrome_at(SDL_Renderer *ren, float wx, float wy, int *out_id)
     int ow = 0, oh = 0;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
     if (ow < 80 || oh < 40) return 0;
-    float xs[6], d = 42.f, y = 10.f;
-    int ids[6];
+    float xs[8], d = 42.f, y = 10.f;
+    int ids[8];
     const int n = ui_chrome_layout(ow, xs, ids, &d, &y);
     const float pad = d * 0.14f;
     for (int i = 0; i < n; i++) {
@@ -440,6 +478,7 @@ static void ui_chrome_activate(SDL_Window *win, int id)
     switch (id) {
     case H_SETTINGS: ui_open(1); ui_page(0); break;
     case H_PADMENU: ui_open(1); ui_page(1); break;
+    case H_ORIENT: act_orient_cycle(); break;
     case H_PIN: act_always_on_top(win, !g_always_on_top); break;
     case H_WIN_MIN: if (win) SDL_MinimizeWindow(win); break;
     case H_WIN_MAX:
@@ -461,8 +500,8 @@ static void ui_top_chrome(SDL_Renderer *ren, float xr, float y, SDL_Color gear_b
     (void)xr; (void)y;
     int ow = 0, oh = 0;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
-    float xs[6], d = 42.f, cy = 10.f;
-    int ids[6];
+    float xs[8], d = 42.f, cy = 10.f;
+    int ids[8];
     const int n = ui_chrome_layout(ow, xs, ids, &d, &cy);
     for (int i = 0; i < n; i++) {
         if (ids[i] == H_SETTINGS) {
@@ -471,6 +510,9 @@ static void ui_top_chrome(SDL_Renderer *ren, float xr, float y, SDL_Color gear_b
         } else if (ids[i] == H_PADMENU) {
             if (paint) ui_pad_button(ren, xs[i], cy, d, gear_bg, H_PADMENU);
             else ui_chrome_hit(xs[i], cy, d, H_PADMENU);
+        } else if (ids[i] == H_ORIENT) {
+            if (paint) ui_orient_button(ren, xs[i], cy, d, gear_bg, H_ORIENT);
+            else ui_chrome_hit(xs[i], cy, d, H_ORIENT);
         } else if (ids[i] == H_PIN) {
             if (paint) ui_pin_button(ren, xs[i], cy, d);
             else ui_chrome_hit(xs[i], cy, d, H_PIN);
@@ -629,9 +671,49 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
             ui_toggle(ren, xri, y + tog_y, g_vsync, H_VSYNC, 1);
             y += h + gap_y;
             ui_row(H_ASPECT, 0, y, h);
-            ui_label(ren, cxi, y, h, "Lock aspect ratio", g_lock_aspect ? "Window stays 16:9 while resizing (A)" : "Free resize; picture letterboxed (A)", ui_focused(H_ASPECT, 0), cwi);
+            ui_label(ren, cxi, y, h, "Lock aspect ratio",
+                     g_lock_aspect
+                         ? (aspect_portrait() ? "Window stays 9:16 while resizing (A)" : "Window stays 16:9 while resizing (A)")
+                         : "Free resize; picture letterboxed (A)",
+                     ui_focused(H_ASPECT, 0), cwi);
             ui_toggle(ren, xri, y + tog_y, g_lock_aspect, H_ASPECT, 1);
             y += h + gap_y;
+            {
+                static const char *const orients[] = { "0°", "90°", "180°", "270°" };
+                static const int orient_deg[] = { 0, 90, 180, 270 };
+                int oi = 0;
+                for (int k = 0; k < 4; k++) if (orient_deg[k] == g_orient) oi = k;
+                const float h_or = ui_d(88);
+                ui_row(H_ORIENT, 0, y, h_or);
+                if (ui_focused(H_ORIENT, 0)) ui_rrect(ren, cxi - ui_d(12), y - 2, cwi + ui_d(24), h_or + 4, ui_d(10), UI_SURF2);
+                text_draw(ren, "Display orientation", (int)cxi, (int)(y + ui_d(2)), ui_px(17), 0, UI_INK, 0);
+                ui_text_fit(ren, "Rotates the live stream picture (T). No effect until a stream is showing.",
+                            (int)cxi, (int)(y + ui_d(24)), ui_px(13), 0, UI_DIM, 0, (int)cwi);
+                ui_seg(ren, xri, 0, y + ui_d(48), orients, 4, oi, H_ORIENT, 13, cwi);
+                y += h_or + gap_y;
+            }
+            ui_row(H_ORIENTBTN, 0, y, h);
+            ui_label(ren, cxi, y, h, "Orientation button", g_orient_btn ? "Cycle control in the top chrome" : "Hidden; use Settings or T", ui_focused(H_ORIENTBTN, 0), cwi);
+            ui_toggle(ren, xri, y + tog_y, g_orient_btn, H_ORIENTBTN, 1);
+            y += h + gap_y;
+            if (g_orient_btn) {
+                static const char *const cycle_labs[] = {
+                    "Cycle 0° (landscape)", "Cycle 90°", "Cycle 180°", "Cycle 270°"
+                };
+                const int cmask = orient_sanitize_cycle(g_orient_cycle);
+                for (int bi = 0; bi < 4; bi++) {
+                    const int on = (cmask & (1 << bi)) != 0;
+                    ui_row(H_ORIENTCYCLE, bi, y, h);
+                    ui_label(ren, cxi + ui_d(16), y, h, cycle_labs[bi],
+                             on ? "Included when cycling (button / T)" : "Skipped when cycling",
+                             ui_focused(H_ORIENTCYCLE, bi), cwi - ui_d(16));
+                    ui_toggle(ren, xri, y + tog_y, on, H_ORIENTCYCLE, 1);
+                    /* ui_toggle stores !on; rewrite arg to the bit index. */
+                    if (g_ui_nhits > 0 && g_ui_hits[g_ui_nhits - 1].id == H_ORIENTCYCLE)
+                        g_ui_hits[g_ui_nhits - 1].arg = bi;
+                    y += h + gap_y;
+                }
+            }
             ui_row(H_CHROMELESS, 0, y, h);
             ui_label(ren, cxi, y, h, "Borderless window", g_chromeless ? "No title bar; drag the picture to move (B)" : "Normal window frame (B)", ui_focused(H_CHROMELESS, 0), cwi);
             ui_toggle(ren, xri, y + tog_y, g_chromeless, H_CHROMELESS, 1);
@@ -1252,17 +1334,18 @@ static void menu_draw(SDL_Renderer *ren)
         struct { const char *k, *what; } hints[] = {
             { "Esc", "Settings" }, { "F11", "Fullscreen" }, { "R", "Record" }, { "Tab", "USB / Network" }
         };
+        const int nh = 4;
         float widths[4], gap = ui_d(16), total = 0;
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < nh; i++) {
             widths[i] = text_width(hints[i].k, ui_px(12), 1) + ui_d(12) + ui_d(6) + text_width(hints[i].what, ui_px(13), 0);
             total += widths[i] + (i ? gap : 0);
         }
         const float inner = pw - pad * 2.f - sb_reserve;
-        int per_row = total <= inner ? 4 : 2;
+        int per_row = total <= inner ? nh : 2;
         float row_y = y;
-        for (int start = 0; start < 4; start += per_row) {
+        for (int start = 0; start < nh; start += per_row) {
             float row_w = 0;
-            int n = start + per_row <= 4 ? per_row : 4 - start;
+            int n = start + per_row <= nh ? per_row : nh - start;
             for (int j = 0; j < n; j++) row_w += widths[start + j] + (j ? gap : 0);
             float x = cx - row_w * 0.5f;
             for (int j = 0; j < n; j++) {
@@ -1367,6 +1450,22 @@ static void ui_change(SDL_Window *win, SDL_Renderer *ren, int id, int arg, int d
     case H_FULL: act_fullscreen(win); break;
     case H_VSYNC: act_vsync(ren, !g_vsync); break;
     case H_ASPECT: act_lock_aspect(win, !g_lock_aspect); break;
+    case H_ORIENT: {
+        static const int deg[] = { 0, 90, 180, 270 };
+        int oi = 0;
+        for (int k = 0; k < 4; k++) if (deg[k] == g_orient) oi = k;
+        if (d == 0) act_orient_cycle();
+        else act_orient_set(deg[(oi + (d > 0 ? 1 : 3)) % 4]);
+        break;
+    }
+    case H_ORIENTBTN:
+        g_orient_btn = !g_orient_btn;
+        g_orient_cycle = orient_sanitize_cycle(g_orient_cycle);
+        prefs_save();
+        break;
+    case H_ORIENTCYCLE:
+        act_orient_cycle_set(arg, !(orient_sanitize_cycle(g_orient_cycle) & (1 << (arg & 3))));
+        break;
     case H_CHROMELESS: act_chromeless(win, !g_chromeless); break;
     case H_HWDEC: act_hwdec(!g_hwdec); break;
     case H_REC1: act_rec_one_file(!g_rec_one_file); break;
@@ -1522,6 +1621,20 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_FULL: act_fullscreen(win); break;
             case H_VSYNC: act_vsync(ren, h->arg); break;
             case H_ASPECT: act_lock_aspect(win, h->arg); break;
+            case H_ORIENT: {
+                static const int deg[] = { 0, 90, 180, 270 };
+                if (h->arg >= 0 && h->arg < 4) act_orient_set(deg[h->arg]);
+                else act_orient_cycle();
+                break;
+            }
+            case H_ORIENTBTN:
+                g_orient_btn = h->arg != 0;
+                g_orient_cycle = orient_sanitize_cycle(g_orient_cycle);
+                prefs_save();
+                break;
+            case H_ORIENTCYCLE:
+                act_orient_cycle_set(h->arg, !(orient_sanitize_cycle(g_orient_cycle) & (1 << (h->arg & 3))));
+                break;
             case H_REC1: act_rec_one_file(!g_rec_one_file); break;
             case H_PAD: act_pad_send(!g_pad_send); break;
             case H_PADKB: act_pad_kbd(!g_pad_kbd); break;
