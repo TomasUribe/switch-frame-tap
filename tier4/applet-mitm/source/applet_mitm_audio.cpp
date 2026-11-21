@@ -482,23 +482,29 @@ namespace ams::mitm::applet {
     }
 
     void StartAudio() {
+        /* v0.7.24 (#95): the sound threads run with the server threads, above
+         * the file system's - at the base priority, a game loading assets kept
+         * them off core 3 long enough for the final output recorder's four
+         * 21 ms buffers to overflow (172-180 KB/s of the 187.5 a second in
+         * the first minute on 23.5.0; the viewer ran dry about once a second).
+         * Each wakes for one 4 KB copy every 21 ms and blocks otherwise. */
         SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_audio_thread), AudioThread, nullptr,
                                         g_audio_stack, sizeof(g_audio_stack),
-                                        ThreadBasePriority()));
+                                        ServerThreadPriority));
         os::SetThreadNamePointer(std::addressof(g_audio_thread), "applet-mitm.Audio");
         os::StartThread(std::addressof(g_audio_thread));
         NoteThread(std::addressof(g_audio_thread));
         /* v0.7.17: the final output recorder, for games grc:d has no sound for */
         SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_rec_thread), RecThread, nullptr,
                                         g_rec_stack, sizeof(g_rec_stack),
-                                        ThreadBasePriority()));
+                                        ServerThreadPriority));
         os::SetThreadNamePointer(std::addressof(g_rec_thread), "applet-mitm.AudRec");
         os::StartThread(std::addressof(g_rec_thread));
         NoteThread(std::addressof(g_rec_thread));
         /* v0.7.22: the HOME menu's recorder, while the HOME menu streams */
         SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_home_thread), HomeThread, nullptr,
                                         g_home_stack, sizeof(g_home_stack),
-                                        ThreadBasePriority()));
+                                        ServerThreadPriority));
         os::SetThreadNamePointer(std::addressof(g_home_thread), "applet-mitm.AudHome");
         os::StartThread(std::addressof(g_home_thread));
         NoteThread(std::addressof(g_home_thread));
