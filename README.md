@@ -345,6 +345,13 @@ on-screen touch controller, and recording. Builds that also run on TVs are on
 its [releases page](https://github.com/onewilk/NSSFT/releases). A separate
 app, not made or checked here.
 
+**A Raspberry Pi as a dock for the Switch Lite** (Pi 4, Raspberry Pi OS Lite
+64-bit): vault-boy-13's
+[pi-switch-dock](https://github.com/vault-boy-13/pi-switch-dock) builds the
+viewer on the Pi and starts it at boot on the HDMI display - the Lite plugs in
+over USB, with a 3D-printed case (#96). A separate project, not made or checked
+here.
+
 On all of them, the viewer opens a window that says what it is waiting for (the
 Switch, its USB driver, or a game) and lists its keys; the same screen comes
 back whenever the game is closed or not on screen (the HOME menu) instead of
