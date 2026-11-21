@@ -6863,7 +6863,8 @@ namespace ams::mitm::applet {
                 matcher.AddSpan(count, drawn, sig);
                 u8 m[8] = {};
                 s32 weakest = 0;
-                if (matcher.Match(m, std::addressof(weakest))) {
+                u32 unused = 0;
+                if (matcher.Match(m, std::addressof(weakest), std::addressof(unused))) {
                     std::memcpy(slot_cand, m, nslots);
                     sep_locked = true;
                     g_slot_match.n = nslots;
@@ -6877,7 +6878,7 @@ namespace ams::mitm::applet {
                                             matcher.intervals, weakest);
                     for (u32 s = 0; s < nslots && len > 0 && static_cast<size_t>(len) < sizeof(line); ++s) {
                         g_slot_match.addr[s] = cand[m[s]];
-                        len += std::snprintf(line + len, sizeof(line) - len, " %u->0x%010llx", s, static_cast<unsigned long long>(cand[m[s]]));
+                        len += std::snprintf(line + len, sizeof(line) - len, ((unused >> s) & 1) ? " %u never drawn" : " %u->0x%010llx", s, static_cast<unsigned long long>(cand[m[s]]));
                     }
                     LogLine("%s", line);
                 } else if (u8 g[8] = {}; !still_guessed && !chain_display && slotmatch::StillGuess(sig, varied, ncand, nslots, !sep_layout, g)) {

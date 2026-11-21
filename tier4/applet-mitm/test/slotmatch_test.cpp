@@ -44,6 +44,7 @@ struct Opts {
     double tex_rate = 0.0;  /* chance per frame that one of them changes */
     uint32_t nrts = 0; /* extra render targets drawn every frame (a deferred renderer's passes) */
     uint32_t npp = 0;  /* ping-pong pairs */
+    uint32_t used = 0; /* slots the game draws (0 = all) - Maestro draws 2 of 3 */
 };
 
 /* frames until a match (0 = none); *wrong set if the match is not the truth */
@@ -68,7 +69,7 @@ static uint32_t Run(const Opts &o, uint32_t seed, bool *wrong) {
     *wrong = false;
     uint32_t fed = 0;   /* the last present sampled */
     for (uint32_t n = 1; n <= o.frames; ++n) {
-        const uint32_t slot = n % o.nslots;
+        const uint32_t slot = n % (o.used ? o.used : o.nslots);
         const bool still = u(rng) < o.still;
         g.content[g.perm[slot]] = g.Draw(still);                     /* the GPU finished present n */
         if (g.rt >= 0) { g.content[g.rt] = 0x80000000u | n; }       /* drawn every frame regardless */
@@ -84,13 +85,16 @@ static uint32_t Run(const Opts &o, uint32_t seed, bool *wrong) {
         /* the slots drawn since the last sample, as the console reads them
          * from its present ring (8 entries: up to 6 presents back) */
         uint32_t drawn = 0;
-        if (fed != 0 && n - fed <= 6) { for (uint32_t c = fed + 1; c <= n; ++c) { drawn |= 1u << (c % o.nslots); } }
+        if (fed != 0 && n - fed <= 6) { for (uint32_t c = fed + 1; c <= n; ++c) { drawn |= 1u << (c % (o.used ? o.used : o.nslots)); } }
         m.AddSpan(n, drawn, sig);
         fed = n;
         uint8_t out[sm::MaxSlots];
         int32_t weakest = 0;
-        if (m.Match(out, &weakest)) {
-            for (uint32_t s = 0; s < o.nslots; ++s) { if (out[s] != g.perm[s]) { *wrong = true; } }
+        uint32_t unused = 0;
+        if (m.Match(out, &weakest, &unused)) {
+            for (uint32_t s = 0; s < (o.used ? o.used : o.nslots); ++s) { if (out[s] != g.perm[s]) { *wrong = true; } }
+            for (uint32_t s = 0; s < o.nslots; ++s) { if (((unused >> s) & 1) != (o.used && s >= o.used ? 1u : 0u)) { *wrong = true; } }
+            for (uint32_t s = 0; s < o.nslots; ++s) { for (uint32_t t = s + 1; t < o.nslots; ++t) { if (out[s] == out[t]) { *wrong = true; } } }
             return n;
         }
     }
@@ -144,6 +148,17 @@ int main() {
     /* Maestro (v0.7.23, #70): 95 buffers of the slots' size, the slots
      * anywhere among them (past the first 64 too), the stream at ~27 fps */
     Expect("Maestro: 3 slots among 95",             { 3, 95, true,  true,  0.10, 0.50, 0.05, 6000, 20, 0.10, 40, 8 }, 900);
+    /* Maestro's 720p and 1080p sets (v0.7.24): 3 slots, only 0 and 1 drawn
+     * (no ping-pong pairs here: one that flips with the two slots changes
+     * exactly as they do - no match, never a wrong one, as always-early) */
+    Expect("Maestro: slots 0, 1 of 3 drawn",        { 3, 95, true,  true,  0.10, 0.10, 0.05, 6000, 20, 0.10, 40, 0, 2 }, 300);
+    Expect("2 of 3 drawn, 60% missed",              { 3, 12, true,  true,  0.10, 0.60, 0.05, 6000, 0, 0.0, 4, 0, 2 }, 900);
+    {
+        uint32_t wrong = 0;
+        for (uint32_t seed = 1; seed <= 100; ++seed) { bool w = false; Run({ 3, 12, true, true, 0.10, 0.10, 0.05, 3000, 0, 0.0, 4, 2, 2 }, seed, &w); wrong += w; }
+        if (wrong) { std::printf("FAIL 2 of 3 + ping-pong in step: %u wrong match(es)\n", wrong); ++g_fail; }
+        else { std::printf("ok   2 of 3 + ping-pong in step: never a wrong match\n"); }
+    }
     /* a picture that never moves says nothing about which buffer is which */
     ExpectNoMatch("still picture",                  { 3, 6,  true,  true,  0.0,  0.0,  1.0,  2000 });
     /* and it stops sampling after MaxSamples even when nothing ever changes */

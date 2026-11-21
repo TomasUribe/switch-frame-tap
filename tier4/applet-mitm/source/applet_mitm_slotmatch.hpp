@@ -44,6 +44,11 @@ namespace ams::mitm::applet::slotmatch {
     constexpr int32_t  MinScore   = 600;    /* of 1000 */
     constexpr int32_t  MinMargin  = 300;    /* over the slot's second-best candidate */
     constexpr uint32_t GiveUpAfter = 900;   /* counted intervals (~15 s of moving picture at 60 fps) */
+    /* v0.7.24: counted intervals without a slot drawn once - the game does not
+     * use it. Maestro (#70) draws slots 0 and 1 of its three, every interval
+     * (454 drawn / 446 not for each): both stood out (896 and 898), but the
+     * match waited for slot 2 and never came. */
+    constexpr uint32_t UnusedAfter = 48;
     constexpr uint32_t MaxSamples  = 3600;  /* samples of any kind (~1 min): a still picture stops it too */
 
     struct Matcher {
@@ -106,13 +111,20 @@ namespace ams::mitm::applet::slotmatch {
 
         /* true once every slot has a candidate that stands out, each a
          * different one: out[slot] = candidate, *weakest = the lowest score */
-        bool Match(uint8_t *out, int32_t *weakest) const {
+        bool Match(uint8_t *out, int32_t *weakest, uint32_t *unused_out = nullptr) const {
             if (nslots < 2) { return false; }
-            for (uint32_t s = 0; s < nslots; ++s) { if (tot_in[s] < MinPerSlot || tot_out[s] < MinPerSlot) { return false; } }
+            uint32_t unused = 0, live = 0;
+            for (uint32_t s = 0; s < nslots; ++s) {
+                if (tot_in[s] == 0 && tot_out[s] >= UnusedAfter) { unused |= 1u << s; continue; }
+                if (tot_in[s] < MinPerSlot || tot_out[s] < MinPerSlot) { return false; }
+                ++live;
+            }
+            if (live == 0) { return false; }
             uint8_t m[MaxSlots] = {};
             uint64_t used[(MaxCand + 63) / 64] = {};
             int32_t worst = 1000;
             for (uint32_t s = 0; s < nslots; ++s) {
+                if ((unused >> s) & 1) { continue; }
                 int32_t best = -1, best_score = -100000, second = -100000;
                 for (uint32_t c = 0; c < ncand; ++c) {
                     const int32_t score = static_cast<int32_t>(hit_in[s][c] * 1000u / tot_in[s]) -
@@ -125,8 +137,16 @@ namespace ams::mitm::applet::slotmatch {
                 used[best / 64] |= UINT64_C(1) << (best % 64);
                 if (best_score < worst) { worst = best_score; }
             }
+            /* a slot the game never draws reads a buffer no other slot reads */
+            for (uint32_t s = 0, c = 0; s < nslots; ++s) {
+                if (((unused >> s) & 1) == 0) { continue; }
+                while (c < ncand && (used[c / 64] & (UINT64_C(1) << (c % 64))) != 0) { ++c; }
+                m[s] = static_cast<uint8_t>(c < ncand ? c : 0);
+                if (c < ncand) { used[c / 64] |= UINT64_C(1) << (c % 64); }
+            }
             std::memcpy(out, m, nslots);
             if (weakest != nullptr) { *weakest = worst; }
+            if (unused_out != nullptr) { *unused_out = unused; }
             return true;
         }
 
