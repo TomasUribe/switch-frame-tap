@@ -2827,7 +2827,24 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
         SDL_AudioSpec want = {0}, have = {0};
         want.freq = 48000; want.format = AUDIO_S16LSB; want.channels = 2; want.samples = 512;
         g_adev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
-        fprintf(stderr, "audio: %s\n", g_adev ? "48 kHz stereo" : SDL_GetError());
+        const char *first = SDL_GetCurrentAudioDriver();
+        fprintf(stderr, "audio: %s (%s)\n", g_adev ? "48 kHz stereo" : SDL_GetError(), first ? first : "no driver");
+        /* v0.7.24 (#88): SDL takes the first driver that starts - ALSA on a
+         * Linux Mint whose PulseAudio did not answer - and its device may not
+         * open; try the others before going without sound. SDL_AUDIODRIVER,
+         * when set, is the user's choice and stays. */
+        if (!g_adev && !SDL_getenv("SDL_AUDIODRIVER")) {
+            char tried[32] = "";
+            snprintf(tried, sizeof(tried), "%s", first ? first : "");
+            for (int i = 0; i < SDL_GetNumAudioDrivers() && !g_adev; i++) {
+                const char *d = SDL_GetAudioDriver(i);
+                if (!d || !strcmp(d, tried) || !strcmp(d, "disk") || !strcmp(d, "dummy")) continue;
+                SDL_AudioQuit();
+                if (SDL_AudioInit(d) != 0) continue;
+                g_adev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+                fprintf(stderr, "audio: %s: %s\n", d, g_adev ? "48 kHz stereo" : SDL_GetError());
+            }
+        }
     } else {
         fprintf(stderr, "audio: %s\n", SDL_GetError());
     }
@@ -3177,6 +3194,16 @@ static int run_check(const char *net_host)
         }
         if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
             printf("audio driver: %s\n", SDL_GetCurrentAudioDriver() ? SDL_GetCurrentAudioDriver() : "?");
+            /* v0.7.24 (#88): whether the sound device opens, not only which
+             * driver started - and the drivers the viewer can fall back to */
+            SDL_AudioSpec want = {0}, have = {0};
+            want.freq = 48000; want.format = AUDIO_S16LSB; want.channels = 2; want.samples = 512;
+            const SDL_AudioDeviceID dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+            if (dev) { printf("audio device: opens (%d Hz, %d channels)\n", have.freq, have.channels); SDL_CloseAudioDevice(dev); }
+            else printf("audio device: FAILED (%s)\n", SDL_GetError());
+            printf("audio drivers:");
+            for (int i = 0; i < SDL_GetNumAudioDrivers(); i++) printf(" %s", SDL_GetAudioDriver(i));
+            printf("\n");
             SDL_QuitSubSystem(SDL_INIT_AUDIO);
         } else printf("audio: FAILED (%s)\n", SDL_GetError());
     } else {
