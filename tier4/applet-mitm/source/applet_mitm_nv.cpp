@@ -1160,8 +1160,13 @@ namespace ams::mitm::applet {
         }
 
         /* v0.7.14: the overlays showing now as slots, placed and scaled from a
-         * 1280x720 screen to this output */
-        u32 OverlaySlotsFor(const OutDesc &out, BlendSlot *ov) {
+         * 1280x720 screen to this output. v0.7.24 (#106): to the part of it the
+         * viewer shows (vx, vy, vw, vh) - Okami HD presents the middle 1280x720
+         * of its 1920x1080 surface and the viewer shows only that; Ultrahand,
+         * placed over the whole surface, came out zoomed 1.5x with its left
+         * half outside the picture. */
+        u32 OverlaySlotsFor(const OutDesc &out, u32 vx, u32 vy, u32 vw, u32 vh, BlendSlot *ov) {
+            if (vw == 0 || vh == 0 || vx + vw > out.w || vy + vh > out.h) { vx = vy = 0; vw = out.w; vh = out.h; }
             OverlayPlane p[MaxOverlaySlots];
             const u32 n = OverlayPlanes(p, MaxOverlaySlots);
             for (u32 i = 0; i < n; ++i) {
@@ -1169,11 +1174,11 @@ namespace ams::mitm::applet {
                 b = {};
                 b.addr = p[i].dev;
                 b.src = SrcDesc{ p[i].w, p[i].h, p[i].w, vic::BLK_KIND_GENERIC_16Bx2, 4, p[i].fmt, vic::CACHE_WIDTH_64Bx4, p[i].w, p[i].h };
-                const u32 r = (p[i].x + p[i].dw) * out.w / 1280, bt = (p[i].y + p[i].dh) * out.h / 720;
-                b.dst_l = p[i].x * out.w / 1280;
-                b.dst_t = p[i].y * out.h / 720;
-                b.dst_r = (r > out.w ? out.w : r) - 1;
-                b.dst_b = (bt > out.h ? out.h : bt) - 1;
+                const u32 r = vx + (p[i].x + p[i].dw) * vw / 1280, bt = vy + (p[i].y + p[i].dh) * vh / 720;
+                b.dst_l = vx + p[i].x * vw / 1280;
+                b.dst_t = vy + p[i].y * vh / 720;
+                b.dst_r = (r > vx + vw ? vx + vw : r) - 1;
+                b.dst_b = (bt > vy + vh ? vy + vh : bt) - 1;
                 b.k1 = 1023;
             }
             return n;
@@ -7597,7 +7602,14 @@ namespace ams::mitm::applet {
                 /* v0.7.14: the overlays showing now, over the game (not on a
                  * flipped present: the output flip would mirror them) */
                 BlendSlot ov[MaxOverlaySlots];
-                g_ovl_nslots = present_flip == 0 ? OverlaySlotsFor(g_strip_out, ov) : 0;
+                u32 vx = 0, vy = 0, vw = g_strip_out.w, vh = g_strip_out.h;
+                if (dyn_out != 0) {
+                    /* the viewer shows only this part: from the corner, or in the middle */
+                    vw = dyn_out >> 16;
+                    vh = dyn_out & 0xFFFF;
+                    if (dyn_center) { vx = ((g_strip_out.w - vw) / 2) & ~1u; vy = ((g_strip_out.h - vh) / 2) & ~1u; }   /* as the viewer's frame_crop */
+                }
+                g_ovl_nslots = present_flip == 0 ? OverlaySlotsFor(g_strip_out, vx, vy, vw, vh, ov) : 0;
                 g_ovl_slots = g_ovl_nslots != 0 ? ov : nullptr;
                 ON_SCOPE_EXIT { g_strip_flip = 0; g_ovl_slots = nullptr; g_ovl_nslots = 0; };
                 JobCtx vc{ vfd, cmd_handle, vsyncpt, cfg_addr, arena_vic + (cur != 0 ? cur : Lay().off_cur), slot_vic, 0, 0, 0, 0, SelfSrc };
