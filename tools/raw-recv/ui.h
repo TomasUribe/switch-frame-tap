@@ -52,7 +52,7 @@ static int ui_px(int px)
 static void ui_open(int open);
 static void ui_page(int page);
 
-enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_ASPECT, H_ORIENT, H_ORIENTBTN,
+enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_PACING, H_ASPECT, H_ORIENT, H_ORIENTBTN,
        H_ORIENTCYCLE, H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
        H_PIC, H_PIC_RESET, H_SOUND, H_VOLUME, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
        H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_PIN, H_REC1, H_PAD, H_PADKB,
@@ -669,6 +669,10 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
             ui_row(H_VSYNC, 0, y, h);
             ui_label(ren, cxi, y, h, "Vsync", g_vsync ? "Smooth, no tearing (adds input lag)" : "Off: snappier UI + lower latency (may tear)", ui_focused(H_VSYNC, 0), cwi);
             ui_toggle(ren, xri, y + tog_y, g_vsync, H_VSYNC, 1);
+            y += h + gap_y;
+            ui_row(H_PACING, 0, y, h);
+            ui_label(ren, cxi, y, h, "Smooth pacing", g_pacing ? "Frames at the game's rhythm (a little later)" : "Off: each frame as soon as it arrives", ui_focused(H_PACING, 0), cwi);
+            ui_toggle(ren, xri, y + tog_y, g_pacing, H_PACING, 1);
             y += h + gap_y;
             ui_row(H_ASPECT, 0, y, h);
             ui_label(ren, cxi, y, h, "Lock aspect ratio",
@@ -1449,6 +1453,7 @@ static void ui_change(SDL_Window *win, SDL_Renderer *ren, int id, int arg, int d
     case H_IP: if (d == 0) { act_ip(); ui_open(0); } break;
     case H_FULL: act_fullscreen(win); break;
     case H_VSYNC: act_vsync(ren, !g_vsync); break;
+    case H_PACING: act_pacing(!g_pacing); break;
     case H_ASPECT: act_lock_aspect(win, !g_lock_aspect); break;
     case H_ORIENT: {
         static const int deg[] = { 0, 90, 180, 270 };
@@ -1620,6 +1625,7 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_IP: act_ip(); ui_open(0); break;
             case H_FULL: act_fullscreen(win); break;
             case H_VSYNC: act_vsync(ren, h->arg); break;
+            case H_PACING: act_pacing(h->arg); break;
             case H_ASPECT: act_lock_aspect(win, h->arg); break;
             case H_ORIENT: {
                 static const int deg[] = { 0, 90, 180, 270 };

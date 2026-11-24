@@ -769,6 +769,7 @@ static void prefs_load(void)
         int hm;
         if (sscanf(line, "stats_overlay=%d", &hm) == 1 && hm >= 0 && hm < HUD_MODES) g_hud = hm;
         if (sscanf(line, "vsync=%d", &hm) == 1) g_vsync = hm != 0;
+        if (sscanf(line, "smooth_pacing=%d", &hm) == 1) g_pacing = hm != 0;
         if (sscanf(line, "volume=%d", &hm) == 1 && hm >= 0 && hm <= 100) SDL_AtomicSet(&g_volume, hm);
         if (sscanf(line, "upscaler=%127s", v) == 1) up_set_by_key(v);
         if (sscanf(line, "fsr_sharpness=%d", &hm) == 1 && hm >= 0 && hm <= 100) g_fsr_sharpness = hm;
@@ -897,6 +898,7 @@ static void prefs_save(void)
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
     fprintf(f, "volume=%d\n", SDL_AtomicGet(&g_volume));
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
+    fprintf(f, "smooth_pacing=%d\n", g_pacing);
     fprintf(f, "render_scale=%d\n", g_up_scale);
     fprintf(f, "one_file_recording=%d\n", g_rec_one_file);
     pad_prefs_save(f);
@@ -1900,6 +1902,15 @@ static void act_vsync(SDL_Renderer *ren, int on)
     prefs_save();
     hud_toast(g_vsync ? "Vsync on" : "Vsync off: lower latency, may tear");
     fprintf(stderr, "\nvsync %s\n", g_vsync ? "on" : "off");
+}
+
+/* v0.7.24 (#106, #57): show each frame at the game's own rhythm */
+static void act_pacing(int on)
+{
+    g_pacing = on;
+    prefs_save();
+    hud_toast(g_pacing ? "Smooth pacing on: frames at the game's rhythm" : "Smooth pacing off: each frame as soon as it arrives");
+    fprintf(stderr, "\nsmooth pacing %s\n", g_pacing ? "on" : "off");
 }
 
 static void act_rec_one_file(int on)
@@ -2956,7 +2967,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
             }
             goto stats;
         }
-        while (g_fn > 2) {                     /* the latency cap: at most two frames behind */
+        while (g_fn > (g_pacing ? FQ - 2 : 2)) {   /* the latency cap: at most two frames behind (four while pacing) */
             av_frame_unref(g_fq[g_fh]);
             g_fh = (g_fh + 1) % FQ;
             g_fn--;
@@ -2966,6 +2977,31 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
         g_fh = (g_fh + 1) % FQ;
         g_fn--;
         SDL_UnlockMutex(g_fm);
+        /* v0.7.24 (#106 Okami HD at 30 fps looked like 24, #57 Mario Odyssey
+         * stuttered only on the PC): a frame reaches the screen at the vsync
+         * after it is decoded, and the console's time per frame varies (its
+         * copy, the encoder, USB), so at 30 fps on a 60 Hz screen some frames
+         * stayed 1 refresh, others 3. With "Smooth pacing" each frame is
+         * shown at its present time on the console (arrival - the console's
+         * age of it) plus a delay most frames make (the 95th percentile of
+         * the last ~2 s) - the game's own rhythm, a little later. */
+        if (g_pacing && g_age_ms[show->pts & 255] >= 0) {
+            static double lat[128];
+            static int lat_n = 0, lat_i = 0;
+            const int k = (int)(show->pts & 255);
+            const double now_s = (double)SDL_GetPerformanceCounter() / (double)freq;
+            const double pres = (double)g_t_rx[k] / (double)freq - g_age_ms[k] / 1000.0;
+            const double l = now_s - pres;
+            if (l > 0.0 && l < 0.5) {
+                lat[lat_i] = l; lat_i = (lat_i + 1) % 128; if (lat_n < 128) lat_n++;
+                double sorted[128];
+                memcpy(sorted, lat, sizeof(double) * (size_t)lat_n);
+                for (int i = 1; i < lat_n; i++) { const double v = sorted[i]; int j = i - 1; while (j >= 0 && sorted[j] > v) { sorted[j + 1] = sorted[j]; j--; } sorted[j + 1] = v; }
+                const double d = sorted[(lat_n * 95) / 100 < lat_n ? (lat_n * 95) / 100 : lat_n - 1];
+                const double wait = pres + d - now_s;
+                if (wait > 0.001 && wait < 0.1) SDL_Delay((Uint32)(wait * 1000.0));
+            }
+        }
         /* v0.5: while the game is not on screen (HOME menu, suspended) the
          * console keeps re-sending its last frame, ageing: frames older than
          * 800 ms on the console are not new picture. Live frames are 5-60 ms
