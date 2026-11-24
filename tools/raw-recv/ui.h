@@ -57,7 +57,7 @@ enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H
        H_PIC, H_PIC_RESET, H_SOUND, H_VOLUME, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
        H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_PIN, H_REC1, H_PAD, H_PADKB,
        H_PADMENU, H_PADBACK, H_PADMOUSE, H_PADTAB, H_PADBIND, H_PADMBTN, H_PADMODE, H_PADINV, H_PADSL, H_PADCHANGE,
-       H_PADSWAP, H_PADRESET };
+       H_PADSWAP, H_PADRESET, H_DOCK };
 
 typedef struct { SDL_FRect r; int id, arg, window_space; } ui_hit_t;
 static ui_hit_t g_ui_hits[256];
@@ -490,7 +490,7 @@ static void ui_chrome_activate(SDL_Window *win, int id)
             else act_fullscreen(win);
         }
         break;
-    case H_WIN_CLOSE: g_quit = 1; break;
+    case H_WIN_CLOSE: if (!dock_close_to_tray(win)) g_quit = 1; break;
     default: break;
     }
 }
@@ -850,6 +850,20 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
             y += h + ui_d(4);
         }
 
+#ifdef _WIN32
+        /* dock mode: hidden until the Switch is plugged in, then fullscreen */
+        ui_section(ren, cxi, &y, "DOCK");
+        {
+            const float h = ui_d(48);
+            ui_row(H_DOCK, 0, y, h);
+            ui_label(ren, cxi, y, h, "Dock mode",
+                     g_dock ? "Starts with Windows; plugging the Switch in opens it fullscreen"
+                            : "Open fullscreen by itself when the Switch is plugged in (USB)",
+                     ui_focused(H_DOCK, 0), cwi);
+            ui_toggle(ren, xri, y + ui_d(12), g_dock, H_DOCK, 1);
+            y += h + ui_d(4);
+        }
+#endif
         ui_section(ren, cxi, &y, "RECORDING");
         {
             const float h = ui_d(48);
@@ -1474,6 +1488,7 @@ static void ui_change(SDL_Window *win, SDL_Renderer *ren, int id, int arg, int d
     case H_CHROMELESS: act_chromeless(win, !g_chromeless); break;
     case H_HWDEC: act_hwdec(!g_hwdec); break;
     case H_REC1: act_rec_one_file(!g_rec_one_file); break;
+    case H_DOCK: act_dock(win, !g_dock); break;
     case H_PAD: act_pad_send(!g_pad_send); break;
     case H_PADKB: act_pad_kbd(!g_pad_kbd); break;
     case H_PADMOUSE: act_pad_mouse(!g_pad_mouse); break;
@@ -1642,6 +1657,7 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
                 act_orient_cycle_set(h->arg, !(orient_sanitize_cycle(g_orient_cycle) & (1 << (h->arg & 3))));
                 break;
             case H_REC1: act_rec_one_file(!g_rec_one_file); break;
+            case H_DOCK: act_dock(win, !g_dock); break;
             case H_PAD: act_pad_send(!g_pad_send); break;
             case H_PADKB: act_pad_kbd(!g_pad_kbd); break;
             case H_CHROMELESS: act_chromeless(win, h->arg); break;

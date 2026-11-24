@@ -49,6 +49,10 @@
  *                              # back, and only closes when you close it. F11, F,
  *                              # double-click, or middle-click toggles fullscreen.
  *                              # On Linux it logs to $XDG_STATE_HOME/switch-frame-tap/viewer.log.
+ *   ./raw-view --dock          # --app, but hidden until the Switch is plugged in (USB):
+ *                              # then fullscreen in front of everything; hidden again
+ *                              # 1.5 s after it leaves. viewer.ini dock=1 makes it the
+ *                              # default; --no-dock turns it off for one run.
  *   ./raw-view --check         # v0.7.14: session, video/audio driver, udev, USB, network
  *   ./raw-view --check --net 192.168.1.23   # also test the console's TCP 9950 stream
  *   ./raw-view --video-driver wayland       # force wayland (or x11) for this run
@@ -80,6 +84,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <shellapi.h>          /* dock mode: the notification-area icon */
 #include <libusb.h>
 #define SDL_MAIN_HANDLED
 #else
@@ -131,6 +136,10 @@ typedef struct {
 static volatile sig_atomic_t g_quit = 0;
 static int g_app = 0;               /* --app: survive the console leaving the bus */
 static int g_lost = 0;              /* --app: the console left; wait for it again */
+static int g_dock = 0;              /* --dock / viewer.ini dock=1: hidden until the Switch is plugged in,
+                                     * then fullscreen in front of everything; hidden again when it leaves */
+static int g_dock_cli = -1;         /* -1 = use prefs; 0/1 from --no-dock / --dock */
+static int g_dock_shown = 1;        /* dock mode: the window is on screen */
 static int g_paced = 0;             /* --paced: a recording fed through the live pipeline at 60 fps, looped (tests) */
 static double g_run_secs = 0;       /* --seconds: stop the live pipeline after this long (tests) */
 static const char *g_shot = NULL;    /* --shot: save the last frame drawn (overlay included) as BMP (tests) */
@@ -791,6 +800,7 @@ static void prefs_load(void)
         if (sscanf(line, "update_betas=%d", &hm) == 1) g_upd_betas = hm != 0;
         if (sscanf(line, "update_check=%d", &hm) == 1) g_upd_check = hm != 0;
         if (sscanf(line, "ui_debug=%d", &hm) == 1) g_ui_debug = hm != 0;
+        if (sscanf(line, "dock=%d", &hm) == 1) g_dock = hm != 0;
         {
             float z, px, py, sx, sy;
             /* view=zoom,pan_x,pan_y  (older builds also wrote stretch sx,sy - ignore) */
@@ -904,6 +914,7 @@ static void prefs_save(void)
     pad_prefs_save(f);
     fprintf(f, "update_betas=%d\nupdate_check=%d\n", g_upd_betas, g_upd_check);
     fprintf(f, "ui_debug=%d\n", g_ui_debug);
+    fprintf(f, "dock=%d\n", g_dock);
     fprintf(f, "view=%.4f,%.1f,%.1f\n", g_view_zoom, g_view_pan_x, g_view_pan_y);
     if (g_geom_valid)
         fprintf(f, "window=%d,%d,%d,%d\nmaximized=%d\n", g_geom_x, g_geom_y, g_geom_w, g_geom_h, g_geom_maximized);
@@ -1860,6 +1871,240 @@ static void act_fullscreen(SDL_Window *win)
 #endif
 }
 
+/* ---- dock mode (Settings > Dock mode, viewer.ini dock=1, --dock) ----------
+ * For a Switch on a stand next to the PC: the viewer runs hidden, and the
+ * moment the Switch is plugged in it comes up fullscreen in front of whatever
+ * was open; when the Switch leaves the bus it leaves fullscreen and hides
+ * again, waiting for the next time. USB only - a network connection keeps the
+ * normal window.
+ * On Windows, turning it on in Settings also starts the viewer with Windows
+ * (HKCU ...\Run) and puts an icon in the notification area: closing the
+ * window only hides it there, and the icon's menu is how to quit.
+ * --dock / --no-dock win over viewer.ini for one run and are not saved. */
+#define DOCK_HIDE_MS 1500   /* a short drop of the cable does not hide the window */
+
+static int g_dock_hold_open = 0;    /* the user opened it by hand: no auto-hide until the next plug-in */
+
+static int dock_active(void)
+{
+    const int on = g_dock_cli >= 0 ? g_dock_cli : g_dock;
+    return g_app && on && g_conn != CONN_NET;
+}
+
+#ifdef _WIN32
+/* Windows only lets the foreground program hand the focus on; attaching to
+ * its input thread for a moment is the usual way round that */
+static void win32_force_foreground(SDL_Window *win)
+{
+    SDL_SysWMinfo wmi;
+    SDL_VERSION(&wmi.version);
+    if (!SDL_GetWindowWMInfo(win, &wmi) || !wmi.info.win.window) return;
+    HWND hw = wmi.info.win.window;
+    HWND fg = GetForegroundWindow();
+    const DWORD me = GetCurrentThreadId();
+    const DWORD other = fg ? GetWindowThreadProcessId(fg, NULL) : 0;
+    if (other && other != me) AttachThreadInput(other, me, TRUE);
+    SetWindowPos(hw, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetForegroundWindow(hw);
+    BringWindowToTop(hw);
+    SetFocus(hw);
+    if (other && other != me) AttachThreadInput(other, me, FALSE);
+}
+
+/* start with Windows: HKCU\Software\Microsoft\Windows\CurrentVersion\Run.
+ * The plain path is enough - a double-click start reads dock=1 from viewer.ini.
+ * Rewritten at every start while on, so a viewer moved to a new folder (an
+ * update) keeps starting. */
+#define DOCK_RUN_KEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+#define DOCK_RUN_NAME L"Switch Frame Tap"
+static void dock_autostart(int on)
+{
+    HKEY k;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, DOCK_RUN_KEY, 0, KEY_SET_VALUE, &k) != ERROR_SUCCESS) {
+        fprintf(stderr, "dock: cannot open the Run key\n");
+        return;
+    }
+    if (on) {
+        wchar_t exe[MAX_PATH], cmd[MAX_PATH + 4];
+        const DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+        if (n > 0 && n < MAX_PATH) {
+            _snwprintf(cmd, MAX_PATH + 4, L"\"%ls\"", exe);
+            cmd[MAX_PATH + 3] = 0;
+            RegSetValueExW(k, DOCK_RUN_NAME, 0, REG_SZ, (const BYTE *)cmd, (DWORD)((wcslen(cmd) + 1) * sizeof(wchar_t)));
+        }
+    } else {
+        RegDeleteValueW(k, DOCK_RUN_NAME);
+    }
+    RegCloseKey(k);
+}
+
+/* the notification-area icon: a hidden window of ours gets its clicks; the
+ * menu's choice is picked up by dock_tray_poll() from the event loop */
+#define WM_SFT_TRAY (WM_APP + 77)
+enum { TRAY_SHOW = 1, TRAY_DOCK_OFF, TRAY_QUIT };
+static HWND g_tray_hwnd = NULL;
+static NOTIFYICONDATAW g_tray_nid;
+static int g_tray_on = 0, g_tray_cmd = 0, g_tray_told = 0;
+
+static LRESULT CALLBACK tray_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_SFT_TRAY) {
+        const UINT ev = LOWORD(l);
+        if (ev == WM_LBUTTONDBLCLK) { g_tray_cmd = TRAY_SHOW; return 0; }
+        if (ev == WM_RBUTTONUP || ev == WM_CONTEXTMENU || ev == WM_LBUTTONUP) {
+            HMENU menu = CreatePopupMenu();
+            AppendMenuW(menu, MF_STRING, TRAY_SHOW, L"Show the window");
+            AppendMenuW(menu, MF_STRING, TRAY_DOCK_OFF, L"Turn dock mode off");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, TRAY_QUIT, L"Quit Switch Frame Tap");
+            SetMenuDefaultItem(menu, TRAY_SHOW, FALSE);
+            POINT p;
+            GetCursorPos(&p);
+            SetForegroundWindow(h);          /* or the menu does not close on a click elsewhere */
+            const int c = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, p.x, p.y, 0, h, NULL);
+            PostMessageW(h, WM_NULL, 0, 0);
+            DestroyMenu(menu);
+            if (c) g_tray_cmd = c;
+        }
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+static void tray_add(void)
+{
+    if (g_tray_on) return;
+    HINSTANCE inst = GetModuleHandleW(NULL);
+    if (!g_tray_hwnd) {
+        WNDCLASSW wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc = tray_proc;
+        wc.hInstance = inst;
+        wc.lpszClassName = L"SwitchFrameTapTray";
+        RegisterClassW(&wc);
+        /* a real (never shown) top-level window: the menu needs one to own it */
+        g_tray_hwnd = CreateWindowExW(0, wc.lpszClassName, L"Switch Frame Tap tray", WS_OVERLAPPED,
+                                      0, 0, 0, 0, NULL, NULL, inst, NULL);
+        if (!g_tray_hwnd) { fprintf(stderr, "dock: no tray window\n"); return; }
+    }
+    memset(&g_tray_nid, 0, sizeof(g_tray_nid));
+    g_tray_nid.cbSize = sizeof(g_tray_nid);
+    g_tray_nid.hWnd = g_tray_hwnd;
+    g_tray_nid.uID = 1;
+    g_tray_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_tray_nid.uCallbackMessage = WM_SFT_TRAY;
+    g_tray_nid.hIcon = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                         GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+    if (!g_tray_nid.hIcon) g_tray_nid.hIcon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
+    wcscpy(g_tray_nid.szTip, L"Switch Frame Tap - dock mode: plug in the Switch to play");
+    g_tray_on = Shell_NotifyIconW(NIM_ADD, &g_tray_nid) ? 1 : 0;
+}
+
+static void tray_remove(void)
+{
+    if (!g_tray_on) return;
+    Shell_NotifyIconW(NIM_DELETE, &g_tray_nid);
+    g_tray_on = 0;
+}
+
+/* a balloon from the icon, once per run: closing did not quit */
+static void tray_tell_still_running(void)
+{
+    if (!g_tray_on || g_tray_told) return;
+    g_tray_told = 1;
+    g_tray_nid.uFlags = NIF_INFO;
+    wcscpy(g_tray_nid.szInfoTitle, L"Switch Frame Tap is still on");
+    wcscpy(g_tray_nid.szInfo, L"Dock mode: it comes back when you plug in the Switch. Right-click this icon to quit.");
+    g_tray_nid.dwInfoFlags = NIIF_INFO;
+    Shell_NotifyIconW(NIM_MODIFY, &g_tray_nid);
+    g_tray_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+}
+#endif
+
+static void dock_show(SDL_Window *win)
+{
+    if (!win) return;
+    SDL_ShowWindow(win);
+    if (!(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP)) act_fullscreen(win);
+    SDL_RaiseWindow(win);
+#ifdef _WIN32
+    win32_force_foreground(win);
+#endif
+    if (!g_dock_shown) fprintf(stderr, "dock: the Switch is here - fullscreen\n");
+    g_dock_shown = 1;
+    g_dock_hold_open = 0;            /* from now on, unplugging hides it again */
+}
+
+static void dock_hide(SDL_Window *win)
+{
+    if (!win || !g_dock_shown) return;
+    if (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) act_fullscreen(win);   /* leave it, restoring the window box */
+    SDL_HideWindow(win);
+    g_dock_shown = 0;
+    g_dock_hold_open = 0;
+    fprintf(stderr, "dock: hidden until the Switch is plugged in\n");
+}
+
+/* closing the window in dock mode: hide it, keep waiting (Windows, with the
+ * tray icon to quit from). 1 when it was handled that way. */
+static int dock_close_to_tray(SDL_Window *win)
+{
+#ifdef _WIN32
+    if (!dock_active() || !g_tray_on) return 0;
+    window_geom_capture(win);
+    prefs_save();
+    dock_hide(win);
+    tray_tell_still_running();
+    return 1;
+#else
+    (void)win;
+    return 0;
+#endif
+}
+
+static void act_dock(SDL_Window *win, int on)
+{
+    g_dock = on != 0;
+    g_dock_cli = -1;                 /* the switch in Settings is what counts from now on */
+    prefs_save();
+#ifdef _WIN32
+    dock_autostart(g_dock);
+    if (g_dock) tray_add(); else tray_remove();
+#endif
+    if (g_dock) g_dock_hold_open = 1;   /* stay open now; hide once the Switch has come and gone */
+    else if (!g_dock_shown && win) { SDL_ShowWindow(win); g_dock_shown = 1; }
+    hud_toast(g_dock ? "Dock mode on - starts with Windows, opens when the Switch is plugged in"
+                     : "Dock mode off");
+    fprintf(stderr, "\ndock mode %s\n", g_dock ? "on" : "off");
+}
+
+/* the tray menu's choice, from the event loop */
+static void dock_tray_poll(SDL_Window *win)
+{
+#ifdef _WIN32
+    const int c = g_tray_cmd;
+    g_tray_cmd = 0;
+    if (!c || !win) return;
+    if (c == TRAY_SHOW) {
+        SDL_ShowWindow(win);
+        SDL_RaiseWindow(win);
+        win32_force_foreground(win);
+        g_dock_shown = 1;
+        g_dock_hold_open = 1;
+    } else if (c == TRAY_DOCK_OFF) {
+        act_dock(win, 0);
+        SDL_RaiseWindow(win);
+        win32_force_foreground(win);
+    } else if (c == TRAY_QUIT) {
+        window_geom_capture(win);
+        prefs_save();
+        g_quit = 1;
+    }
+#else
+    (void)win;
+#endif
+}
+
 static void act_record(SDL_Window *win)
 {
     rec_toggle();
@@ -2252,9 +2497,11 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
         viewer_repaint();
     }
     SDL_Event e;
+    dock_tray_poll(win);
     while (SDL_PollEvent(&e)) {
         if (pad_event(&e) == 2) continue;  /* v0.7.20: controllers come and go; a key or button being bound; the mouse while the Switch has it */
         if (e.type == SDL_QUIT) {
+            if (dock_close_to_tray(win)) continue;   /* dock mode: hide, keep waiting */
             window_geom_capture(win);
             prefs_save();
             g_quit = 1;
@@ -2613,7 +2860,10 @@ static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *r
     vsync_apply(ren);
     g_menu_state = MENU_WAITING;
     open_drawer_at_start();
+    const Uint32 t_enter = SDL_GetTicks();   /* dock mode: hide only if it stays gone */
     for (int tick = 0;; tick++) {
+        if (dock_active() && g_dock_shown && !g_dock_hold_open && SDL_GetTicks() - t_enter >= DOCK_HIDE_MS) dock_hide(win);
+        else if (!dock_active() && !g_dock_shown) { SDL_ShowWindow(win); g_dock_shown = 1; }   /* switched to the network */
         /* v0.5: the menu, redrawn often enough for the keys and the REC timer;
          * the bus is looked at every 250 ms as before */
         beat();
@@ -2645,6 +2895,7 @@ static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *r
             if (libusb_claim_interface(h, SFT_IFACE) == 0) {
                 SDL_SetWindowTitle(win, "Switch Frame Tap - connected, waiting for the picture");
                 g_menu_state = MENU_CONNECTED;
+                if (dock_active()) dock_show(win);
                 menu_draw(ren);
                 g_usb = h;
                 return 1;
@@ -3377,6 +3628,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--pad-test")) { g_pad_test = 1; g_pad_kbd = 1; g_pad_mouse = 1; }   /* v0.7.20: tests */
         else if (!strcmp(argv[i], "--no-aspect-lock")) g_lock_aspect_cli = 0;
         else if (!strcmp(argv[i], "--aspect-lock")) g_lock_aspect_cli = 1;
+        else if (!strcmp(argv[i], "--dock")) { g_dock_cli = 1; g_app = 1; }
+        else if (!strcmp(argv[i], "--no-dock")) g_dock_cli = 0;
         else if (!strcmp(argv[i], "--chromeless")) g_chromeless_cli = 1;
         else if (!strcmp(argv[i], "--no-chromeless")) g_chromeless_cli = 0;
         else if (!strcmp(argv[i], "--ui-debug")) g_ui_debug_cli = 1;
@@ -3481,7 +3734,7 @@ int main(int argc, char **argv)
             /* Create centered; apply saved x/y after the renderer exists - early
              * SetWindowPosition is often ignored on DPI-aware Win32. */
             win = SDL_CreateWindow("Switch Frame Tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                   iw, ih, video_window_flags());
+                                   iw, ih, video_window_flags() | (dock_active() ? SDL_WINDOW_HIDDEN : 0));
         }
         aspect_hook_window(win);
         win32_ensure_frame_styles(win);
@@ -3499,6 +3752,15 @@ int main(int argc, char **argv)
             window_geom_apply(win);
             SDL_PumpEvents();
             window_geom_apply(win);          /* second pass after first layout */
+            if (dock_active()) {             /* dock mode: off screen until the Switch is plugged in */
+                SDL_HideWindow(win);         /* (a saved maximized window was just shown by the line above) */
+                g_dock_shown = 0;
+                fprintf(stderr, "dock: hidden, waiting for the Switch on USB\n");
+            }
+#ifdef _WIN32
+            if (g_dock && g_dock_cli != 0) dock_autostart(1);   /* keeps the path current after an update */
+            if (dock_active()) tray_add();
+#endif
         }
         rec_init(g_rec_dir, g_mp4);
         net_init();
