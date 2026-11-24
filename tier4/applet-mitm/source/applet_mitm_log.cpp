@@ -75,22 +75,32 @@ namespace ams::mitm::applet {
         constexpr u64 GameFlushNs = UINT64_C(60000000000);
         constinit u64 g_held_tick = 0;   /* when the oldest held line came in */
 
-        /* room for n more bytes: the oldest whole lines go */
+        /* room for n more bytes: whole lines go, the oldest first - but the
+         * first HeadKeep bytes stay. v0.7.24 (#70): a stream's first lines say
+         * what it found (the buffers, the slot match); a 160 s Maestro stream
+         * dropped them for the Tesla and memory lines that came after. */
+        constexpr size_t HeadKeep = 3072;
         void DropOldest(size_t n) {
-            size_t cut = 0;
-            while (g_defer_len - cut + n > sizeof(g_defer_buf) && cut < g_defer_len) {
+            size_t head = 0;
+            if (g_defer_len > HeadKeep) {
+                const char *nl = static_cast<const char *>(std::memchr(g_defer_buf + HeadKeep, '\n', g_defer_len - HeadKeep));
+                head = nl != nullptr ? static_cast<size_t>(nl - g_defer_buf) + 1 : 0;
+            }
+            if (head + n > sizeof(g_defer_buf) / 2) { head = 0; }
+            size_t cut = head;
+            while (g_defer_len - (cut - head) + n > sizeof(g_defer_buf) && cut < g_defer_len) {
                 const char *nl = static_cast<const char *>(std::memchr(g_defer_buf + cut, '\n', g_defer_len - cut));
                 cut = nl != nullptr ? static_cast<size_t>(nl - g_defer_buf) + 1 : g_defer_len;
                 ++g_held_dropped;
             }
-            std::memmove(g_defer_buf, g_defer_buf + cut, g_defer_len - cut);
-            g_defer_len -= cut;
+            std::memmove(g_defer_buf + head, g_defer_buf + cut, g_defer_len - cut);
+            g_defer_len -= cut - head;
         }
 
         void WriteHeld() {
             if (g_held_dropped != 0) {
                 char b[96];
-                const int n = std::snprintf(b, sizeof(b), "(%u older lines from the stream not kept - the buffer was full)\n", g_held_dropped);
+                const int n = std::snprintf(b, sizeof(b), "(%u lines from the middle of the stream not kept - the buffer was full)\n", g_held_dropped);
                 if (n > 0) { AppendToLog(b, static_cast<size_t>(n)); }
                 g_held_dropped = 0;
             }
