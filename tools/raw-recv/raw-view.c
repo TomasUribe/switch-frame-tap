@@ -571,13 +571,32 @@ static void audio_packet(const uint8_t *d, uint32_t n, uint32_t rate, uint32_t c
     if (!g_adev || g_mute || rate != 48000 || ch != 2 || n % 4 != 0) return;
     const int volume = SDL_AtomicGet(&g_volume);
     const Uint32 bps = 48000 * 4;
+    /* v0.7.24 (#95): the cushion grows when the sound keeps running dry - a
+     * console whose stream loop takes 90 ms now and then (1080p docked) sends
+     * the sound in bursts, and 40 ms ran out about once a second, then the
+     * burst went over 120 ms and was thrown away. Each run-dry adds 20 ms (up
+     * to 160), a minute without one takes 10 back; "too far behind" moves
+     * with it. Steady sound keeps the 40 ms it had. */
+    static Uint32 cushion_ms = 40;
+    static Uint64 last_dry = 0;
+    const Uint64 now_ms = SDL_GetTicks64();
+    if (cushion_ms > 40 && now_ms - last_dry > 60000) {
+        cushion_ms -= 10;
+        last_dry = now_ms;
+        fprintf(stderr, "\naudio: cushion %u ms (a minute without running dry)\n", (unsigned)cushion_ms);
+    }
     Uint32 q = SDL_GetQueuedAudioSize(g_adev);
     if (!g_a_paused && q == 0) {               /* ran dry: build the cushion again */
         SDL_PauseAudioDevice(g_adev, 1);
         g_a_paused = 1;
         g_a_underruns++;
+        if (cushion_ms < 160 && now_ms - last_dry < 30000) {
+            cushion_ms += 20;
+            fprintf(stderr, "\naudio: cushion %u ms (the sound ran dry twice in 30 s)\n", (unsigned)cushion_ms);
+        }
+        last_dry = now_ms;
     }
-    if (q > bps * 120 / 1000) {                /* too far behind the picture: start over */
+    if (q > bps * (cushion_ms + 80) / 1000) {  /* too far behind the picture: start over */
         SDL_ClearQueuedAudio(g_adev);
         q = 0;
         g_a_resyncs++;
@@ -596,7 +615,7 @@ static void audio_packet(const uint8_t *d, uint32_t n, uint32_t rate, uint32_t c
         }
     }
     g_a_bytes += n;
-    if (g_a_paused && q + n >= bps * 40 / 1000) {
+    if (g_a_paused && q + n >= bps * cushion_ms / 1000) {
         SDL_PauseAudioDevice(g_adev, 0);
         g_a_paused = 0;
     }
