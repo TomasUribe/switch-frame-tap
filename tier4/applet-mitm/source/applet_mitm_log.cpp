@@ -65,7 +65,13 @@ namespace ams::mitm::applet {
          * with the stream off. Held lines go out in one write a minute, when
          * 8 KB are held, or when the game closes. */
         bool GameQuiet() { return g_release_mode && g_app_pid.load(std::memory_order_relaxed) != 0; }
-        bool Quiet() { return StreamQuiet() || GameQuiet(); }
+        /* v0.7.24 (#98): config/switch-frame-tap/log-all.txt writes every
+         * line at once, streaming or not - a console that froze lost the lines
+         * held for later, the ones that say what happened (Dragon Quest XI: the
+         * log stops at a restart for a new picture size). The stream may hitch
+         * on each write; for finding a freeze, not for playing. */
+        constinit bool g_log_all = false;
+        bool Quiet() { return !g_log_all && (StreamQuiet() || GameQuiet()); }
         constexpr u64 GameFlushNs = UINT64_C(60000000000);
         constinit u64 g_held_tick = 0;   /* when the oldest held line came in */
 
@@ -127,6 +133,10 @@ namespace ams::mitm::applet {
         /* truncate */
         fs::DeleteFile(LogPath);
         fs::CreateFile(LogPath, 0);
+        {
+            fs::DirectoryEntryType t;
+            g_log_all = g_release_mode && R_SUCCEEDED(fs::GetEntryType(std::addressof(t), "sdmc:/config/switch-frame-tap/log-all.txt"));
+        }
         g_ready = true;
         WriteWhole(LastPath, "LogInit\n", 8);
     }
@@ -191,6 +201,7 @@ namespace ams::mitm::applet {
 
     void LogDefer(bool on) {
         std::scoped_lock lk(g_lock);
+        if (on && g_log_all) { return; }
         if (on) {
             if (!g_defer) { g_defer_tick = armGetSystemTick(); }
             g_defer = true;
@@ -206,6 +217,8 @@ namespace ams::mitm::applet {
     }
 
     bool LogQuiet() { return Quiet(); }
+
+    bool LogAll() { return g_log_all; }
 
     void LogFlushStale() {
         std::scoped_lock lk(g_lock);

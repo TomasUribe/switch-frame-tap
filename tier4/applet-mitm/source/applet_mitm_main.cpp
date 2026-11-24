@@ -1238,6 +1238,7 @@ namespace ams {
         mitm::applet::NoteAlbumPath();   /* v0.7.11: for the manager's gallery */
         mitm::applet::g_audio_enabled.store(ArmFileContains("audio"));
         mitm::applet::LogLine("install type from GetEntryType(sdmc:/applet-mitm.armed) rc=0x%x", mitm::applet::g_arm_probe_rc);
+        if (mitm::applet::LogAll()) { mitm::applet::LogLine("log: log-all.txt is there - every line is written at once (a stream may hitch on each write)"); }
         mitm::applet::LogLine("%s: %.*s", mitm::applet::g_release_mode ? "release install, sdmc:/config/switch-frame-tap/config.ini ->" : "TEST install, sdmc:/applet-mitm.armed",
                               static_cast<int>(g_arm_len), g_arm_buf);
         /* live is a mode of the H.264 stream: everything nvstream sets up, it needs */

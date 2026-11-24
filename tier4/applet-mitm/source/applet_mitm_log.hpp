@@ -54,6 +54,7 @@ namespace ams::mitm::applet {
      * written to the SD card then; LogFlushHeld writes what was held once it
      * has stopped (the heartbeat calls it) */
     bool LogQuiet();
+    bool LogAll();     /* v0.7.24: log-all.txt - every line written at once */
     void LogFlushHeld();
     void LogFlushStale();   /* v0.7.20: held while a game runs - written once they are a minute old */
     /* whatever is held, written now - before a fatal */
