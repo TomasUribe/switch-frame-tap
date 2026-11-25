@@ -317,6 +317,11 @@ For USB the PC must see **`1209:5f1e` "Switch Frame Tap"** (`lsusb -d
 console's USB gadget: remove or disable it on the SD card and reboot. The
 viewer now names it on its home screen.
 
+On **NixOS**, lbesnard shared a module that installs the viewer, its menu
+entry and the udev rule:
+[switch-frame-tap.nix](https://github.com/lbesnard/nixos_config/blob/main/hosts/loz_dell_nixos/switch-frame-tap.nix)
+(#81; bump its version and hash for a new release).
+
 To build it from source instead (Ubuntu/Debian):
 
 ```bash
