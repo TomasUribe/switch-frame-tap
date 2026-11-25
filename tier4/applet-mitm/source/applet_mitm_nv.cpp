@@ -9018,6 +9018,15 @@ namespace ams::mitm::applet {
                     static_cast<unsigned long long>(s.fence_wait_max / 1000), s.fence_timeouts, s.fence_unknown, s.reread);
             LogLine("   nvstream: presents taken (M96): %u already drawn, %u waited for (the oldest not yet drawn), %u by the old latest-present rule, %u by seed content-sync (%u re-read, %u torn dropped)",
                     s.pick_ready, s.pick_waited, s.pick_legacy, s.pick_seeded, s.seed_reread, s.seed_dropped);
+            /* v0.7.24 (#98): a session that ended before the slots matched or
+             * the matcher gave up (Dragon Quest XI: 9-13 s sessions, a guess
+             * shown throughout) - how far it got, and what it read */
+            if (s.sep && !s.sep_locked) {
+                char why[320];
+                s.matcher.Describe(why, sizeof(why));
+                LogLine("   nvstream: slots not matched when it ended: %s streamed c%u c%u c%u of %u; %s", s.still_guessed ? "a still-picture guess," : "the first guess,",
+                        s.slot_cand[0], s.nslots > 1 ? s.slot_cand[1] : 0, s.nslots > 2 ? s.slot_cand[2] : 0, s.ncand, why);
+            }
             LogLine("   nvstream: per-stage max us: read %llu  VIC %llu  NVENC %llu  USB wait %llu  copy %llu; %u frame(s) over 50 ms of work; %u USB wait(s) over 500 ms (IDR forced after each)",
                     static_cast<unsigned long long>(m_read / 1000), static_cast<unsigned long long>(m_vic / 1000),
                     static_cast<unsigned long long>(m_enc / 1000), static_cast<unsigned long long>(m_usbw / 1000),
