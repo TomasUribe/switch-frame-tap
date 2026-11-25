@@ -221,6 +221,15 @@ namespace ams::mitm::applet {
         /* v0.7.14: Tesla's layer - its presents for the overlays, never the game's capture */
         if (m_client_info.program_id.value == TeslaProgramId) {
             OvlNoteTeslaTransaction(code, in, in_size);
+            /* v0.7.24 (#79): the size and format of the overlay's buffers - the
+             * capture expects Ultrahand's 448x720 RGBA4444; Status Monitor's
+             * Mini/Micro (docked) may draw others, and then never shows */
+            if (code == 14) {
+                static u32 said = 0;
+                if (said < 6) {
+                    if (const auto *gb = FindGraphicBuffer(in, in_size); gb != nullptr) { ++said; LogGraphicBuffer("Tesla setPreallocatedBuffer", gb); }
+                }
+            }
             R_RETURN(sm::mitm::ResultShouldForwardToSession());
         }
         /* v0.7.14 probe4: a library applet's relay - logged, never the game's capture */
