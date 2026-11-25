@@ -1528,6 +1528,45 @@ namespace ams::mitm::applet {
 
     void SetViewerReason(ViewerReason r) { g_viewer_reason.store(r, std::memory_order_relaxed); }
 
+    /* v0.7.24: "SFTG" - the viewer's Report a problem button. The report goes
+     * in pieces flagged audio + report (256) with rate 0, which no viewer
+     * plays; height 1 marks the last piece. Asked twice, it starts over. */
+    namespace {
+        constinit std::atomic<bool> g_report_want{false};
+        constinit bool g_report_on = false;
+        constinit u32 g_report_seq = 0;
+        alignas(0x1000) constinit u8 g_report_hdr[0x1000];
+        alignas(0x1000) constinit u8 g_report_buf[0x4000];
+    }
+
+    void ViewerWantsReport() { g_report_want.store(true, std::memory_order_relaxed); }
+
+    bool ViewerReportPump(ReportLink link, u32 max_pieces) {
+        if (!g_report_on && !g_report_want.load(std::memory_order_relaxed)) { return true; }   /* every frame: one load */
+        if (g_report_want.exchange(false, std::memory_order_relaxed)) {
+            ReportBegin();
+            g_report_on = true;
+            LogLine("report: the viewer asked for the log");
+        }
+        for (u32 k = 0; g_report_on && k < max_pieces; ++k) {
+            bool last = false;
+            const size_t n = ReportNext(g_report_buf, sizeof(g_report_buf), std::addressof(last));
+            const u32 h[8] = { 0x52544653u, 2u | ((8u | 256u) << 16), 0, last ? 1u : 0u, 0, static_cast<u32>(n), 0, g_report_seq++ };
+            std::memcpy(g_report_hdr, h, sizeof(h));
+            if (last) { g_report_on = false; }
+            if (n == 0) { continue; }
+            bool ok = false;
+            switch (link) {
+                case ReportLink::Stream:  ok = UsbSendBuffer(g_report_hdr, sizeof(h), nullptr) && UsbSendBuffer(g_report_buf, n, nullptr); break;
+                case ReportLink::Net:     ok = NetSendBuffer(g_report_hdr, sizeof(h)) && NetSendBuffer(g_report_buf, n); break;
+                case ReportLink::UsbIdle: ok = UsbPostWait(g_report_hdr, sizeof(h), 300) && UsbPostWait(g_report_buf, static_cast<u32>(n), 300); break;
+            }
+            if (!ok) { g_report_on = false; LogLine("report: the send failed"); return false; }
+            if (last) { LogLine("report: sent (%u pieces)", g_report_seq); g_report_seq = 0; }
+        }
+        return true;
+    }
+
     namespace {
         constinit bool g_usb_released = false;
     }
@@ -1581,6 +1620,7 @@ namespace ams::mitm::applet {
                     static_cast<void>(NetSendBuffer(hello, sizeof(hello)));
                 }
             }
+            static_cast<void>(ViewerReportPump(ReportLink::Net, 64));   /* v0.7.24: Report a problem */
             return true;
         }
         if (!UsbReady()) { return false; }
@@ -1618,6 +1658,7 @@ namespace ams::mitm::applet {
             return false;
         }
         if (const u32 r = g_viewer_reason.load(std::memory_order_relaxed); r != ViewerReason_None) { UsbSendStatus(r); }
+        static_cast<void>(ViewerReportPump(ReportLink::UsbIdle, 64));   /* v0.7.24: Report a problem */
         return true;
     }
 
@@ -1744,6 +1785,7 @@ namespace ams::mitm::applet {
                         g_out_bye.store(true);
                         break;
                     case vm::Kind::Pad:    VPadFromViewer(vm::ReadPad(p + k)); break;
+                    case vm::Kind::Report: ViewerWantsReport(); break;   /* v0.7.24 */
                     default: break;
                 }
                 k += static_cast<u32>(m.len);

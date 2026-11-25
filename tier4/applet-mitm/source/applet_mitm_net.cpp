@@ -237,6 +237,8 @@ namespace ams::mitm::applet {
                                 case vm::Kind::Unlock: ViewerLockSize(false); break;
                                 /* v0.7.20: its controller */
                                 case vm::Kind::Pad:    VPadFromViewer(vm::ReadPad(got + k)); break;
+                                /* v0.7.24: Report a problem */
+                                case vm::Kind::Report: ViewerWantsReport(); break;
                                 default: break;
                             }
                             k += m.len;

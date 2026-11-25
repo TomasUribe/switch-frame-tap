@@ -57,6 +57,8 @@
  *   ./raw-view --check --net 192.168.1.23   # also test the console's TCP 9950 stream
  *   ./raw-view --video-driver wayland       # force wayland (or x11) for this run
  *   ./raw-view --ui-debug      # log drag/focus/chrome hits to viewer.log (viewer.ini ui_debug=1)
+ *   ./raw-view --app --report  # v0.7.24 (tests): Settings -> Report a problem once connected (4 s without)
+ *   SwitchFrameTap.exe --install-driver DIR  # v0.7.24: what the USB driver button runs elevated (winusb.h)
  *   Fullscreen / maximized picture place:
  *     Alt+drag = pan (clamped in-window), Ctrl+wheel = zoom, Ctrl+click = reset.
  *     Remembers view= in viewer.ini - fills portrait letterbox bars.
@@ -146,6 +148,7 @@ static const char *g_shot = NULL;    /* --shot: save the last frame drawn (overl
 static int g_open_settings = 0;      /* --settings / --padmenu: the drawer open at start, on page 1 / 2 (tests) */
 static const char *g_mp4 = NULL;     /* --mp4 FILE: record into FILE from the start (tests) */
 static const char *g_rec_dir = NULL; /* --rec-dir DIR: where R saves (default Videos/Switch Frame Tap) */
+static char g_viewer_log_path[1200] = "";   /* v0.7.24: viewer.log, for Report a problem (report.h) */
 static int g_win_w = 0, g_win_h = 0;  /* --window WxH: keep the window this size (tests) */
 /* Remembered window box (viewer.ini). Applied at create; kept across stream start. */
 static int g_geom_valid = 0, g_geom_maximized = 0;
@@ -641,6 +644,7 @@ static const char *ip_edit_for_menu(void);   /* NULL unless an address is being 
 #include "picture.h"           /* v0.7.12: brightness, contrast... (P) */
 #include "zerocopy.h"          /* VAAPI frames drawn without a copy (Linux, EGL) */
 #include "update.h"            /* v0.7.14: the viewer updates itself from GitHub's releases */
+#include "winusb.h"            /* v0.7.24: the Windows viewer installs the Switch's USB driver */
 static libusb_device_handle *g_usb = NULL;
 
 /* ---- v0.7: the network transport ------------------------------------------
@@ -967,6 +971,7 @@ static void viewer_log_init(void)
     log_mkdir(dir);
     snprintf(path, sizeof(path), "%s/viewer.log", dir);
     snprintf(prev, sizeof(prev), "%s/viewer.prev.log", dir);
+    snprintf(g_viewer_log_path, sizeof(g_viewer_log_path), "%s", path);
     remove(prev);
     rename(path, prev);
     FILE *f = freopen(path, "w", stderr);
@@ -1407,6 +1412,8 @@ static void key_send_pending(void)
     SDL_UnlockMutex(g_tx_m);
 }
 
+#include "report.h"            /* v0.7.24: Settings -> Report a problem */
+
 static int reader_main(void *arg)
 {
     (void)arg;
@@ -1422,6 +1429,7 @@ static int reader_main(void *arg)
     const Uint64 freq = SDL_GetPerformanceFrequency();
     while (!g_quit && !g_rd_stop && !g_lost) {
         key_send_pending();
+        report_send_pending();
         sft_hdr_t hdr;
         const int r = read_exact((uint8_t *)&hdr, sizeof(hdr), 100);
         if (r <= 0) {
@@ -1456,6 +1464,7 @@ static int reader_main(void *arg)
             static uint8_t abuf[64 * 1024];
             if (hdr.length > sizeof(abuf)) { static uint8_t sink[4096]; for (uint32_t k = 0; k < hdr.length; k += sizeof(sink)) read_exact(sink, (hdr.length - k) < sizeof(sink) ? (hdr.length - k) : sizeof(sink), 5000); continue; }
             if (read_exact(abuf, hdr.length, 5000) != (int)hdr.length) continue;
+            if (hdr.flags & SFT_FLAG_REPORT) { report_packet(abuf, hdr.length, hdr.height == 1); continue; }   /* v0.7.24 */
             if (hdr.flags & SFT_FLAG_STATUS) { status_packet(abuf, hdr.length); continue; }
             audio_packet(abuf, hdr.length, hdr.width, hdr.height);
             rec_audio(abuf, hdr.length, hdr.width, hdr.height, t);
@@ -2773,6 +2782,7 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
     }
     prefs_flush_dirty();
     try_pending_connect();
+    report_tick();
 }
 
 /* v0.2: is the Switch on the bus, and if so why can it not be opened? A
@@ -2826,7 +2836,7 @@ static void app_title_cannot_open(SDL_Window *win, int err)
 {
     char t[256];
 #ifdef _WIN32
-    snprintf(t, sizeof(t), "Switch Frame Tap - the Switch is connected but has no USB driver: install WinUSB for it once with Zadig (see README.txt)  [%s]", libusb_error_name(err));
+    snprintf(t, sizeof(t), "Switch Frame Tap - the Switch is connected but has no USB driver: install it with the button below, or once with Zadig (README-WINDOWS.txt)  [%s]", libusb_error_name(err));
 #else
     snprintf(t, sizeof(t), "Switch Frame Tap - the Switch is connected but cannot be opened: install the udev rule (see the README)  [%s]", libusb_error_name(err));
 #endif
@@ -2867,6 +2877,7 @@ static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *r
         /* v0.5: the menu, redrawn often enough for the keys and the REC timer;
          * the bus is looked at every 250 ms as before */
         beat();
+        open_drawer_at_start();            /* tests: --padscroll holds for a few passes, as in the stream loop */
         app_events(win, ren, tex);
         pad_poll(win, !g_ui_open && !g_ip_editing);   /* v0.7.20: the Controller page's preview works before a Switch is there */
         g_pad_redraw = 0;                  /* this loop redraws the menu every pass */
@@ -3585,6 +3596,10 @@ int main(int argc, char **argv)
     long max_frames = 0;
     int check = 0;
     const char *file = NULL, *record = NULL, *h264_out = NULL, *net_host = NULL;
+#ifdef _WIN32
+    /* v0.7.24: started elevated by the Install the USB driver button - only that */
+    if (argc >= 2 && !strcmp(argv[1], "--install-driver")) return drv_install_main();
+#endif
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);          /* v0.7.13: the viewer sends (key_request); a closed socket must not end it */
 #else
@@ -3638,6 +3653,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--padmenu")) g_open_settings = 2;    /* tests: ...on the Controller page */
         else if (!strncmp(argv[i], "--padtab=", 9)) g_pad_tab = atoi(argv[i] + 9) % 3;
         else if (!strcmp(argv[i], "--ptr")) g_test_ptr = 1;
+        else if (!strcmp(argv[i], "--report")) g_report_cli = g_report_test = 1;          /* tests: Report a problem, once connected */
         else if (!strncmp(argv[i], "--padscroll=", 12)) g_test_scroll = (float)atoi(argv[i] + 12);   /* tests: the page scrolled */
         else if (!strcmp(argv[i], "--update")) { prefs_load(); return upd_cli(argv, 1); }
         else if (!strcmp(argv[i], "--video-driver") && i + 1 < argc) g_video_driver = argv[++i];
@@ -3672,6 +3688,7 @@ int main(int argc, char **argv)
             char path[1024], prev[1024];
             snprintf(path, sizeof(path), "%sviewer.log", dir);
             snprintf(prev, sizeof(prev), "%sviewer.prev.log", dir);
+            snprintf(g_viewer_log_path, sizeof(g_viewer_log_path), "%s", path);
             /* keep the previous session's log: after a crash the next start
              * would otherwise overwrite the evidence */
             remove(prev);

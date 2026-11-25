@@ -11,7 +11,8 @@
 #
 # The .exe is a GUI program (no console window) that starts in raw-view's
 # --app mode when double-clicked. Windows needs the WinUSB driver bound to the
-# Switch once (Zadig) - README-WINDOWS.txt in the zip says how.
+# Switch once - v0.7.24: the viewer's Install the USB driver button (winusb.h),
+# or Zadig; README-WINDOWS.txt in the zip says how.
 set -e
 VER="${1:?usage: build-windows.sh VERSION}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -77,7 +78,7 @@ echo "== compiling"
     "$W/sdl2/x86_64-w64-mingw32/lib/libSDL2.dll.a" \
     "$W/libusb/MinGW64/static/libusb-1.0.dll.a" \
     "${FF_LIBS[@]}" \
-    -lshell32 -lws2_32 \
+    -lshell32 -lws2_32 -lsetupapi -lole32 -ladvapi32 \
     -Wl,--subsystem,windows \
     -o "$B/SwitchFrameTap.exe"
 
@@ -135,6 +136,14 @@ talk to it. Do this once:
   1. On the Switch: install Switch Frame Tap (the Switch zip from the same
      release), reboot, and connect the Switch (handheld) to this PC with the
      USB-C cable.
+  2. Open SwitchFrameTap.exe. It says "The Switch needs its USB driver":
+     click "Install the USB driver" and answer Yes when Windows asks for
+     permission (Windows 8, 10 or 11). It uses Windows' own WinUSB driver
+     and connects as soon as it is in.
+
+Or with Zadig, as before (or if the button says it could not):
+
+  1. As above.
   2. Download Zadig: https://zadig.akeo.ie/  and run it.
   3. Options -> List All Devices.
   4. Pick "Switch Frame Tap" in the list (USB ID 1209 5F1E).
@@ -172,6 +181,13 @@ game's sound. A red dot shows while it records. 1080p at High quality is about 1
 (~600 MB a minute); it stops by itself if the disk gets nearly full.
 
 If the title bar says the Switch "has no USB driver", do the setup above.
+
+REPORTING A PROBLEM
+-------------------
+Settings (Esc) -> Help -> Report a problem -> Save report, with the Switch
+connected: the console's log and this viewer's go into one text file in the
+recordings folder, and the folder opens. Attach that file to a GitHub issue
+or a forum post - no need to take the SD card out.
 
 Keep the DLLs next to SwitchFrameTap.exe.
 

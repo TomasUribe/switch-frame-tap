@@ -57,7 +57,7 @@ enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H
        H_PIC, H_PIC_RESET, H_SOUND, H_VOLUME, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
        H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_PIN, H_REC1, H_PAD, H_PADKB,
        H_PADMENU, H_PADBACK, H_PADMOUSE, H_PADTAB, H_PADBIND, H_PADMBTN, H_PADMODE, H_PADINV, H_PADSL, H_PADCHANGE,
-       H_PADSWAP, H_PADRESET, H_DOCK };
+       H_PADSWAP, H_PADRESET, H_DOCK, H_DRIVER, H_REPORT };
 
 typedef struct { SDL_FRect r; int id, arg, window_space; } ui_hit_t;
 static ui_hit_t g_ui_hits[256];
@@ -912,6 +912,25 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
             ui_toggle(ren, xri, y + ui_d(12), g_upd_check, H_UPD_AUTO, us != UPD_UNSUPPORTED);
             y += h + ui_d(4);
         }
+        /* v0.7.24: the console's log and this viewer's in one file (report.h) */
+        ui_section(ren, cxi, &y, "HELP");
+        {
+            const float h = ui_d(48);
+            ui_row(H_REPORT, 0, y, h);
+            ui_label(ren, cxi, y, h, "Report a problem", "Both logs in one file", ui_focused(H_REPORT, 0), cwi);
+            ui_button(ren, xri, 0, y + ui_d(8), report_state() == REP_ASKING ? "Saving..." : "Save report", UI_SURF3, UI_INK, H_REPORT, 0, report_state() != REP_ASKING);
+            y += h + ui_d(2);
+            const char *rs = report_status();
+            if (rs[0]) {
+                ui_text_fit(ren, rs, (int)cxi, (int)y, ui_px(13), 0, report_state() == REP_FAILED ? UI_WARN : UI_FAINT, 0, (int)cwi);
+                y += ui_d(20);
+                if (report_state() == REP_SAVED) {
+                    ui_text_fit(ren, "Attach it to a GitHub issue or a forum post.", (int)cxi, (int)y, ui_px(13), 0, UI_FAINT, 0, (int)cwi);
+                    y += ui_d(20);
+                }
+                y += ui_d(4);
+            }
+        }
 
         /* faint support line at the end of this column */
         {
@@ -1163,6 +1182,9 @@ static void menu_draw(SDL_Renderer *ren)
     const char *head = "", *l1 = "", *l2 = "";
     SDL_Color hc = UI_ACC;
     char errline[200];
+#ifdef _WIN32
+    char drvline[320];
+#endif
     switch (g_menu_state) {
     case MENU_WAITING:
         if (conn_for_menu()) {
@@ -1179,7 +1201,10 @@ static void menu_draw(SDL_Renderer *ren)
         hc = UI_WARN;
 #ifdef _WIN32
         head = "The Switch needs its USB driver";
-        l1 = "Install WinUSB for it once with Zadig - see README-WINDOWS.txt.";
+        /* v0.7.24: installed from here (winusb.h); Zadig still works */
+        if (drv_state_for_menu() == DRV_IDLE) l1 = "Windows needs it once. Install it here (Windows asks for permission), or with Zadig - see README-WINDOWS.txt.";
+        else if (drv_state_for_menu() == DRV_FAILED) { snprintf(drvline, sizeof(drvline), "%s Try again, or use Zadig - see README-WINDOWS.txt.", drv_msg_for_menu()); l1 = drvline; }
+        else l1 = drv_msg_for_menu();
 #elif defined(__APPLE__)
         head = "The Switch cannot be opened";
         l1 = "Is another program using it (another viewer, OBS)? Close it, or plug the cable in again.";
@@ -1305,6 +1330,14 @@ static void menu_draw(SDL_Renderer *ren)
     y += ui_wrap(ren, l1, (int)cx, (int)y, ui_px(16), 0, UI_DIM, (int)(pw - pad * 2), (int)ui_d(22));
     if (l2[0]) y += ui_wrap(ren, l2, (int)cx, (int)y, ui_px(14), 0, UI_FAINT, (int)(pw - pad * 2), (int)ui_d(20));
     y += ui_d(18);
+#ifdef _WIN32
+    if (g_menu_state == MENU_NODRIVER) {
+        const int ds = drv_state_for_menu();
+        ui_button(ren, -1, cx, y, ds == DRV_FAILED ? "Install the USB driver again" : ds == DRV_RUNNING ? "Installing..." : "Install the USB driver",
+                  UI_ACC, (SDL_Color){ 8, 20, 30, 255 }, H_DRIVER, 0, ds != DRV_RUNNING);
+        y += ui_d(48);
+    }
+#endif
 
     /* USB / Network - in document flow, not pinned to the bottom */
     {
@@ -1528,6 +1561,7 @@ static void ui_change(SDL_Window *win, SDL_Renderer *ren, int id, int arg, int d
     case H_SOUND: act_mute(!g_mute); break;
     case H_REC: if (d == 0) act_record(win); break;
     case H_UPD: if (d == 0) act_update(); break;
+    case H_REPORT: if (d == 0) report_start(); break;
     case H_UPD_BETA: g_upd_betas = !g_upd_betas; prefs_save(); if (upd_state() == UPD_LATEST || upd_state() == UPD_FOUND) upd_check(); break;
     case H_UPD_AUTO: g_upd_check = !g_upd_check; prefs_save(); break;
     default: break;
@@ -1671,7 +1705,11 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_SOUND: act_mute(!h->arg); break;
             case H_REC: act_record(win); break;
             case H_SUPPORT: SDL_OpenURL("https://buymeacoffee.com/papux200"); break;
+#ifdef _WIN32
+            case H_DRIVER: drv_start(); break;
+#endif
             case H_UPD: act_update(); break;
+            case H_REPORT: report_start(); break;
             case H_UPD_BETA: g_upd_betas = !g_upd_betas; prefs_save(); if (upd_state() == UPD_LATEST || upd_state() == UPD_FOUND) upd_check(); break;
             case H_UPD_AUTO: g_upd_check = !g_upd_check; prefs_save(); break;
             }

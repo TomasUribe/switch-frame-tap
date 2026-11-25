@@ -60,8 +60,8 @@ the viewer on your PC, start a game.
    (or get it from the Homebrew App Store), unzip it onto the root of the SD
    card and reboot.
 2. Download the viewer for your PC from the same release:
-   - **Windows:** unzip it and install the USB driver once with
-     [Zadig](https://zadig.akeo.ie/) ([how](#install)), then open `SwitchFrameTap.exe`.
+   - **Windows:** unzip it, open `SwitchFrameTap.exe` and click **Install the USB driver**
+     once (or use [Zadig](https://zadig.akeo.ie/), [how](#install)).
    - **Linux:** unpack it and run the install script ([how](#install)).
    - **macOS:** unzip it, drag the app to Applications, right-click it and choose **Open**.
    - **Android / Android TV:** install the `-android.apk` with a file manager
@@ -238,7 +238,7 @@ manager app:
 |---|---|
 | A Switch running **Atmosphère** custom firmware | [Atmosphère releases](https://github.com/Atmosphere-NX/Atmosphere/releases) - tested with 1.12.1 on firmware 23.0.1 and 1.11.2 on 22.5.0 (Mariko); users report 23.0.0 (Atmosphère 1.12.0, since v0.7.11), 22.0.0 (Atmosphère 1.11.1) and 21.0.1 working. **Firmware 23.5.0 needs v0.7.23 or newer** (built for Atmosphère 1.12.2; older versions stop the console at boot there). New to custom firmware: the [NH Switch Guide](https://switch.hacks.guide/). Keep a NAND backup. |
 | The **homebrew menu** | Comes with Atmosphère (`hbmenu.nro`); also [nx-hbmenu releases](https://github.com/switchbrew/nx-hbmenu/releases). It opens the manager app. |
-| A **PC or an Android device** | Windows 10/11: the viewer zip, plus the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie/). Linux: one program with everything built in, or build it with one `apt install` line. macOS 12+: the app. Android 6+ / Android TV: the APK, over the network. All [below](#install). In [webcam mode](#webcam-mode), no viewer or driver: OBS reads it as a camera. |
+| A **PC or an Android device** | Windows 10/11: the viewer zip; it installs its USB driver once with a button (or [Zadig](https://zadig.akeo.ie/)). Linux: one program with everything built in, or build it with one `apt install` line. macOS 12+: the app. Android 6+ / Android TV: the APK, over the network. All [below](#install). In [webcam mode](#webcam-mode), no viewer or driver: OBS reads it as a camera. |
 | A **USB-C cable**, or a **network** | USB 2.0 is plenty; over USB the Switch stays in handheld (the dock owns the port). Use a **USB-C to USB-A** cable into a USB-A port: with a USB-C to USB-C cable the Switch can take the host role, as it does for a controller, and the PC never sees it. [Network streaming](#network-streaming-play-docked) needs no cable and works docked: Wi-Fi or the dock's LAN port, the PC on the same network. |
 
 **Optional** - one per feature. Since v0.7.5 the manager app's **Get extras**
@@ -278,12 +278,15 @@ new release over it; your settings are kept either way).
 
 **2a. The PC viewer on Windows.** Unzip
 `switch-frame-tap-<version>-windows-viewer.zip` anywhere (a folder you can
-write to, so it can update itself). Once, with the Switch
-connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
-List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
-it is that one), choose **WinUSB** and **Install Driver**. Then double-click
+write to, so it can update itself). Double-click
 `SwitchFrameTap.exe` (keep the DLLs next to it; the zip is 2 MB). Windows may warn about an
-unknown publisher: **More info -> Run anyway**.
+unknown publisher: **More info -> Run anyway**. Once, with the Switch
+connected and running, the viewer says the Switch needs its USB driver: click
+**Install the USB driver** and answer **Yes** to Windows' permission prompt
+(v0.7.24; it puts Windows' own WinUSB driver on the Switch's USB ID and nothing
+else). Or with [Zadig](https://zadig.akeo.ie/), as before: **Options ->
+List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
+it is that one), choose **WinUSB** and **Install Driver**.
 
 **2b. The PC viewer on Linux** (any distribution - Ubuntu, Fedora, Arch,
 Bazzite, SteamOS - x86_64). Unpack `switch-frame-tap-<version>-linux.tar.gz` and
@@ -692,6 +695,11 @@ sysmodule did or did not start this boot and which sysmodules use the shared
 system memory. Please attach them to a bug report, with any new files in
 `atmosphere/crash_reports/`.
 
+Easier (v0.7.24): in the PC viewer, with the Switch connected, **Settings ->
+Help -> Report a problem -> Save report** puts the console's log and the
+viewer's into one text file (in the recordings folder) to attach - no need to
+take the SD card out.
+
 ## Building from source
 
 ```bash
@@ -753,7 +761,7 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
   than the viewer, the uncompressed one tops out at 720p25 (USB 2.0);
   switching modes needs a restart.
 - **Viewers: Windows, Linux (x86_64), macOS 12+ and Android 6+.** On Windows
-  the driver needs Zadig once, as with SysDVR. Android plays the network
+  the viewer installs the USB driver once (a button; Zadig still works). Android plays the network
   stream (and USB on devices that can host it).
 - **Cheats:** the stream reads the game directly, like a debugger. When
   Atmosphère's cheat engine already holds the game (cheats loaded for it),

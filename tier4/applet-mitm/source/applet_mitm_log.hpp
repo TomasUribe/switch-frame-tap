@@ -59,6 +59,18 @@ namespace ams::mitm::applet {
     void LogFlushStale();   /* v0.7.20: held while a game runs - written once they are a minute old */
     /* whatever is held, written now - before a fatal */
     void LogWriteHeldNow();
+    /* v0.7.24: the viewer's Report a problem button - ReportBegin plans it
+     * (config.ini, the log's start and end, the held lines, last.txt, the end
+     * of log.prev.txt), ReportNext reads the next piece into out (up to cap
+     * bytes; last once it is all read). Only the thread that sends calls them. */
+    void ReportBegin();
+    size_t ReportNext(u8 *out, size_t cap, bool *last);
+    /* "SFTG" from the viewer (USB or network); ViewerReportPump sends what is
+     * due - in a stream (Stream: UsbSendBuffer, one piece a frame), or to an
+     * idle viewer (Net / UsbIdle, all of it). False: the send failed. */
+    void ViewerWantsReport();
+    enum class ReportLink { Stream, Net, UsbIdle };
+    bool ViewerReportPump(ReportLink link, u32 max_pieces);
 
     /* v0.7.7: an abort that says why first - the line reaches the SD card
      * (every LogLine is flushed) before the console shows the fatal screen.

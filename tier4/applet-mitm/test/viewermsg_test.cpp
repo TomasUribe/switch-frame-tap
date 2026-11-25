@@ -33,6 +33,7 @@ static std::string Whole(const std::vector<uint8_t> &b, std::vector<vm::PadMsg> 
             case vm::Kind::Lock: out += 'L'; break;
             case vm::Kind::Unlock: out += 'U'; break;
             case vm::Kind::Bye: out += 'Q'; break;
+            case vm::Kind::Report: out += 'G'; break;
             case vm::Kind::Pad: out += 'I'; if (pads) pads->push_back(vm::ReadPad(b.data() + k)); break;
             default: break;
         }
@@ -77,6 +78,9 @@ int main() {
     assert(Whole(Bytes("SFTKSFTCSFTU")) == "KCU");
     assert(Whole(Bytes("SFTKSFTDSFTL")) == "KDL");
     assert(Whole(Bytes("SFTQ")) == "Q");
+    /* v0.7.24: Report a problem, alone and after a keyframe request */
+    assert(Whole(Bytes("SFTG")) == "G");
+    assert(Whole(Bytes("SFTKSFTCSFTUSFTG")) == "KCUG");
     /* garbage is skipped a byte at a time, and a word after it still counts */
     assert(Whole(Bytes("xxSFTKzSFTQ")) == "KQ");
     assert(Whole(Bytes("SFTZSFTK")) == "K");

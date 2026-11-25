@@ -6,6 +6,7 @@
  *   "SFTL" / "SFTU"   one stream size while it records / follow the game (v0.7.18)
  *   "SFTQ"            goodbye (v0.7.12, USB)
  *   "SFTI" + 28 bytes the controller on the viewer's computer (PadMsg, v0.7.20)
+ *   "SFTG"            the log, please - Report a problem (v0.7.24)
  *
  * Anything else is skipped a byte at a time, as the scans before did. */
 #pragma once
@@ -30,7 +31,7 @@ namespace sft::viewermsg {
      * The stick directions (bits 16-17, 20-27) come from the sticks. */
     constexpr uint64_t PadButtons = 0xFFFFull | (1ull << 18) | (1ull << 19);
 
-    enum class Kind { Skip, Partial, Key, Crop, NoCrop, Lock, Unlock, Bye, Pad };
+    enum class Kind { Skip, Partial, Key, Crop, NoCrop, Lock, Unlock, Bye, Pad, Report };
 
     struct Msg { Kind kind; size_t len; };
 
@@ -46,6 +47,7 @@ namespace sft::viewermsg {
             case 'L': return { Kind::Lock, 4 };
             case 'U': return { Kind::Unlock, 4 };
             case 'Q': return { Kind::Bye, 4 };
+            case 'G': return { Kind::Report, 4 };
             case 'I': return n < sizeof(PadMsg) ? Msg{ Kind::Partial, 0 } : Msg{ Kind::Pad, sizeof(PadMsg) };
             default:  return { Kind::Skip, 1 };
         }

@@ -8542,6 +8542,8 @@ namespace ams::mitm::applet {
                         w_u_audio += armTicksToNs(armGetSystemTick()) - t3w; ++w_u_audio_n;
                     }
                 }
+                /* v0.7.24: Report a problem - a piece of the log a frame, while asked */
+                if (!ViewerReportPump(ReportLink::Stream, 1)) { why = "USB report send failed (viewer gone?)"; end = StreamEnd::ViewerGone; return true; }
                 const u64 t4 = armTicksToNs(armGetSystemTick());
                 armDCacheFlush(s.x.a + L.off_bits, bytes);
                 std::memcpy(g_stream_stage[parity] + HdrsLen, s.x.a + L.off_bits, bytes);

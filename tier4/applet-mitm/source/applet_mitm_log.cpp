@@ -1,5 +1,6 @@
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_nv.hpp"
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -240,6 +241,103 @@ namespace ams::mitm::applet {
         if (g_ready) { WriteHeld(); }
     }
 
+
+    /* v0.7.24: the viewer's Report a problem button ("SFTG"). config.ini, the
+     * log, the lines held in memory, the breadcrumb and the end of the last
+     * boot's log go to the viewer a piece at a time, read by the one thread
+     * that sends (a stream sends one piece a frame). Nothing is written: a
+     * stream that holds its lines keeps holding them. */
+    namespace {
+        struct ReportPart { const char *title; const char *path; s64 from, len; };   /* path nullptr: the held lines */
+        constexpr int MaxReportParts = 6;
+        constinit ReportPart g_rp[MaxReportParts] = {};
+        constinit int g_rp_n = 0, g_rp_i = 0;
+        constinit s64 g_rp_off = 0;
+        constinit bool g_rp_titled = false;
+        constinit char g_rp_title[2][96] = {};
+
+        /* another thread may have the log open for a line this moment: once more, 2 ms on */
+        bool OpenForRead(fs::FileHandle *f, const char *path) {
+            if (R_SUCCEEDED(fs::OpenFile(f, path, fs::OpenMode_Read))) { return true; }
+            os::SleepThread(TimeSpan::FromMilliSeconds(2));
+            return R_SUCCEEDED(fs::OpenFile(f, path, fs::OpenMode_Read));
+        }
+
+        s64 SizeOf(const char *path) {
+            fs::FileHandle f;
+            if (!OpenForRead(std::addressof(f), path)) { return -1; }
+            s64 size = 0;
+            static_cast<void>(fs::GetFileSize(std::addressof(size), f));
+            fs::CloseFile(f);
+            return size;
+        }
+
+        void ReportAdd(const char *title, const char *path, s64 from, s64 len) {
+            if (g_rp_n < MaxReportParts) { g_rp[g_rp_n++] = { title, path, from, len }; }
+        }
+    }
+
+    void ReportBegin() {
+        g_rp_n = 0; g_rp_i = 0; g_rp_off = 0; g_rp_titled = false;
+        const char *cfg = "sdmc:/config/switch-frame-tap/config.ini";
+        const s64 c = SizeOf(cfg);
+        ReportAdd("config.ini", cfg, 0, c < 0 ? -1 : std::min<s64>(c, 8 * 1024));
+        /* the start says what this boot found, the end what just happened */
+        const s64 l = SizeOf(LogPath);
+        constexpr s64 Head = 24 * 1024, Tail = 128 * 1024;
+        if (l > Head + Tail) {
+            std::snprintf(g_rp_title[0], sizeof(g_rp_title[0]), "log (the first %lld bytes of %lld)", static_cast<long long>(Head), static_cast<long long>(l));
+            std::snprintf(g_rp_title[1], sizeof(g_rp_title[1]), "log (the last %lld bytes)", static_cast<long long>(Tail));
+            ReportAdd(g_rp_title[0], LogPath, 0, Head);
+            ReportAdd(g_rp_title[1], LogPath, l - Tail, Tail);
+        } else {
+            ReportAdd("log", LogPath, 0, l);
+        }
+        ReportAdd("lines held in memory (not on the SD card yet)", nullptr, 0, 0);
+        ReportAdd("last.txt (the step in flight)", LastPath, 0, std::min<s64>(SizeOf(LastPath), 4 * 1024));
+        if (g_release_mode) {
+            const char *prev = "sdmc:/config/switch-frame-tap/log.prev.txt";
+            const s64 p = SizeOf(prev);
+            ReportAdd("log.prev.txt (the end of the last boot's log)", prev, p > 48 * 1024 ? p - 48 * 1024 : 0, std::min<s64>(p, 48 * 1024));
+        }
+    }
+
+    size_t ReportNext(u8 *out, size_t cap, bool *last) {
+        size_t n = 0;
+        while (g_rp_i < g_rp_n && n == 0) {
+            const ReportPart &p = g_rp[g_rp_i];
+            if (!g_rp_titled) {
+                const int t = std::snprintf(reinterpret_cast<char *>(out), cap, "\n===== %s =====\n", p.title);
+                if (t > 0) { n = static_cast<size_t>(t); }
+                g_rp_titled = true;
+            }
+            bool done = true;
+            if (p.path == nullptr) {
+                std::scoped_lock lk(g_lock);
+                const size_t k = std::min(g_defer_len, cap - n - 1);
+                std::memcpy(out + n, g_defer_buf, k);
+                n += k;
+                if (k == 0) { n += static_cast<size_t>(std::snprintf(reinterpret_cast<char *>(out + n), cap - n, "(none)\n")); }
+            } else if (p.len < 0) {
+                n += static_cast<size_t>(std::snprintf(reinterpret_cast<char *>(out + n), cap - n, "(not there)\n"));
+            } else {
+                const s64 want = std::min<s64>(p.len - g_rp_off, static_cast<s64>(cap - n));
+                fs::FileHandle f;
+                size_t got = 0;
+                if (want > 0 && OpenForRead(std::addressof(f), p.path)) {
+                    if (R_FAILED(fs::ReadFile(std::addressof(got), f, p.from + g_rp_off, out + n, static_cast<size_t>(want)))) { got = 0; }
+                    fs::CloseFile(f);
+                }
+                n += got;
+                g_rp_off += static_cast<s64>(got);
+                done = got == 0 || g_rp_off >= p.len;
+            }
+            if (done) { ++g_rp_i; g_rp_off = 0; g_rp_titled = false; }
+        }
+        *last = g_rp_i >= g_rp_n;
+        if (*last && cap - n > 24) { n += static_cast<size_t>(std::snprintf(reinterpret_cast<char *>(out + n), cap - n, "\n===== end =====\n")); }
+        return n;
+    }
 
     namespace {
         constexpr u32 MaxNoted = 32;
