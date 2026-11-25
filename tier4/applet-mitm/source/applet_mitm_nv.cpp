@@ -6696,10 +6696,15 @@ namespace ams::mitm::applet {
                 chain_display = false;
                 bool anchored = false;   /* v0.7.17: slots from the app's records (some of them) */
                 if (sep_layout && nslots >= 2 && ncand >= nslots) {
+                    /* v0.7.24 (#98): or each buffer in its own 1 MB-aligned block -
+                     * Dragon Quest XI's display-mapped 1080p buffers (8640 KB) sit
+                     * 9 MB apart, past the 256 KB gap, and the guess took a
+                     * buffer that is no slot (garbled frames until a match) */
+                    const u64 max_gap = ((static_cast<u64>(buf_bytes) + 0xFFFFF) & ~UINT64_C(0xFFFFF)) + 0x40000;
                     auto run_at = [&](u32 c0) -> bool {
                         for (u32 k = 1; k < nslots; ++k) {
                             const u64 gap = cand[c0 + k] - cand[c0 + k - 1];
-                            if (gap < buf_bytes || gap > static_cast<u64>(buf_bytes) + 0x40000) { return false; }
+                            if (gap < buf_bytes || gap > max_gap) { return false; }
                         }
                         return true;
                     };
